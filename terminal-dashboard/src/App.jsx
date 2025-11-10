@@ -214,24 +214,27 @@ function App() {
 
   useEffect(() => {
     if (!projects.length) {
-      if (activeProjectId !== null) {
-        setActiveProjectId(null)
-      }
+      setActiveProjectId(null)
       return
     }
+
+    // Check if current active project is still valid
+    if (activeProjectId && projects.some((project) => project.id === activeProjectId)) {
+      return // Current selection is valid, don't change it
+    }
+
+    // Try to read from URL
     const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null
     const requestedId = params?.get('project') ?? null
     if (requestedId && projects.some((project) => project.id === requestedId)) {
-      if (activeProjectId !== requestedId) {
-        setActiveProjectId(requestedId)
-      }
+      setActiveProjectId(requestedId)
       return
     }
-    // Only set fallback if no active project or active project doesn't exist
-    if (!activeProjectId || !projects.some((project) => project.id === activeProjectId)) {
-      setActiveProjectId(projects[0].id)
-    }
-  }, [projects, activeProjectId])
+
+    // Fall back to first project
+    setActiveProjectId(projects[0].id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projects])
 
   useEffect(() => {
     if (typeof window === 'undefined' || !activeProject) {
