@@ -534,7 +534,7 @@ function App() {
                     const isVisible = terminal.id === activeTerminalId
                     return (
                       <iframe
-                        key={terminal.id}
+                        key={`${activeProject.id}-${terminal.id}`}
                         src={terminalUrl}
                         title={terminal.name}
                         className={`terminal-frame-iframe ${isVisible ? 'active' : 'inactive'}`}
