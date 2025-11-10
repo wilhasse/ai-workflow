@@ -56,7 +56,7 @@ which shellinaboxd
 If you're setting this up from scratch:
 
 ```bash
-cd /home/cslog
+cd /home/USERNAME
 git clone https://github.com/wilhasse/ai-workflow.git
 cd ai-workflow/tmux-session-service
 ```
@@ -64,55 +64,74 @@ cd ai-workflow/tmux-session-service
 Or if you already have the repository:
 
 ```bash
-cd /home/cslog/ai-workflow/tmux-session-service
+cd /home/USERNAME/ai-workflow/tmux-session-service
 ```
 
 ### Step 2: Install Node.js Dependencies
 
-The service has no external dependencies, but you should verify package.json:
+The service has no external dependencies, but verify package.json:
 
 ```bash
-# Optional: Initialize package-lock.json
-npm install --package-lock-only
-
 # Verify the service starts
 node --check src/server.js
 ```
 
-### Step 3: Verify Script Permissions
+### Step 3: Create System-Wide Script Location
 
-Ensure the attach script is executable:
+The shellinabox service runs as the `shellinabox` user, so we need to install the script where it can access it:
 
 ```bash
-chmod +x scripts/attach-session.sh
+# Create system directory
+sudo mkdir -p /usr/local/bin/tmux-session-service
+
+# Copy the attach script
+sudo cp scripts/attach-session.sh /usr/local/bin/tmux-session-service/
+
+# Make it executable
+sudo chmod +x /usr/local/bin/tmux-session-service/attach-session.sh
 
 # Verify permissions
-ls -la scripts/attach-session.sh
-# Should show: -rwxr-xr-x
+ls -la /usr/local/bin/tmux-session-service/
+# Should show: -rwxr-xr-x ... attach-session.sh
 ```
 
-### Step 4: Create Data Directory
+### Step 4: Verify Script Content
+
+The script must extract terminalId from `SHELLINABOX_URL`. Verify it contains:
 
 ```bash
-# The data directory should already exist, but verify:
-mkdir -p data
-ls -la data/
+cat /usr/local/bin/tmux-session-service/attach-session.sh
+```
 
-# If sessions.json doesn't exist, create it:
+Key sections to look for:
+- `if [[ -n "${SHELLINABOX_URL:-}" ]]; then`
+- `if [[ "$SHELLINABOX_URL" =~ terminalId=([^&]+) ]]; then`
+- `exec tmux new-session -A -s "$SESSION_ID" "$DEFAULT_SHELL"`
+
+### Step 5: Create Data Directory
+
+```bash
+# Create data directory in the source location
+mkdir -p data
+
+# Initialize sessions file
 echo '{"sessions":{}}' > data/sessions.json
+
+# Verify
+ls -la data/
 ```
 
 ## Configuration
 
-### Step 5: Configure shellinabox Service
+### Step 6: Configure shellinabox Service
 
-#### 5.1 Backup Current Configuration
+#### 6.1 Backup Current Configuration
 
 ```bash
 sudo cp /etc/default/shellinabox /etc/default/shellinabox.backup
 ```
 
-#### 5.2 Update Configuration File
+#### 6.2 Update Configuration File
 
 Edit the shellinabox configuration:
 
@@ -120,7 +139,7 @@ Edit the shellinabox configuration:
 sudo nano /etc/default/shellinabox
 ```
 
-Replace the contents with:
+Replace the contents with (adjust USERNAME and paths):
 
 ```bash
 # Should shellinaboxd start automatically
@@ -140,18 +159,29 @@ export SESSION_SERVICE_URL=http://127.0.0.1:5001
 
 # Custom service definition for tmux session persistence
 # Format: url-path:username:groupname:working-dir:command
-# IMPORTANT: Replace 'cslog' with your actual username
-SHELLINABOX_ARGS="--no-beep --disable-ssl --service=/:cslog:cslog:/home/cslog:/home/cslog/ai-workflow/tmux-session-service/scripts/attach-session.sh"
+# Script extracts terminalId from SHELLINABOX_URL environment variable
+SHELLINABOX_ARGS="--no-beep --service=/:USERNAME:USERNAME:/home/USERNAME:/usr/local/bin/tmux-session-service/attach-session.sh"
 ```
 
-**Important**: Replace `cslog` with your actual username in three places:
-- `:cslog:cslog:` (username and groupname)
-- `/home/cslog:` (working directory)
-- `/home/cslog/ai-workflow/...` (script path)
+**IMPORTANT - Replace these placeholders:**
+- `USERNAME` - Your actual username (appears 3 times)
+- First `USERNAME` - User to run shell as
+- Second `USERNAME` - Group name (usually same as username)
+- `/home/USERNAME` - Working directory
+
+**Example for user `cslog`:**
+```bash
+SHELLINABOX_ARGS="--no-beep --service=/:cslog:cslog:/home/cslog:/usr/local/bin/tmux-session-service/attach-session.sh"
+```
+
+**SSL/HTTPS Note:**
+- We removed `--disable-ssl` to enable HTTPS (required if your dashboard uses HTTPS)
+- shellinabox will use a self-signed certificate by default
+- Your browser will show a certificate warning (safe to proceed for internal use)
 
 Save and exit (Ctrl+X, Y, Enter in nano).
 
-#### 5.3 Verify Configuration Syntax
+#### 6.3 Verify Configuration
 
 ```bash
 cat /etc/default/shellinabox
@@ -159,15 +189,16 @@ cat /etc/default/shellinabox
 
 Ensure:
 - ✅ `SESSION_SERVICE_URL` is set to `http://127.0.0.1:5001`
-- ✅ `SHELLINABOX_ARGS` contains the full path to `attach-session.sh`
+- ✅ `SHELLINABOX_ARGS` contains full path to script in `/usr/local/bin/`
 - ✅ Username and paths match your system
+- ✅ No `--disable-ssl` flag (HTTPS enabled by default)
 
-### Step 6: Start tmux-session-service
+### Step 7: Start tmux-session-service
 
-Open a new terminal or use screen/tmux to run the service in background:
+Open a terminal and start the service:
 
 ```bash
-cd /home/cslog/ai-workflow/tmux-session-service
+cd /home/USERNAME/ai-workflow/tmux-session-service
 
 # Start the service (runs in foreground)
 npm start
@@ -178,20 +209,18 @@ You should see:
 tmux-session-service listening on http://0.0.0.0:5001
 ```
 
-**For background execution** (temporary):
+**Keep this terminal open** or see Step 10 for running as a systemd service.
+
+**For temporary background execution:**
 ```bash
 # Using nohup
 nohup npm start > /tmp/tmux-session-service.log 2>&1 &
 
-# Or using screen
-screen -S tmux-service
-npm start
-# Press Ctrl+A, then D to detach
+# View logs
+tail -f /tmp/tmux-session-service.log
 ```
 
-**For production**, see [Step 10: Production Setup](#step-10-production-setup-systemd-service).
-
-### Step 7: Restart shellinabox Service
+### Step 8: Restart shellinabox Service
 
 ```bash
 # Restart shellinabox to pick up new configuration
@@ -207,13 +236,18 @@ Expected output:
    Active: active (running) since...
 ```
 
-Look for the command line showing `--service=/:cslog:cslog:/home/cslog:...` in the process list.
+Verify the command line shows your script path:
+```bash
+ps aux | grep shellinabox | grep attach-session
+```
+
+Should show: `--service=/:USERNAME:USERNAME:/home/USERNAME:/usr/local/bin/tmux-session-service/attach-session.sh`
 
 ## Verification
 
-### Step 8: Verify Installation
+### Step 9: Verify Installation
 
-#### 8.1 Check tmux-session-service API
+#### 9.1 Check tmux-session-service API
 
 ```bash
 # Test health endpoint
@@ -229,7 +263,7 @@ curl http://127.0.0.1:5001/sessions
 # {"sessions":[]}
 ```
 
-#### 8.2 Test Session Creation via API
+#### 9.2 Test Session Creation via API
 
 ```bash
 # Create a test session
@@ -246,24 +280,36 @@ tmux ls
 
 # Clean up test session
 curl -X DELETE http://127.0.0.1:5001/sessions/test-install
+tmux kill-session -t test-install
 ```
 
-#### 8.3 Test shellinabox Integration
+#### 9.3 Test shellinabox HTTPS Connection
 
 ```bash
-# Check if shellinabox is running with correct config
-ps aux | grep shellinabox | grep attach-session.sh
+# Test HTTPS connection (use -k to accept self-signed cert)
+curl -k -I https://YOUR_SERVER_IP:4200/
+
+# Should return: HTTP/1.1 200 OK
 ```
 
-Should show a process with your attach-session.sh path.
+#### 9.4 Check shellinabox Environment
 
-### Step 9: End-to-End Testing
+The script relies on `SHELLINABOX_URL` being set. To verify:
 
-#### 9.1 Test with React Dashboard
+```bash
+# Check shellinabox process
+ps aux | grep shellinabox
+
+# Should show the attach-session.sh in the command line
+```
+
+### Step 10: End-to-End Testing
+
+#### 10.1 Test with React Dashboard
 
 1. **Start React Dashboard** (if not already running):
    ```bash
-   cd /home/cslog/ai-workflow/terminal-dashboard
+   cd /home/USERNAME/ai-workflow/terminal-dashboard
    npm install
    npm run dev
    ```
@@ -273,7 +319,11 @@ Should show a process with your attach-session.sh path.
 3. **Create a project**:
    - Click "Add" in the project tabs
    - Name: "Test Project"
-   - Description: "Testing tmux persistence"
+   - Configure connection settings:
+     - Protocol: https
+     - Host: YOUR_SERVER_IP (e.g., 10.1.0.10)
+     - Base port: 4200
+     - Port strategy: Single (reuse base port)
 
 4. **Add a terminal**:
    - Click "+ Add terminal"
@@ -287,6 +337,7 @@ Should show a process with your attach-session.sh path.
    echo "Testing persistence!"
    cd /tmp
    export MY_VAR="Hello from tmux"
+   echo "Session started at: $(date)"
    pwd
    ```
 
@@ -299,31 +350,41 @@ Should show a process with your attach-session.sh path.
    history          # Should show previous commands
    ```
 
-#### 9.2 Verify in API and tmux
+**Success Indicators:**
+- ✅ Terminal connects without login prompt
+- ✅ You're logged in as your user automatically
+- ✅ Working directory persists after reload
+- ✅ Environment variables persist after reload
+- ✅ Command history is maintained
+
+#### 10.2 Verify in API and tmux
 
 ```bash
 # Check sessions via API
 curl http://127.0.0.1:5001/sessions | jq .
 
+# Should show a session with your terminalId (UUID format)
+# Example: "cde7a279-0b94-48f9-b596-4061ad98e2a7"
+
 # Check tmux sessions
 tmux ls
 
-# You should see your terminal session listed
+# Should show the same session ID
 ```
 
 ## Production Setup
 
-### Step 10: Production Setup (systemd Service)
+### Step 11: Production Setup (systemd Service)
 
 For production, run tmux-session-service as a systemd service:
 
-#### 10.1 Create systemd Service File
+#### 11.1 Create systemd Service File
 
 ```bash
 sudo nano /etc/systemd/system/tmux-session-service.service
 ```
 
-Add the following content (adjust username and paths as needed):
+Add the following content (adjust username and paths):
 
 ```ini
 [Unit]
@@ -333,9 +394,9 @@ After=network.target
 
 [Service]
 Type=simple
-User=cslog
-Group=cslog
-WorkingDirectory=/home/cslog/ai-workflow/tmux-session-service
+User=USERNAME
+Group=USERNAME
+WorkingDirectory=/home/USERNAME/ai-workflow/tmux-session-service
 ExecStart=/usr/bin/node src/server.js
 Restart=always
 RestartSec=10
@@ -354,7 +415,9 @@ SyslogIdentifier=tmux-session-service
 WantedBy=multi-user.target
 ```
 
-#### 10.2 Enable and Start Service
+Replace `USERNAME` with your actual username.
+
+#### 11.2 Enable and Start Service
 
 ```bash
 # Reload systemd
@@ -370,7 +433,7 @@ sudo systemctl start tmux-session-service
 sudo systemctl status tmux-session-service
 ```
 
-#### 10.3 Verify systemd Service
+#### 11.3 Verify systemd Service
 
 ```bash
 # Check logs
@@ -378,31 +441,13 @@ sudo journalctl -u tmux-session-service -f
 
 # Test API
 curl http://127.0.0.1:5001/health
-```
 
-### Step 11: Configure shellinabox Systemd Environment
-
-If `SESSION_SERVICE_URL` doesn't get passed from `/etc/default/shellinabox`, create a systemd override:
-
-```bash
-sudo systemctl edit shellinabox
-```
-
-Add:
-```ini
-[Service]
-Environment="SESSION_SERVICE_URL=http://127.0.0.1:5001"
-```
-
-Save and exit, then:
-```bash
-sudo systemctl daemon-reload
-sudo systemctl restart shellinabox
+# Should return: {"ok":true,"tmuxAvailable":true,...}
 ```
 
 ### Step 12: Optional - Session Cleanup Cron Job
 
-Create a daily cleanup script for old sessions:
+Create a daily cleanup script for inactive sessions:
 
 ```bash
 sudo nano /etc/cron.daily/cleanup-tmux-sessions
@@ -411,13 +456,14 @@ sudo nano /etc/cron.daily/cleanup-tmux-sessions
 Add:
 ```bash
 #!/bin/bash
-# Cleanup tmux sessions older than 7 days
+# Cleanup inactive tmux sessions
 
+# Get list of sessions from API
 SESSIONS=$(curl -s http://127.0.0.1:5001/sessions | jq -r '.sessions[] | select(.active == false) | .sessionId')
 
 for session in $SESSIONS; do
   echo "Cleaning up inactive session: $session"
-  curl -X DELETE http://127.0.0.1:5001/sessions/$session
+  curl -s -X DELETE http://127.0.0.1:5001/sessions/$session
 done
 ```
 
@@ -430,22 +476,94 @@ sudo chmod +x /etc/cron.daily/cleanup-tmux-sessions
 
 ### Common Issues and Solutions
 
-#### Issue 1: "Cannot look up group" Error
+#### Issue 1: "Permission Denied" When Running Script
 
-**Symptom**: shellinabox fails to start with "Cannot look up group" error.
+**Symptom**: shellinabox fails to execute attach-session.sh
 
-**Solution**: The service format is incorrect. Verify `/etc/default/shellinabox`:
+**Cause**: Script is in user's home directory, shellinabox user can't access it
+
+**Solution**: Script must be in `/usr/local/bin/tmux-session-service/`
 ```bash
-# Correct format:
-SHELLINABOX_ARGS="--service=/:username:groupname:/home/username:/path/to/script"
+# Verify location
+ls -la /usr/local/bin/tmux-session-service/attach-session.sh
 
-# Wrong (causes error):
-SHELLINABOX_ARGS="--service=/:username:/path/to/script"  # Missing groupname and workdir
+# Should be owned by root and executable by all:
+# -rwxr-xr-x 1 root root ... attach-session.sh
+
+# If not there, copy it:
+sudo cp scripts/attach-session.sh /usr/local/bin/tmux-session-service/
+sudo chmod +x /usr/local/bin/tmux-session-service/attach-session.sh
 ```
 
-#### Issue 2: API Not Reachable
+#### Issue 2: "Invalid Response" in Browser
 
-**Symptom**: `curl http://127.0.0.1:5001/health` fails.
+**Symptom**: Browser shows "invalid response" error when loading terminal
+
+**Cause**: Protocol mismatch - dashboard uses HTTPS but shellinabox uses HTTP
+
+**Solution**: Enable HTTPS in shellinabox (remove `--disable-ssl`)
+```bash
+# Edit config
+sudo nano /etc/default/shellinabox
+
+# Ensure SHELLINABOX_ARGS does NOT contain --disable-ssl
+# Correct:
+SHELLINABOX_ARGS="--no-beep --service=/:user:user:/home/user:/path/to/script"
+
+# Wrong (causes mixed content error):
+SHELLINABOX_ARGS="--no-beep --disable-ssl --service=..."
+
+# Restart
+sudo systemctl restart shellinabox
+```
+
+#### Issue 3: Sessions Not Persisting (Creating New Session Each Time)
+
+**Symptom**: Every browser reload creates a new session instead of reconnecting
+
+**Cause**: Script not extracting terminalId from `SHELLINABOX_URL`
+
+**Solution**: Verify script extracts from SHELLINABOX_URL
+```bash
+# Check the script content
+cat /usr/local/bin/tmux-session-service/attach-session.sh | grep SHELLINABOX_URL
+
+# Should see lines like:
+# if [[ -n "${SHELLINABOX_URL:-}" ]]; then
+# if [[ "$SHELLINABOX_URL" =~ terminalId=([^&]+) ]]; then
+
+# If missing, recreate the script from the repository:
+sudo cp scripts/attach-session.sh /usr/local/bin/tmux-session-service/
+sudo chmod +x /usr/local/bin/tmux-session-service/attach-session.sh
+sudo systemctl restart shellinabox
+```
+
+**Debug**: Create a test to see what environment variables are available:
+```bash
+# Create debug script
+cat > /tmp/debug-env.sh << 'EOF'
+#!/bin/bash
+echo "SHELLINABOX_URL: ${SHELLINABOX_URL:-NOT SET}"
+env | grep SHELLINABOX
+read -p "Press enter to continue..."
+exec /bin/bash
+EOF
+chmod +x /tmp/debug-env.sh
+
+# Temporarily use debug script
+sudo nano /etc/default/shellinabox
+# Change SHELLINABOX_ARGS to use /tmp/debug-env.sh
+sudo systemctl restart shellinabox
+
+# Open terminal in browser and check output
+# Should show: SHELLINABOX_URL: https://...?projectId=...&terminalId=...
+
+# Restore original script after debugging
+```
+
+#### Issue 4: API Not Reachable
+
+**Symptom**: `curl http://127.0.0.1:5001/health` fails
 
 **Solutions**:
 ```bash
@@ -458,44 +576,19 @@ sudo systemctl status tmux-session-service
 # Check if port is in use
 sudo lsof -i :5001
 
-# Check firewall
+# Check firewall (should allow local connections)
 sudo ufw status
+
+# Restart the service
+sudo systemctl restart tmux-session-service
+
+# Check logs
+sudo journalctl -u tmux-session-service -n 50
 ```
 
-#### Issue 3: Sessions Not Persisting
+#### Issue 5: Port 4200 Already in Use
 
-**Symptom**: Browser reload starts a new shell instead of reconnecting.
-
-**Solutions**:
-
-1. **Check environment variable**:
-   ```bash
-   # Verify shellinabox sees the variable
-   sudo systemctl show shellinabox | grep Environment
-   ```
-
-2. **Test script manually**:
-   ```bash
-   export SESSION_SERVICE_URL=http://127.0.0.1:5001
-   export QUERY_terminalId=test-manual
-   export QUERY_projectId=test-project
-   /home/cslog/ai-workflow/tmux-session-service/scripts/attach-session.sh
-   ```
-
-3. **Check shellinabox logs**:
-   ```bash
-   sudo journalctl -u shellinabox -n 50
-   ```
-
-4. **Verify script permissions**:
-   ```bash
-   ls -la /home/cslog/ai-workflow/tmux-session-service/scripts/attach-session.sh
-   # Should be: -rwxr-xr-x
-   ```
-
-#### Issue 4: Port 4200 Already in Use
-
-**Symptom**: shellinabox fails to start, port already in use.
+**Symptom**: shellinabox fails to start, port already in use
 
 **Solution**:
 ```bash
@@ -510,13 +603,14 @@ sudo killall shellinaboxd
 sudo systemctl start shellinabox
 ```
 
-#### Issue 5: tmux Not Found
+#### Issue 6: tmux Not Found
 
-**Symptom**: API health check shows `tmuxAvailable: false`.
+**Symptom**: API health check shows `tmuxAvailable: false`
 
 **Solution**:
 ```bash
 # Install tmux
+sudo apt-get update
 sudo apt-get install tmux
 
 # Verify installation
@@ -525,6 +619,28 @@ tmux -V
 
 # Restart tmux-session-service
 sudo systemctl restart tmux-session-service
+
+# Verify
+curl http://127.0.0.1:5001/health | jq .
+```
+
+#### Issue 7: Browser Shows "Login:" Prompt
+
+**Symptom**: Terminal shows login prompt instead of direct shell access
+
+**Cause**: shellinabox is using default LOGIN service instead of custom script
+
+**Solution**: Verify configuration has custom service defined
+```bash
+# Check config
+cat /etc/default/shellinabox | grep SHELLINABOX_ARGS
+
+# Must contain: --service=/:user:user:/home/user:/path/to/script
+# If missing or wrong, edit:
+sudo nano /etc/default/shellinabox
+
+# Restart
+sudo systemctl restart shellinabox
 ```
 
 ### Logs and Debugging
@@ -544,10 +660,8 @@ sudo journalctl -f -u tmux-session-service -u shellinabox
 
 #### Enable Verbose Logging
 
-For debugging, you can add verbose logging:
-
 ```bash
-# Edit systemd service
+# For tmux-session-service
 sudo systemctl edit tmux-session-service
 ```
 
@@ -563,19 +677,39 @@ sudo systemctl daemon-reload
 sudo systemctl restart tmux-session-service
 ```
 
+### Manual Testing
+
+#### Test Script Manually
+
+```bash
+# Set environment variables
+export SESSION_SERVICE_URL=http://127.0.0.1:5001
+export SHELLINABOX_URL="https://10.1.0.10:4200/?projectId=test&terminalId=test-123"
+
+# Run script
+/usr/local/bin/tmux-session-service/attach-session.sh
+
+# Should create and attach to tmux session "test-123"
+# Press Ctrl+B, then D to detach
+
+# Verify session was created
+tmux ls
+curl http://127.0.0.1:5001/sessions | jq .
+```
+
 ### Manual Cleanup
 
 ```bash
 # Kill all tmux sessions (nuclear option)
 tmux kill-server
 
-# Delete all session metadata
+# Delete all session metadata via API
 curl -s http://127.0.0.1:5001/sessions | jq -r '.sessions[].sessionId' | while read sid; do
   curl -X DELETE http://127.0.0.1:5001/sessions/$sid
 done
 
 # Reset data file
-echo '{"sessions":{}}' > /home/cslog/ai-workflow/tmux-session-service/data/sessions.json
+echo '{"sessions":{}}' > /home/USERNAME/ai-workflow/tmux-session-service/data/sessions.json
 ```
 
 ## Post-Installation
@@ -583,11 +717,13 @@ echo '{"sessions":{}}' > /home/cslog/ai-workflow/tmux-session-service/data/sessi
 ### Verification Checklist
 
 - [ ] tmux-session-service responding to API calls
-- [ ] shellinabox running with custom service configuration
+- [ ] shellinabox running with HTTPS enabled
+- [ ] Script installed in `/usr/local/bin/tmux-session-service/`
 - [ ] Test session created successfully via API
-- [ ] Browser terminal connects successfully
-- [ ] Session persists after browser reload
-- [ ] Both services configured to start on boot (if production)
+- [ ] Browser terminal connects without login prompt
+- [ ] Session persists after browser reload (pwd, env vars, history preserved)
+- [ ] API shows correct terminalId from dashboard
+- [ ] Both services configured to start on boot (production)
 
 ### Monitoring
 
@@ -600,8 +736,11 @@ curl http://127.0.0.1:5001/health
 # Check active sessions count
 curl -s http://127.0.0.1:5001/sessions | jq '.sessions | length'
 
+# Check tmux sessions
+tmux ls | wc -l
+
 # Check disk usage
-du -sh /home/cslog/ai-workflow/tmux-session-service/data/
+du -sh /home/USERNAME/ai-workflow/tmux-session-service/data/
 ```
 
 ### Security Considerations
@@ -612,9 +751,22 @@ du -sh /home/cslog/ai-workflow/tmux-session-service/data/
    # Port 5001 should NOT be exposed externally
    ```
 
-2. **User permissions**: The service runs as your user, ensure proper file permissions
+2. **HTTPS Certificate**: For production, use proper SSL certificates
+   ```bash
+   # Install certbot for Let's Encrypt
+   sudo apt-get install certbot
 
-3. **Session cleanup**: Configure the cleanup cron job to prevent unlimited session growth
+   # Generate certificate (adjust domain)
+   sudo certbot certonly --standalone -d yourdomain.com
+
+   # Configure shellinabox to use certificate
+   # Add to SHELLINABOX_ARGS:
+   # --cert=/etc/letsencrypt/live/yourdomain.com/fullchain.pem
+   ```
+
+3. **User permissions**: The service runs as your user, ensure proper file permissions
+
+4. **Session cleanup**: Configure the cleanup cron job to prevent unlimited session growth
 
 ## Uninstallation
 
@@ -636,6 +788,9 @@ sudo systemctl daemon-reload
 sudo cp /etc/default/shellinabox.backup /etc/default/shellinabox
 sudo systemctl restart shellinabox
 
+# Remove system script
+sudo rm -rf /usr/local/bin/tmux-session-service/
+
 # Remove cron job
 sudo rm /etc/cron.daily/cleanup-tmux-sessions
 
@@ -643,12 +798,13 @@ sudo rm /etc/cron.daily/cleanup-tmux-sessions
 tmux kill-server
 
 # Remove repository (if desired)
-rm -rf /home/cslog/ai-workflow
+rm -rf /home/USERNAME/ai-workflow
 ```
 
 ## Additional Resources
 
 - **Quick Start**: See `QUICKSTART.md` for a 2-minute setup guide
+- **Architecture**: See `ARCHITECTURE.md` for how everything works
 - **Setup Guide**: See `SETUP.md` for detailed configuration options
 - **API Reference**: See `README.md` for API documentation
 - **Configuration Summary**: See `CONFIGURATION-SUMMARY.md` for current setup details
@@ -662,3 +818,4 @@ For issues, questions, or contributions:
 ## Version
 
 Installation guide for tmux-session-service v0.1.0
+Last updated: 2025-11-10
