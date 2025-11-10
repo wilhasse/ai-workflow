@@ -2,6 +2,13 @@
 
 A lightweight HTTP API that keeps tmux-backed shells alive so browser terminals can reconnect without losing state. The service lives next to your `shellinabox` gateway; every request ensures a tmux session exists (creating it if necessary), records metadata, and offers lifecycle endpoints. Pair it with the provided `attach-session.sh` helper to make each dashboard tab reconnect to the same tmux session via the `projectId`/`terminalId` query params.
 
+## Documentation
+
+- **[INSTALL.md](INSTALL.md)** - Complete installation guide from scratch
+- **[QUICKSTART.md](QUICKSTART.md)** - 2-minute quick start guide
+- **[SETUP.md](SETUP.md)** - Detailed integration and troubleshooting guide
+- **[CONFIGURATION-SUMMARY.md](CONFIGURATION-SUMMARY.md)** - Current configuration details
+
 ## Features
 - **Stateless HTTP interface**: `POST /sessions` to create or `PUT /sessions/:id` to idempotently ensure a session exists.
 - **tmux orchestration**: Uses `tmux new-session -d` to spawn background shells and `tmux has-session`/`kill-session` to inspect lifecycle.
