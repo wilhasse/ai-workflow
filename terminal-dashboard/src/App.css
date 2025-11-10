@@ -448,22 +448,40 @@ button:not(:disabled):hover {
   font-weight: 600;
 }
 
-.project-indicator {
+.project-selector {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.4rem 0.85rem;
-  border-radius: 999px;
+}
+
+.project-select {
+  padding: 0.5rem 2rem 0.5rem 0.85rem;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
   background: rgba(59, 130, 246, 0.15);
   color: #bfdbfe;
   font-size: 0.875rem;
+  cursor: pointer;
+  font-family: inherit;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23bfdbfe' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.6rem center;
+  transition: all 0.2s ease;
 }
 
-.terminal-count {
-  padding: 0.2rem 0.5rem;
-  border-radius: 999px;
-  background: rgba(59, 130, 246, 0.3);
-  font-size: 0.75rem;
+.project-select:hover {
+  background-color: rgba(59, 130, 246, 0.25);
+  border-color: rgba(59, 130, 246, 0.5);
+}
+
+.project-select:focus {
+  outline: 2px solid rgba(59, 130, 246, 0.5);
+  outline-offset: 2px;
+}
+
+.project-select option {
+  background: rgba(15, 23, 42, 0.98);
+  color: #e2e8f0;
 }
 
 .header-actions {

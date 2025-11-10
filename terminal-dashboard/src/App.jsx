@@ -203,9 +203,9 @@ function App() {
       }
       return
     }
-    const fallbackId = projects[0].id
-    if (activeProjectId !== fallbackId) {
-      setActiveProjectId(fallbackId)
+    // Only set fallback if no active project or active project doesn't exist
+    if (!activeProjectId || !projects.some((project) => project.id === activeProjectId)) {
+      setActiveProjectId(projects[0].id)
     }
   }, [projects, activeProjectId])
 
@@ -358,13 +358,21 @@ function App() {
       <header className="app-header-compact">
         <div className="header-left">
           <h1>AI Workflow</h1>
-          {activeProject && (
-            <span className="project-indicator">
-              {activeProject.name}
-              {activeProject.terminals.length > 0 && (
-                <span className="terminal-count">{activeProject.terminals.length} terminals</span>
-              )}
-            </span>
+          {projects.length > 0 && (
+            <div className="project-selector">
+              <select
+                value={activeProjectId || ''}
+                onChange={(e) => handleSelectProject(e.target.value)}
+                className="project-select"
+              >
+                {projects.map((project) => (
+                  <option key={project.id} value={project.id}>
+                    {project.name}
+                    {project.terminals.length > 0 && ` (${project.terminals.length} terminals)`}
+                  </option>
+                ))}
+              </select>
+            </div>
           )}
         </div>
         <div className="header-actions">
