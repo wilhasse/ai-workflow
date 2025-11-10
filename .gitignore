@@ -61,3 +61,6 @@ coverage/
 .cache/
 *.cache
 .parcel-cache
+
+# Runtime data
+tmux-session-service/data/sessions.json
