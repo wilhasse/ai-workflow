@@ -167,6 +167,29 @@ const useProjectsState = () => {
   return [projects, setProjects]
 }
 
+function ConfirmDialog({ isOpen, title, message, onConfirm, onCancel }) {
+  if (!isOpen) {
+    return null
+  }
+
+  return (
+    <div className="dialog-overlay" onClick={onCancel}>
+      <div className="dialog-content" onClick={(e) => e.stopPropagation()}>
+        {title && <h3 className="dialog-title">{title}</h3>}
+        <p className="dialog-message">{message}</p>
+        <div className="dialog-actions">
+          <button type="button" className="dialog-btn secondary" onClick={onCancel}>
+            Cancel
+          </button>
+          <button type="button" className="dialog-btn primary" onClick={onConfirm}>
+            OK
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function App() {
   const [projects, setProjects] = useProjectsState()
   const [activeProjectId, setActiveProjectId] = useState(null)
@@ -175,6 +198,7 @@ function App() {
   const [projectForm, setProjectForm] = useState({ name: '', description: '' })
   const [terminalForm, setTerminalForm] = useState({ name: '', notes: '' })
   const [showTerminalForm, setShowTerminalForm] = useState(false)
+  const [confirmDialog, setConfirmDialog] = useState({ isOpen: false, message: '', onConfirm: null })
 
   const activeProject = useMemo(
     () => projects.find((project) => project.id === activeProjectId) ?? null,
@@ -262,15 +286,19 @@ function App() {
   }
 
   const handleRemoveProject = (projectId) => {
-    if (!confirm('Delete this project and all its terminals?')) {
-      return
-    }
-    setProjects((prev) => prev.filter((project) => project.id !== projectId))
-    if (activeProjectId === projectId) {
-      setActiveProjectId(null)
-      setActiveTerminalId(null)
-      setShowTerminalForm(false)
-    }
+    setConfirmDialog({
+      isOpen: true,
+      message: 'Delete this project and all its terminals?',
+      onConfirm: () => {
+        setProjects((prev) => prev.filter((project) => project.id !== projectId))
+        if (activeProjectId === projectId) {
+          setActiveProjectId(null)
+          setActiveTerminalId(null)
+          setShowTerminalForm(false)
+        }
+        setConfirmDialog({ isOpen: false, message: '', onConfirm: null })
+      },
+    })
   }
 
   const handleProjectSubmit = (event) => {
@@ -329,20 +357,24 @@ function App() {
     if (!activeProject) {
       return
     }
-    if (!confirm('Delete this terminal?')) {
-      return
-    }
-    const remainingTerminals = activeProject.terminals.filter((terminal) => terminal.id !== terminalId)
-    setProjects((prev) =>
-      prev.map((project) =>
-        project.id === activeProject.id
-          ? { ...project, terminals: remainingTerminals }
-          : project,
-      ),
-    )
-    if (activeTerminalId === terminalId) {
-      setActiveTerminalId(remainingTerminals[0]?.id ?? null)
-    }
+    setConfirmDialog({
+      isOpen: true,
+      message: 'Delete this terminal?',
+      onConfirm: () => {
+        const remainingTerminals = activeProject.terminals.filter((terminal) => terminal.id !== terminalId)
+        setProjects((prev) =>
+          prev.map((project) =>
+            project.id === activeProject.id
+              ? { ...project, terminals: remainingTerminals }
+              : project,
+          ),
+        )
+        if (activeTerminalId === terminalId) {
+          setActiveTerminalId(remainingTerminals[0]?.id ?? null)
+        }
+        setConfirmDialog({ isOpen: false, message: '', onConfirm: null })
+      },
+    })
   }
 
   const handleOpenProjectTab = () => {
@@ -557,6 +589,13 @@ function App() {
           </div>
         )}
       </main>
+
+      <ConfirmDialog
+        isOpen={confirmDialog.isOpen}
+        message={confirmDialog.message}
+        onConfirm={confirmDialog.onConfirm}
+        onCancel={() => setConfirmDialog({ isOpen: false, message: '', onConfirm: null })}
+      />
     </div>
   )
 }
