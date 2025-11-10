@@ -63,20 +63,13 @@ const getDefaultProjects = () => [
   {
     id: 'shell-workspace',
     name: 'Shell Workspace',
-    description: 'Quick entry to your shellinabox gateway.',
+    description: '',
     protocol: DEFAULT_PROTOCOL,
     baseHost: DEFAULT_HOST,
     basePort: DEFAULT_BASE_PORT,
     portStrategy: DEFAULT_PORT_STRATEGY,
     portStrategyLocked: true,
-    terminals: [
-      {
-        id: 'primary-shell',
-        name: 'Primary shell',
-        offset: 0,
-        notes: 'Uses your Linux credentials. Secure HTTPS connection.',
-      },
-    ],
+    terminals: [],
   },
 ]
 
@@ -178,15 +171,10 @@ function App() {
   const [projects, setProjects] = useProjectsState()
   const [activeProjectId, setActiveProjectId] = useState(null)
   const [activeTerminalId, setActiveTerminalId] = useState(null)
+  const [showSettings, setShowSettings] = useState(false)
   const [projectForm, setProjectForm] = useState({ name: '', description: '' })
   const [terminalForm, setTerminalForm] = useState({ name: '', notes: '' })
   const [showTerminalForm, setShowTerminalForm] = useState(false)
-  const [projectSettingsForm, setProjectSettingsForm] = useState({
-    protocol: DEFAULT_PROTOCOL,
-    baseHost: DEFAULT_HOST,
-    basePort: String(DEFAULT_BASE_PORT),
-    portStrategy: DEFAULT_PORT_STRATEGY,
-  })
 
   const activeProject = useMemo(
     () => projects.find((project) => project.id === activeProjectId) ?? null,
@@ -267,30 +255,16 @@ function App() {
     }
   }, [activeProject, activeTerminalId])
 
-  useEffect(() => {
-    if (activeProject) {
-      setProjectSettingsForm({
-        protocol: activeProject.protocol,
-        baseHost: activeProject.baseHost,
-        basePort: String(activeProject.basePort),
-        portStrategy: activeProject.portStrategy,
-      })
-    } else {
-      setProjectSettingsForm({
-        protocol: DEFAULT_PROTOCOL,
-        baseHost: DEFAULT_HOST,
-        basePort: String(DEFAULT_BASE_PORT),
-        portStrategy: DEFAULT_PORT_STRATEGY,
-      })
-    }
-  }, [activeProject])
-
   const handleSelectProject = (projectId) => {
     setActiveProjectId(projectId)
     setShowTerminalForm(false)
+    setShowSettings(false)
   }
 
   const handleRemoveProject = (projectId) => {
+    if (!confirm('Delete this project and all its terminals?')) {
+      return
+    }
     setProjects((prev) => prev.filter((project) => project.id !== projectId))
     if (activeProjectId === projectId) {
       setActiveProjectId(null)
@@ -321,37 +295,6 @@ function App() {
     setActiveProjectId(newProject.id)
     setActiveTerminalId(null)
     setShowTerminalForm(false)
-  }
-
-  const handleProjectSettingsSubmit = (event) => {
-    event.preventDefault()
-    if (!activeProject) {
-      return
-    }
-    const protocol = projectSettingsForm.protocol === 'http' ? 'http' : DEFAULT_PROTOCOL
-    const baseHost = sanitizeHost(projectSettingsForm.baseHost || DEFAULT_HOST) || DEFAULT_HOST
-    const basePortNumber = Number.parseInt(projectSettingsForm.basePort, 10)
-    if (!Number.isFinite(basePortNumber) || basePortNumber <= 0) {
-      return
-    }
-    const portStrategy =
-      projectSettingsForm.portStrategy === PORT_STRATEGIES.SINGLE
-        ? PORT_STRATEGIES.SINGLE
-        : PORT_STRATEGIES.SEQUENTIAL
-    setProjects((prev) =>
-      prev.map((project) =>
-        project.id === activeProject.id
-          ? {
-              ...project,
-              protocol,
-              baseHost,
-              basePort: basePortNumber,
-              portStrategy,
-              portStrategyLocked: true,
-            }
-          : project,
-      ),
-    )
   }
 
   const handleTerminalSubmit = (event) => {
@@ -386,6 +329,9 @@ function App() {
     if (!activeProject) {
       return
     }
+    if (!confirm('Delete this terminal?')) {
+      return
+    }
     const remainingTerminals = activeProject.terminals.filter((terminal) => terminal.id !== terminalId)
     setProjects((prev) =>
       prev.map((project) =>
@@ -407,240 +353,156 @@ function App() {
     window.open(url, '_blank', 'noopener,noreferrer')
   }
 
-  const nextTerminalUrl = activeProject
-    ? buildUrlForOffset(
-        activeProject,
-        activeProject.portStrategy === PORT_STRATEGIES.SINGLE
-          ? 0
-          : findNextOffset(activeProject.terminals),
-      )
-    : null
-
   return (
     <div className="app-shell">
-      <header className="app-header">
-        <div>
-          <h1>Shellinabox Control Center</h1>
-          <p className="subtitle">Keep each project in its own browser tab with dedicated shell access.</p>
+      <header className="app-header-compact">
+        <div className="header-left">
+          <h1>AI Workflow</h1>
+          {activeProject && (
+            <span className="project-indicator">
+              {activeProject.name}
+              {activeProject.terminals.length > 0 && (
+                <span className="terminal-count">{activeProject.terminals.length} terminals</span>
+              )}
+            </span>
+          )}
         </div>
-        <button
-          type="button"
-          className="secondary"
-          onClick={handleOpenProjectTab}
-          disabled={!activeProjectId}
-        >
-          Open project in new browser tab
-        </button>
+        <div className="header-actions">
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={() => setShowSettings(!showSettings)}
+            title="Settings"
+          >
+            ⚙️
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={handleOpenProjectTab}
+            disabled={!activeProjectId}
+            title="Open in new tab"
+          >
+            🗗
+          </button>
+        </div>
       </header>
 
-      <nav className="project-tabs" role="tablist">
-        {projects.map((project) => {
-          const isActive = project.id === activeProjectId
-          return (
-            <button
-              key={project.id}
-              role="tab"
-              aria-selected={isActive}
-              className={`project-tab ${isActive ? 'active' : ''}`}
-              onClick={() => handleSelectProject(project.id)}
-            >
-              <span>{project.name}</span>
-              {projects.length > 1 && (
-                <span
-                  className="remove-project"
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    handleRemoveProject(project.id)
-                  }}
-                  title="Remove project"
-                >
-                  ×
-                </span>
-              )}
-            </button>
-          )
-        })}
-        <form onSubmit={handleProjectSubmit} className="project-form">
-          <input
-            type="text"
-            placeholder="New project"
-            value={projectForm.name}
-            onChange={(event) =>
-              setProjectForm((prev) => ({ ...prev, name: event.target.value }))
-            }
-            aria-label="New project name"
-          />
-          <input
-            type="text"
-            placeholder="Description"
-            value={projectForm.description}
-            onChange={(event) =>
-              setProjectForm((prev) => ({ ...prev, description: event.target.value }))
-            }
-            aria-label="New project description"
-          />
-          <button type="submit" className="primary">Add</button>
-        </form>
-      </nav>
+      {showSettings && (
+        <div className="settings-panel">
+          <div className="settings-content">
+            <div className="settings-header">
+              <h2>Projects</h2>
+              <button className="icon-btn" onClick={() => setShowSettings(false)}>✕</button>
+            </div>
 
-      <main className="main-panel">
+            <div className="project-list">
+              {projects.map((project) => {
+                const isActive = project.id === activeProjectId
+                return (
+                  <div
+                    key={project.id}
+                    className={`project-item ${isActive ? 'active' : ''}`}
+                    onClick={() => handleSelectProject(project.id)}
+                  >
+                    <div className="project-item-content">
+                      <strong>{project.name}</strong>
+                      {project.description && <small>{project.description}</small>}
+                    </div>
+                    {projects.length > 1 && (
+                      <button
+                        className="remove-btn"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleRemoveProject(project.id)
+                        }}
+                        title="Delete project"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+
+            <form onSubmit={handleProjectSubmit} className="settings-form">
+              <h3>Add Project</h3>
+              <input
+                type="text"
+                placeholder="Project name"
+                value={projectForm.name}
+                onChange={(e) => setProjectForm((prev) => ({ ...prev, name: e.target.value }))}
+                required
+              />
+              <input
+                type="text"
+                placeholder="Description (optional)"
+                value={projectForm.description}
+                onChange={(e) => setProjectForm((prev) => ({ ...prev, description: e.target.value }))}
+              />
+              <button type="submit" className="primary">Create Project</button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      <main className="main-panel-compact">
         {activeProject ? (
           <>
-            <section className="project-summary">
-              <div>
-                <h2>{activeProject.name}</h2>
-                {activeProject.description && <p>{activeProject.description}</p>}
-              </div>
-              <span className="badge">{activeProject.terminals.length} terminals</span>
-            </section>
-
-            <section className="connection-settings">
-              <form onSubmit={handleProjectSettingsSubmit}>
-                <div className="fields">
-                  <label>
-                    Protocol
-                    <select
-                      value={projectSettingsForm.protocol}
-                      onChange={(event) =>
-                        setProjectSettingsForm((prev) => ({
-                          ...prev,
-                          protocol: event.target.value,
-                        }))
-                      }
-                    >
-                      <option value="https">https</option>
-                      <option value="http">http</option>
-                    </select>
-                  </label>
-                  <label>
-                    Host
-                    <input
-                      type="text"
-                      value={projectSettingsForm.baseHost}
-                      onChange={(event) =>
-                        setProjectSettingsForm((prev) => ({
-                          ...prev,
-                          baseHost: event.target.value,
-                        }))
-                      }
-                      placeholder="10.1.0.10"
-                    />
-                  </label>
-                  <label>
-                    Base port
-                    <input
-                      type="number"
-                      min="1"
-                      value={projectSettingsForm.basePort}
-                      onChange={(event) =>
-                        setProjectSettingsForm((prev) => ({
-                          ...prev,
-                          basePort: event.target.value,
-                        }))
-                      }
-                    />
-                  </label>
-                  <label>
-                    Port strategy
-                    <select
-                      value={projectSettingsForm.portStrategy}
-                      onChange={(event) =>
-                        setProjectSettingsForm((prev) => ({
-                          ...prev,
-                          portStrategy: event.target.value,
-                        }))
-                      }
-                    >
-                      <option value={PORT_STRATEGIES.SEQUENTIAL}>Increment per terminal (4200, 4201, …)</option>
-                      <option value={PORT_STRATEGIES.SINGLE}>Reuse base port for every terminal</option>
-                    </select>
-                  </label>
-                </div>
-                <div className="form-actions">
-                  <button type="submit" className="secondary">Save connection</button>
-                </div>
-              </form>
-              {nextTerminalUrl && (
-                <p className="next-terminal-hint">
-                  {activeProject.portStrategy === PORT_STRATEGIES.SINGLE ? (
-                    <>
-                      All terminals reuse <code>{nextTerminalUrl}</code>. Use tmux/screen server-side if you need persistent shells.
-                    </>
-                  ) : (
-                    <>
-                      Next terminal will map to <code>{nextTerminalUrl}</code>
-                    </>
-                  )}
-                </p>
-              )}
-            </section>
-
-            <section className="terminal-tabs" role="tablist">
+            <section className="terminal-tabs-compact">
               {activeProject.terminals.map((terminal) => {
                 const isActive = terminal.id === activeTerminalId
-                const terminalUrl = buildTerminalUrl(activeProject, terminal)
                 return (
                   <button
                     key={terminal.id}
-                    role="tab"
-                    aria-selected={isActive}
                     className={`terminal-tab ${isActive ? 'active' : ''}`}
                     onClick={() => setActiveTerminalId(terminal.id)}
+                    title={terminal.notes || terminal.name}
                   >
-                    <span>{terminal.name}</span>
-                    <small>{formatEndpointLabel(terminalUrl)}</small>
+                    {terminal.name}
+                    <span
+                      className="remove-icon"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handleRemoveTerminal(terminal.id)
+                      }}
+                      title="Remove terminal"
+                    >
+                      ✕
+                    </span>
                   </button>
                 )
               })}
               <button
                 type="button"
                 className="terminal-tab add"
-                onClick={() => setShowTerminalForm((prev) => !prev)}
+                onClick={() => setShowTerminalForm(!showTerminalForm)}
+                title="Add terminal"
               >
-                + Add terminal
+                +
               </button>
             </section>
 
             {showTerminalForm && (
-              <section className="terminal-form">
+              <section className="terminal-form-compact">
                 <form onSubmit={handleTerminalSubmit}>
-                  <div className="field-row">
-                    <label>
-                      Name
-                      <input
-                        type="text"
-                        value={terminalForm.name}
-                        onChange={(event) =>
-                          setTerminalForm((prev) => ({ ...prev, name: event.target.value }))
-                        }
-                        required
-                      />
-                    </label>
-                  </div>
-                  <label>
-                    Notes (optional)
-                    <input
-                      type="text"
-                      value={terminalForm.notes}
-                      onChange={(event) =>
-                        setTerminalForm((prev) => ({ ...prev, notes: event.target.value }))
-                      }
-                      placeholder="Credentials, commands, reminders"
-                    />
-                  </label>
-                  <p className="next-terminal-hint">
-                    {activeProject.portStrategy === PORT_STRATEGIES.SINGLE ? (
-                      <>
-                        This terminal will reuse <code>{nextTerminalUrl}</code>
-                      </>
-                    ) : (
-                      <>
-                        This terminal will map to <code>{nextTerminalUrl}</code>
-                      </>
-                    )}
-                  </p>
-                  <div className="form-actions">
-                    <button type="submit" className="primary">Save terminal</button>
+                  <input
+                    type="text"
+                    placeholder="Terminal name"
+                    value={terminalForm.name}
+                    onChange={(e) => setTerminalForm((prev) => ({ ...prev, name: e.target.value }))}
+                    required
+                    autoFocus
+                  />
+                  <input
+                    type="text"
+                    placeholder="Notes (optional)"
+                    value={terminalForm.notes}
+                    onChange={(e) => setTerminalForm((prev) => ({ ...prev, notes: e.target.value }))}
+                  />
+                  <div className="form-actions-inline">
+                    <button type="submit" className="primary">Add</button>
                     <button
                       type="button"
                       className="secondary"
@@ -657,39 +519,7 @@ function App() {
             )}
 
             {activeTerminal ? (
-              <section className="terminal-view">
-                <header className="terminal-view-header">
-                  <div>
-                    <h3>{activeTerminal.name}</h3>
-                    {activeTerminal.notes && <p>{activeTerminal.notes}</p>}
-                  </div>
-                  <div className="terminal-actions">
-                    <div className="terminal-endpoint">
-                      <span>Endpoint</span>
-                      <code>{buildTerminalUrl(activeProject, activeTerminal)}</code>
-                    </div>
-                    <button
-                      type="button"
-                      className="secondary"
-                      onClick={() =>
-                        window.open(
-                          buildTerminalUrl(activeProject, activeTerminal),
-                          '_blank',
-                          'noopener,noreferrer',
-                        )
-                      }
-                    >
-                      Open in new tab
-                    </button>
-                    <button
-                      type="button"
-                      className="danger"
-                      onClick={() => handleRemoveTerminal(activeTerminal.id)}
-                    >
-                      Remove
-                    </button>
-                  </div>
-                </header>
+              <section className="terminal-view-fullscreen">
                 <div className="terminal-frame">
                   {activeProject.terminals.map((terminal) => {
                     const terminalUrl = buildTerminalUrl(activeProject, terminal)
@@ -709,13 +539,13 @@ function App() {
               </section>
             ) : (
               <div className="empty-state">
-                <p>Select a terminal tab or add one to start.</p>
+                <p>Click + to add a terminal</p>
               </div>
             )}
           </>
         ) : (
           <div className="empty-state">
-            <p>Create a project to start organizing shellinabox sessions.</p>
+            <p>Open settings (⚙️) to create a project</p>
           </div>
         )}
       </main>
