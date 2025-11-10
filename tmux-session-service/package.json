@@ -1,0 +1,14 @@
+{
+  "name": "tmux-session-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Small HTTP API that provisions and tracks tmux sessions so shellinabox can reattach reliably.",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

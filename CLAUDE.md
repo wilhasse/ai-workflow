@@ -4,12 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Overview
 
-This is a monorepo containing two independent AI workflow tools:
+This is a monorepo containing three independent AI workflow tools:
 
 1. **whisper-realtime-api/** - FastAPI service exposing Whisper for audio transcription (batch & streaming)
 2. **terminal-dashboard/** - React SPA for managing shellinabox terminal sessions across projects
+3. **tmux-session-service/** - Node.js HTTP API for persistent tmux session management with shellinabox
 
-Each project has its own build system, dependencies, and deployment model. They share no code or runtime dependencies.
+Each project has its own build system, dependencies, and deployment model. The terminal-dashboard works with tmux-session-service to provide persistent terminal sessions.
 
 ## Architecture
 
@@ -31,6 +32,14 @@ Each project has its own build system, dependencies, and deployment model. They 
   - `App.jsx` contains all logic (project CRUD, terminal CRUD, URL building)
   - `useProjectsState()` hook manages localStorage sync
   - Iframes embed shellinabox sessions with clipboard/script permissions
+
+### tmux-session-service
+- **Type**: Lightweight Node.js HTTP API for tmux lifecycle management
+- **Purpose**: Enables persistent terminal sessions that survive browser reloads
+- **Key Pattern**: Idempotent session creation via PUT /sessions/:id
+- **Integration**: shellinabox calls `attach-session.sh` which hits API before attaching
+- **Persistence**: Session metadata stored in `data/sessions.json`
+- **Flow**: React dashboard → shellinabox (via iframe) → attach script → API → tmux session
 
 ## Development Commands
 
@@ -93,6 +102,38 @@ npm run lint
 3. Add terminals and verify iframe URLs render correctly
 4. Test protocol/host sanitization with edge cases
 
+### tmux-session-service
+
+```bash
+# Start the service
+cd tmux-session-service
+npm start            # http://0.0.0.0:5001
+
+# Development with auto-reload
+npm run dev
+
+# Test API endpoints
+curl http://localhost:5001/health
+curl http://localhost:5001/sessions
+curl -X PUT http://localhost:5001/sessions/test-session \
+  -H 'Content-Type: application/json' \
+  -d '{"sessionId":"test-session","projectId":"test-project"}'
+
+# Configure shellinabox to use the service
+export SESSION_SERVICE_URL=http://127.0.0.1:5001
+shellinaboxd \
+  --service=/workspace:USERNAME:/path/to/tmux-session-service/scripts/attach-session.sh \
+  -p 4200
+```
+
+**Environment Variables**:
+- `PORT` / `HOST`: Service binding (default: 5001 / 0.0.0.0)
+- `TMUX_BIN`: Path to tmux binary
+- `SHELL_CMD`: Default shell command (defaults to $SHELL or /bin/bash)
+- `DATA_DIR`: Directory for sessions.json persistence
+
+**Setup Guide**: See `tmux-session-service/SETUP.md` for complete integration instructions
+
 ## Code Style
 
 ### whisper-realtime-api
@@ -128,3 +169,5 @@ npm run lint
 See project-specific files for additional context:
 - **whisper-realtime-api/CLAUDE.md** - FastAPI architecture, Docker config, model lifecycle
 - **terminal-dashboard/AGENTS.md** - React patterns, commit conventions, security tips
+- **tmux-session-service/SETUP.md** - Complete integration guide with shellinabox
+- **tmux-session-service/README.md** - API reference and feature overview

@@ -1,0 +1,9 @@
+{
+  "test-session-123": {
+    "sessionId": "test-session-123",
+    "projectId": "test-project",
+    "command": "/bin/bash",
+    "createdAt": "2025-11-10T11:39:41.095Z",
+    "updatedAt": "2025-11-10T11:39:41.095Z"
+  }
+}
