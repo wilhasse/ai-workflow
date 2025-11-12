@@ -48,9 +48,16 @@ services:
     environment:
       - PORT=5001
       - HOST=0.0.0.0
+      - LANG=pt_BR.UTF-8
+      - LC_ALL=pt_BR.UTF-8
+      - TERM=xterm-256color
     volumes:
       # Persist session data
       - tmux-session-data:/app/data
+      # Mount host's tmux socket directory to connect to host tmux sessions
+      - /tmp/tmux-1000:/tmp/tmux-1000
+      # Mount host's home directory so sessions have access to host environment
+      - /home/cslog:/home/cslog
     networks:
       - ai-workflow-network
     restart: unless-stopped
