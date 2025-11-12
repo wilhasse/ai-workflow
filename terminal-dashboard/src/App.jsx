@@ -7,8 +7,13 @@ import './App.css'
 
 const STORAGE_KEY = 'terminal-dashboard-xterm-v1'
 const FONT_SIZE_STORAGE_KEY = 'terminal-dashboard-font-size'
+const PROJECT_VIEW_MODE_STORAGE_KEY = 'terminal-dashboard-project-view-mode'
 const FONT_SIZE_OPTIONS = [12, 14, 16, 18, 20, 22]
 const DEFAULT_FONT_SIZE = 16
+const PROJECT_VIEW_MODES = {
+  DROPDOWN: 'dropdown',
+  TABS: 'tabs',
+}
 
 const detectDefaultProtocol = () => {
   if (typeof window !== 'undefined' && window.location?.protocol) {
@@ -66,6 +71,19 @@ const getTerminalBaseUrl = (project, terminal) => {
 
 const buildTerminalSocketUrl = (project, terminal) => {
   try {
+    // Check if we're connecting to the same host (Docker deployment via nginx)
+    const currentHost = window.location.hostname
+    const targetHost = project.baseHost
+
+    // If connecting to same host or localhost, use nginx proxy (no port)
+    if (currentHost === targetHost || targetHost === 'localhost' || targetHost === '127.0.0.1') {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      const port = window.location.port ? `:${window.location.port}` : ''
+      const url = `${protocol}//${currentHost}${port}/ws/sessions/${terminal.id}?projectId=${project.id}`
+      return url
+    }
+
+    // Otherwise use the configured host:port (for external/multi-host setups)
     const baseUrl = new URL(getTerminalBaseUrl(project, terminal))
     baseUrl.protocol = project.protocol === 'http' ? 'ws:' : 'wss:'
     baseUrl.pathname = `/ws/sessions/${terminal.id}`
@@ -408,6 +426,13 @@ function App() {
     const stored = Number.parseInt(window.localStorage.getItem(FONT_SIZE_STORAGE_KEY) ?? '', 10)
     return FONT_SIZE_OPTIONS.includes(stored) ? stored : DEFAULT_FONT_SIZE
   })
+  const [projectViewMode, setProjectViewMode] = useState(() => {
+    if (typeof window === 'undefined') {
+      return PROJECT_VIEW_MODES.DROPDOWN
+    }
+    const stored = window.localStorage.getItem(PROJECT_VIEW_MODE_STORAGE_KEY)
+    return stored === PROJECT_VIEW_MODES.TABS ? PROJECT_VIEW_MODES.TABS : PROJECT_VIEW_MODES.DROPDOWN
+  })
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -415,6 +440,13 @@ function App() {
     }
     window.localStorage.setItem(FONT_SIZE_STORAGE_KEY, String(terminalFontSize))
   }, [terminalFontSize])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+    window.localStorage.setItem(PROJECT_VIEW_MODE_STORAGE_KEY, projectViewMode)
+  }, [projectViewMode])
 
   const activeProject = useMemo(
     () => projects.find((project) => project.id === activeProjectId) ?? null,
@@ -615,29 +647,98 @@ function App() {
     window.open(url, '_blank', 'noopener,noreferrer')
   }
 
+  const renderProjectSelector = () => {
+    if (!projects.length) {
+      return null
+    }
+    if (projectViewMode === PROJECT_VIEW_MODES.TABS) {
+      return (
+        <div className="project-tabs-inline">
+          {projects.map((project) => {
+            const isActive = project.id === activeProjectId
+            return (
+              <button
+                key={project.id}
+                type="button"
+                className={`project-tab ${isActive ? 'active' : ''}`}
+                onClick={() => handleSelectProject(project.id)}
+                title={project.description || project.name}
+              >
+                <span>{project.name}</span>
+                {projects.length > 1 && (
+                  <span
+                    className="remove-project"
+                    role="button"
+                    tabIndex={-1}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      handleRemoveProject(project.id)
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        handleRemoveProject(project.id)
+                      }
+                    }}
+                    title="Delete project"
+                  >
+                    ✕
+                  </span>
+                )}
+              </button>
+            )
+          })}
+        </div>
+      )
+    }
+    return (
+      <div className="project-selector">
+        <select
+          value={activeProjectId || ''}
+          onChange={(e) => handleSelectProject(e.target.value)}
+          className="project-select"
+        >
+          {projects.map((project) => (
+            <option key={project.id} value={project.id}>
+              {project.name}
+              {project.terminals.length > 0 && ` (${project.terminals.length} terminals)`}
+            </option>
+          ))}
+        </select>
+      </div>
+    )
+  }
+
   return (
     <div className="app-shell">
       <header className="app-header-compact">
         <div className="header-left">
           <h1>AI Workflow</h1>
-          {projects.length > 0 && (
-            <div className="project-selector">
-              <select
-                value={activeProjectId || ''}
-                onChange={(e) => handleSelectProject(e.target.value)}
-                className="project-select"
-              >
-                {projects.map((project) => (
-                  <option key={project.id} value={project.id}>
-                    {project.name}
-                    {project.terminals.length > 0 && ` (${project.terminals.length} terminals)`}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
+          {renderProjectSelector()}
         </div>
         <div className="header-actions">
+          {projects.length > 0 && (
+            <button
+              type="button"
+              className={`icon-btn project-view-toggle ${
+                projectViewMode === PROJECT_VIEW_MODES.TABS ? 'active' : ''
+              }`}
+              onClick={() =>
+                setProjectViewMode((prev) =>
+                  prev === PROJECT_VIEW_MODES.TABS
+                    ? PROJECT_VIEW_MODES.DROPDOWN
+                    : PROJECT_VIEW_MODES.TABS,
+                )
+              }
+              title={
+                projectViewMode === PROJECT_VIEW_MODES.TABS
+                  ? 'Switch to dropdown view'
+                  : 'Switch to tabbed view'
+              }
+            >
+              {projectViewMode === PROJECT_VIEW_MODES.TABS ? '▤' : '☰'}
+            </button>
+          )}
           <button
             type="button"
             className="icon-btn"
