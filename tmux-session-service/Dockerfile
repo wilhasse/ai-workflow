@@ -16,8 +16,8 @@ COPY package*.json ./
 RUN npm install --omit=dev
 COPY . .
 
-# Change ownership to cslog user
-RUN chown -R cslog:cslog /app
+# Create data directory and set permissions
+RUN mkdir -p /app/data && chown -R cslog:cslog /app
 
 # Switch to cslog user
 USER cslog
