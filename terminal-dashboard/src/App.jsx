@@ -1,10 +1,32 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Terminal } from '@xterm/xterm'
+import { FitAddon } from '@xterm/addon-fit'
+import { WebLinksAddon } from '@xterm/addon-web-links'
+import '@xterm/xterm/css/xterm.css'
 import './App.css'
 
-const STORAGE_KEY = 'terminal-dashboard-shellinabox-v1'
-const DEFAULT_PROTOCOL = 'https'
-const DEFAULT_HOST = '10.1.0.10'
-const DEFAULT_BASE_PORT = 4200
+const STORAGE_KEY = 'terminal-dashboard-xterm-v1'
+const FONT_SIZE_STORAGE_KEY = 'terminal-dashboard-font-size'
+const FONT_SIZE_OPTIONS = [12, 14, 16, 18, 20, 22]
+const DEFAULT_FONT_SIZE = 16
+
+const detectDefaultProtocol = () => {
+  if (typeof window !== 'undefined' && window.location?.protocol) {
+    return window.location.protocol === 'http:' ? 'http' : 'https'
+  }
+  return 'https'
+}
+
+const detectDefaultHost = () => {
+  if (typeof window !== 'undefined' && window.location?.hostname) {
+    return window.location.hostname
+  }
+  return '10.1.0.10'
+}
+
+const DEFAULT_PROTOCOL = detectDefaultProtocol()
+const DEFAULT_HOST = detectDefaultHost()
+const DEFAULT_BASE_PORT = 5001
 const PORT_STRATEGIES = {
   SEQUENTIAL: 'sequential',
   SINGLE: 'single',
@@ -34,19 +56,25 @@ const buildUrlForOffset = (project, offset) => {
   return `${project.protocol}://${project.baseHost}:${port}`
 }
 
-const buildTerminalUrl = (project, terminal) => {
-  const baseUrl =
-    project.portStrategy === PORT_STRATEGIES.SINGLE
-      ? `${project.protocol}://${project.baseHost}:${project.basePort}`
-      : buildUrlForOffset(project, terminal.offset)
+const getTerminalBaseUrl = (project, terminal) => {
+  if (project.portStrategy === PORT_STRATEGIES.SINGLE) {
+    return `${project.protocol}://${project.baseHost}:${project.basePort}`
+  }
+  const offset = Number.isFinite(terminal.offset) ? terminal.offset : 0
+  return buildUrlForOffset(project, offset)
+}
+
+const buildTerminalSocketUrl = (project, terminal) => {
   try {
-    const url = new URL(baseUrl)
-    url.searchParams.set('projectId', project.id)
-    url.searchParams.set('terminalId', terminal.id)
-    return url.toString()
+    const baseUrl = new URL(getTerminalBaseUrl(project, terminal))
+    baseUrl.protocol = project.protocol === 'http' ? 'ws:' : 'wss:'
+    baseUrl.pathname = `/ws/sessions/${terminal.id}`
+    baseUrl.search = ''
+    baseUrl.searchParams.set('projectId', project.id)
+    return baseUrl.toString()
   } catch (error) {
-    console.warn('Failed to build terminal URL', baseUrl, error)
-    return baseUrl
+    console.warn('Failed to build socket URL', error.message)
+    return ''
   }
 }
 
@@ -76,7 +104,9 @@ const getDefaultProjects = () => [
 const normalizeProjects = (projects) =>
   projects.map((project) => {
     const protocol = project.protocol === 'http' ? 'http' : DEFAULT_PROTOCOL
-    const baseHost = project.baseHost ? sanitizeHost(project.baseHost) : DEFAULT_HOST
+    const storedHost = project.baseHost ? sanitizeHost(project.baseHost) : DEFAULT_HOST
+    const baseHost =
+      storedHost === '10.1.0.10' && DEFAULT_HOST !== '10.1.0.10' ? DEFAULT_HOST : storedHost
     const basePort = Number.isFinite(project.basePort) ? project.basePort : DEFAULT_BASE_PORT
     const portStrategyLocked = project.portStrategyLocked === true
     const requestedStrategy =
@@ -190,6 +220,178 @@ function ConfirmDialog({ isOpen, title, message, onConfirm, onCancel }) {
   )
 }
 
+function TerminalViewer({ wsUrl, fontSize }) {
+  const containerRef = useRef(null)
+  const termRef = useRef(null)
+  const fitAddonRef = useRef(null)
+  const fontSizeRef = useRef(fontSize)
+  const [connectionState, setConnectionState] = useState({
+    status: 'connecting',
+    message: 'Connecting…',
+  })
+
+  useEffect(() => {
+    fontSizeRef.current = fontSize
+  }, [fontSize])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return () => {}
+    }
+    if (!wsUrl) {
+      setConnectionState({ status: 'error', message: 'Missing connection target' })
+      return () => {}
+    }
+    const container = containerRef.current
+    if (!container) {
+      return () => {}
+    }
+
+    setConnectionState({ status: 'connecting', message: 'Connecting…' })
+    const term = new Terminal({
+      cursorBlink: true,
+      allowTransparency: true,
+      convertEol: true,
+      fontSize: fontSizeRef.current,
+      fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+      theme: {
+        background: '#030712',
+        foreground: '#f8fafc',
+        cursor: '#38bdf8',
+      },
+    })
+    const fitAddon = new FitAddon()
+    const webLinksAddon = new WebLinksAddon()
+    term.loadAddon(fitAddon)
+    term.loadAddon(webLinksAddon)
+    term.open(container)
+    fitAddon.fit()
+    term.focus()
+    termRef.current = term
+    fitAddonRef.current = fitAddon
+
+    let socket
+    try {
+      socket = new window.WebSocket(wsUrl)
+    } catch (error) {
+      console.warn('Failed to open websocket', error)
+      term.dispose()
+      setConnectionState({ status: 'error', message: 'Invalid connection URL' })
+      return () => {}
+    }
+
+    const sendMessage = (payload) => {
+      if (socket?.readyState === window.WebSocket.OPEN) {
+        socket.send(JSON.stringify(payload))
+      }
+    }
+
+    const pushResize = () => {
+      fitAddon.fit()
+      sendMessage({ type: 'resize', cols: term.cols, rows: term.rows })
+    }
+
+    socket.addEventListener('open', () => {
+      setConnectionState({ status: 'connected', message: 'Connected' })
+      pushResize()
+    })
+
+    socket.addEventListener('close', () => {
+      setConnectionState((previous) =>
+        previous.status === 'error' ? previous : { status: 'closed', message: 'Session closed' },
+      )
+    })
+
+    socket.addEventListener('error', () => {
+      setConnectionState({ status: 'error', message: 'Connection error' })
+    })
+
+    socket.addEventListener('message', (event) => {
+      let payload
+      try {
+        payload = JSON.parse(event.data)
+      } catch {
+        return
+      }
+      if (payload.type === 'data' && typeof payload.payload === 'string') {
+        term.write(payload.payload)
+        return
+      }
+      if (payload.type === 'ready') {
+        setConnectionState({ status: 'connected', message: 'Session ready' })
+        return
+      }
+      if (payload.type === 'exit') {
+        setConnectionState({ status: 'closed', message: 'Detached from tmux session' })
+        socket.close()
+        return
+      }
+      if (payload.type === 'error') {
+        setConnectionState({ status: 'error', message: payload.message ?? 'Bridge error' })
+        socket.close()
+      }
+    })
+
+    const dataDisposable = term.onData((chunk) => {
+      sendMessage({ type: 'input', payload: chunk })
+    })
+
+    let cleanupResize = () => {}
+    if (typeof window !== 'undefined' && 'ResizeObserver' in window) {
+      const observer = new window.ResizeObserver(() => {
+        pushResize()
+      })
+      observer.observe(container)
+      cleanupResize = () => observer.disconnect()
+    } else {
+      const handleResize = () => pushResize()
+      window.addEventListener('resize', handleResize)
+      cleanupResize = () => window.removeEventListener('resize', handleResize)
+    }
+
+    return () => {
+      dataDisposable.dispose()
+      cleanupResize()
+      if (
+        socket.readyState === window.WebSocket.OPEN ||
+        socket.readyState === window.WebSocket.CONNECTING
+      ) {
+        socket.close()
+      }
+      term.dispose()
+      termRef.current = null
+      fitAddonRef.current = null
+    }
+  }, [wsUrl])
+
+  useEffect(() => {
+    const term = termRef.current
+    if (!term) {
+      return
+    }
+    if (term.options) {
+      term.options.fontSize = fontSize
+    }
+    if (typeof term.setOption === 'function') {
+      term.setOption('fontSize', fontSize)
+    }
+    if (typeof term.refresh === 'function') {
+      term.refresh(0, term.rows - 1)
+    }
+    fitAddonRef.current?.fit()
+  }, [fontSize])
+
+  return (
+    <div className="terminal-frame">
+      <div ref={containerRef} className="terminal-surface" />
+      <div className={`terminal-status terminal-status-${connectionState.status}`}>
+        <span className="terminal-status-dot" />
+        {connectionState.message}
+      </div>
+    </div>
+  )
+}
+
 function App() {
   const [projects, setProjects] = useProjectsState()
   const [activeProjectId, setActiveProjectId] = useState(null)
@@ -199,6 +401,20 @@ function App() {
   const [terminalForm, setTerminalForm] = useState({ name: '', notes: '' })
   const [showTerminalForm, setShowTerminalForm] = useState(false)
   const [confirmDialog, setConfirmDialog] = useState({ isOpen: false, message: '', onConfirm: null })
+  const [terminalFontSize, setTerminalFontSize] = useState(() => {
+    if (typeof window === 'undefined') {
+      return DEFAULT_FONT_SIZE
+    }
+    const stored = Number.parseInt(window.localStorage.getItem(FONT_SIZE_STORAGE_KEY) ?? '', 10)
+    return FONT_SIZE_OPTIONS.includes(stored) ? stored : DEFAULT_FONT_SIZE
+  })
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+    window.localStorage.setItem(FONT_SIZE_STORAGE_KEY, String(terminalFontSize))
+  }, [terminalFontSize])
 
   const activeProject = useMemo(
     () => projects.find((project) => project.id === activeProjectId) ?? null,
@@ -211,6 +427,17 @@ function App() {
     }
     return activeProject.terminals.find((terminal) => terminal.id === activeTerminalId) ?? null
   }, [activeProject, activeTerminalId])
+
+  const activeConnection = useMemo(() => {
+    if (!activeProject || !activeTerminal) {
+      return null
+    }
+    const baseUrl = getTerminalBaseUrl(activeProject, activeTerminal)
+    return {
+      wsUrl: buildTerminalSocketUrl(activeProject, activeTerminal),
+      endpointLabel: formatEndpointLabel(baseUrl),
+    }
+  }, [activeProject, activeTerminal])
 
   useEffect(() => {
     if (!projects.length) {
@@ -563,22 +790,46 @@ function App() {
 
             {activeTerminal ? (
               <section className="terminal-view-fullscreen">
-                <div className="terminal-frame">
-                  {activeProject.terminals.map((terminal) => {
-                    const terminalUrl = buildTerminalUrl(activeProject, terminal)
-                    const isVisible = terminal.id === activeTerminalId
-                    return (
-                      <iframe
-                        key={`${activeProject.id}-${terminal.id}`}
-                        src={terminalUrl}
-                        title={terminal.name}
-                        className={`terminal-frame-iframe ${isVisible ? 'active' : 'inactive'}`}
-                        allow="clipboard-read; clipboard-write"
-                        sandbox="allow-forms allow-modals allow-popups allow-same-origin allow-scripts"
-                      />
-                    )
-                  })}
+                <div className="terminal-view-header">
+                  <div>
+                    <h3>{activeTerminal.name}</h3>
+                    {(activeTerminal.notes || activeProject.description) && (
+                      <p>{activeTerminal.notes || activeProject.description}</p>
+                    )}
+                  </div>
+                  {activeConnection && (
+                    <div className="terminal-header-controls">
+                      <div className="terminal-endpoint">
+                        <span>Endpoint</span>
+                        <code>{activeConnection.endpointLabel}</code>
+                      </div>
+                      <label className="terminal-font-control">
+                        Font
+                        <select
+                          value={terminalFontSize}
+                          onChange={(e) => setTerminalFontSize(Number(e.target.value))}
+                        >
+                          {FONT_SIZE_OPTIONS.map((size) => (
+                            <option key={size} value={size}>
+                              {size}px
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                  )}
                 </div>
+                {activeConnection ? (
+                  <TerminalViewer
+                    key={`${activeProject.id}-${activeTerminal.id}`}
+                    wsUrl={activeConnection.wsUrl}
+                    fontSize={terminalFontSize}
+                  />
+                ) : (
+                  <div className="terminal-warning">
+                    <p>Unable to compute connection details.</p>
+                  </div>
+                )}
               </section>
             ) : (
               <div className="empty-state">

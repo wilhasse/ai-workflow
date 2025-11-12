@@ -1,6 +1,6 @@
 # tmux-session-service Installation Guide
 
-Complete step-by-step installation and configuration guide for setting up persistent terminal sessions with shellinabox.
+Complete step-by-step installation and configuration guide for setting up persistent terminal sessions. The default deployment now embeds xterm.js inside `terminal-dashboard` and talks to tmux-session-service directly over `/ws/sessions/…`; shellinabox-related sections below are kept for legacy environments.
 
 ## Table of Contents
 
@@ -26,9 +26,6 @@ sudo apt-get install -y nodejs
 # Install tmux
 sudo apt-get install -y tmux
 
-# Install shellinabox (if not already installed)
-sudo apt-get install -y shellinabox
-
 # Install curl (for API testing)
 sudo apt-get install -y curl
 
@@ -45,8 +42,8 @@ node --version
 # Check tmux version
 tmux -V
 
-# Check shellinabox installation
-which shellinaboxd
+# (Legacy) Check shellinabox installation if you still depend on it
+which shellinaboxd || true
 ```
 
 ## Installation

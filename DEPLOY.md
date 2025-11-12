@@ -62,7 +62,7 @@ That's it! The application is now running with all services orchestrated.
 
 ### Services
 
-The deployment consists of 4 main services:
+The deployment consists of 3 main services:
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -76,17 +76,16 @@ The deployment consists of 4 main services:
                │      │     │
        ┌───────┘      │     └────────┐
        │              │              │
-┌──────▼─────┐ ┌─────▼──────┐ ┌────▼───────────┐
-│  terminal- │ │ shellinabox│ │ tmux-session-  │
-│  dashboard │ │  (Web      │ │ service (API)  │
-│  (React)   │ │  Terminal) │ │                │
-└────────────┘ └────────────┘ └────────────────┘
+┌────────────┐ ┌──────────────────────────────┐
+│ terminal-  │ │ tmux-session-service (API + │
+│ dashboard  │ │ WebSocket bridge)           │
+│ (React)    │ │                              │
+└────────────┘ └──────────────────────────────┘
 ```
 
 1. **nginx** - Reverse proxy, SSL termination, routing
-2. **terminal-dashboard** - React frontend for managing terminals
-3. **shellinabox** - Web-based terminal emulator
-4. **tmux-session-service** - API for persistent terminal sessions
+2. **terminal-dashboard** - React frontend with embedded xterm.js terminals
+3. **tmux-session-service** - API + WebSocket bridge for persistent tmux sessions
 
 ### Network
 
@@ -95,7 +94,6 @@ All services communicate through a Docker bridge network (`ai-workflow-network`)
 ### Volumes
 
 - `tmux-session-data` - Persistent storage for session metadata
-- `tmux-sockets` - Shared tmux sockets between shellinabox and API
 
 ## Configuration
 
@@ -127,13 +125,14 @@ Edit `nginx/nginx.conf` to customize:
 - Security headers
 - Custom routes
 
-### Shellinabox Configuration
+### Terminal Bridge Configuration
 
-Shellinabox is configured via `shellinabox/Dockerfile` CMD instruction. To customize:
+The terminal dashboard connects to `tmux-session-service` through nginx:
 
-- Change default shell
-- Modify terminal appearance
-- Add custom startup commands
+- `/api/sessions/` proxies HTTP lifecycle requests
+- `/ws/sessions/` upgrades to a WebSocket that streams tmux I/O
+
+Adjust timeouts, TLS ciphers, or access controls for these routes inside `nginx/nginx.conf`.
 
 ## Deployment Steps
 
@@ -192,7 +191,7 @@ docker-compose logs
 docker-compose logs -f
 
 # Check specific service
-docker-compose logs shellinabox
+docker-compose logs tmux-session-service
 ```
 
 ### 6. Access Application
@@ -302,7 +301,7 @@ docker-compose logs
 docker-compose logs -f
 
 # View logs for specific service
-docker-compose logs -f shellinabox
+docker-compose logs -f tmux-session-service
 
 # View last 100 lines
 docker-compose logs --tail=100
@@ -331,7 +330,6 @@ All services have built-in health checks:
 
 - **nginx**: HTTP request to `/health` endpoint
 - **terminal-dashboard**: HTTP request to root
-- **shellinabox**: HTTPS request to service
 - **tmux-session-service**: HTTP request to `/health` endpoint
 
 Health checks run every 30 seconds and retry 3 times before marking unhealthy.
@@ -345,7 +343,7 @@ Health checks run every 30 seconds and retry 3 times before marking unhealthy.
 docker-compose logs
 
 # Verify port availability
-sudo netstat -tulpn | grep -E ':(80|443|4200|5001)'
+sudo netstat -tulpn | grep -E ':(80|443|5001)'
 
 # Restart services
 docker-compose restart
@@ -358,21 +356,25 @@ docker-compose up -d
 
 ### Terminal Not Loading
 
-1. **Check shellinabox logs**:
+1. **Check tmux-session-service logs**:
    ```bash
-   docker-compose logs shellinabox
+   docker-compose logs -f tmux-session-service
    ```
 
-2. **Verify tmux-session-service is running**:
+2. **Verify the API is healthy**:
    ```bash
    docker-compose ps tmux-session-service
-   curl http://localhost:5001/health
+   curl http://tmux-session-service:5001/health
    ```
 
-3. **Check network connectivity**:
+3. **Test the WebSocket bridge** (from the nginx container or host with network access):
    ```bash
-   docker-compose exec shellinabox ping tmux-session-service
+   npx wscat -c ws://localhost:5001/ws/sessions/debug-shell
    ```
+
+4. **Confirm nginx is proxying `/ws/sessions/`**:
+   - Check `nginx/nginx.conf` for the WebSocket location block
+   - Reload nginx if changes were made: `docker-compose exec nginx nginx -s reload`
 
 ### SSL Certificate Errors
 
@@ -464,7 +466,6 @@ tar czf ai-workflow-full-backup-$(date +%Y%m%d).tar.gz \
   .env.production \
   nginx/ \
   terminal-dashboard/ \
-  shellinabox/ \
   tmux-session-service/
 
 # Include Docker volumes

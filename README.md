@@ -28,14 +28,14 @@ docker run --rm --gpus all -p 8000:8000 whisper-realtime-api
 
 ### 🖥️ Terminal Dashboard
 
-React SPA for organizing and managing multiple shellinabox terminal sessions across projects.
+React SPA with an embedded xterm.js client for organizing tmux-backed browser terminals across projects.
 
 **Features:**
 - Multi-project terminal organization
 - Persistent session management via localStorage
-- Flexible port strategies (single or sequential)
-- Deep linking and browser tab isolation
-- Integrates with tmux-session-service for persistent shells
+- Flexible port strategies (single or sequential) to target different bridge hosts
+- Deep linking, browser tab isolation, and clipboard-friendly xterm.js terminals
+- Talks directly to tmux-session-service for session lifecycle + streaming I/O
 
 **Quick Start:**
 ```bash
@@ -51,12 +51,12 @@ npm run dev
 
 ### 🔄 tmux Session Service
 
-Lightweight Node.js HTTP API that manages persistent tmux sessions for browser terminals.
+Lightweight Node.js HTTP + WebSocket service that provisions persistent tmux sessions for the dashboard.
 
 **Features:**
 - Persistent shell sessions that survive browser reloads
 - HTTP API for session lifecycle management
-- shellinabox integration via attach script
+- Built-in WebSocket bridge that streams tmux output to xterm.js
 - Automatic session creation and reattachment
 - Metadata tracking and cleanup endpoints
 
@@ -66,9 +66,8 @@ cd tmux-session-service
 npm start
 # Service runs on http://0.0.0.0:5001
 
-# Configure shellinabox to use it
-export SESSION_SERVICE_URL=http://127.0.0.1:5001
-shellinaboxd --service=/workspace:USER:/path/to/scripts/attach-session.sh -p 4200
+# Test the WebSocket bridge (requires wscat)
+npx wscat -c ws://localhost:5001/ws/sessions/dev-shell
 ```
 
 [Setup Guide →](tmux-session-service/SETUP.md) | [API Reference →](tmux-session-service/README.md)
@@ -96,18 +95,16 @@ docker-compose up -d
 ### What's Included
 
 The Docker deployment includes:
-- **nginx** - Reverse proxy with SSL termination
-- **terminal-dashboard** - React frontend for terminal management
-- **shellinabox** - Web-based terminal emulator
-- **tmux-session-service** - Session persistence API
+- **nginx** - Reverse proxy with SSL termination + WebSocket upgrades
+- **terminal-dashboard** - React frontend with embedded terminals
+- **tmux-session-service** - Session persistence API + WebSocket bridge
 - **whisper-realtime-api** (optional) - Voice transcription
 
 ### Architecture
 
 ```
-Internet → nginx (443) → terminal-dashboard (React)
-                      ↓  shellinabox (Web Terminal)
-                      ↓  tmux-session-service (API)
+Internet → nginx (443) ─→ terminal-dashboard (React + xterm)
+                      └→ tmux-session-service (API + WebSocket)
 ```
 
 ### Services
@@ -116,8 +113,7 @@ Internet → nginx (443) → terminal-dashboard (React)
 |---------|---------------|---------------|---------|
 | nginx | 80, 443 | 80, 443 | Reverse proxy, SSL |
 | terminal-dashboard | 3000 | via nginx | React frontend |
-| shellinabox | 4200 | via nginx | Web terminals |
-| tmux-session-service | 5001 | internal | Session API |
+| tmux-session-service | 5001 | proxied via nginx | Session API + terminal bridge |
 
 ### Complete Documentation
 

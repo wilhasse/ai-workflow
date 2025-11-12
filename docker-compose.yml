@@ -14,7 +14,6 @@ services:
       - ai-workflow-network
     depends_on:
       - terminal-dashboard
-      - shellinabox
       - tmux-session-service
     restart: unless-stopped
     healthcheck:
@@ -40,29 +39,6 @@ services:
       retries: 3
       start_period: 10s
 
-  # Web terminal (shellinabox)
-  shellinabox:
-    build:
-      context: ./shellinabox
-      dockerfile: Dockerfile
-    container_name: ai-workflow-shellinabox
-    environment:
-      - SESSION_SERVICE_URL=http://tmux-session-service:5001
-    networks:
-      - ai-workflow-network
-    depends_on:
-      - tmux-session-service
-    restart: unless-stopped
-    # Add capabilities for tmux to work properly
-    cap_add:
-      - SYS_PTRACE
-    healthcheck:
-      test: ["CMD", "curl", "-k", "-f", "https://localhost:4200/"]
-      interval: 30s
-      timeout: 3s
-      retries: 3
-      start_period: 15s
-
   # TMux session management API
   tmux-session-service:
     build:
@@ -75,8 +51,6 @@ services:
     volumes:
       # Persist session data
       - tmux-session-data:/app/data
-      # Share tmux socket between shellinabox and service
-      - tmux-sockets:/tmp
     networks:
       - ai-workflow-network
     restart: unless-stopped
@@ -117,6 +91,4 @@ networks:
 
 volumes:
   tmux-session-data:
-    driver: local
-  tmux-sockets:
     driver: local

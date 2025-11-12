@@ -1,8 +1,10 @@
 # Configuration Summary
 
+> **Note:** The current Docker/React stack uses the built-in xterm.js client and does **not** require shellinabox. The summary below reflects the legacy shellinabox integration and is kept for teams that still rely on that deployment path.
+
 ## ✅ Setup Complete!
 
-Your tmux-session-service is now fully integrated with shellinabox running as a systemd service.
+Your tmux-session-service is now fully integrated with shellinabox running as a systemd service (legacy workflow).
 
 ## What Was Configured
 

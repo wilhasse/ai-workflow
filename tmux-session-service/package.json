@@ -3,12 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Small HTTP API that provisions and tracks tmux sessions so shellinabox can reattach reliably.",
+  "description": "Small HTTP + WebSocket API that provisions and tracks tmux sessions so the dashboard can reattach reliably.",
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js"
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "node-pty": "^1.0.0",
+    "ws": "^8.18.0"
   }
 }

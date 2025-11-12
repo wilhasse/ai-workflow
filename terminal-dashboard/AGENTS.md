@@ -1,6 +1,6 @@
 # Repository Guidelines
 
-This dashboard is a Vite-powered React SPA that keeps shellinabox tabs organized via localStorage. Follow the practices below so changes stay predictable.
+This dashboard is a Vite-powered React SPA that embeds an xterm.js client wired to tmux-session-service. Follow the practices below so changes stay predictable.
 
 ## Project Structure & Module Organization
 - `src/` contains the runtime: `main.jsx` mounts React, `App.jsx` manages projects/terminals, `App.css` and `index.css` style the layout, and `assets/` stores static imagery.
@@ -16,14 +16,14 @@ This dashboard is a Vite-powered React SPA that keeps shellinabox tabs organized
 
 ## Coding Style & Naming Conventions
 - Use modern ES modules with `const`/arrow functions, two-space indentation, and semicolonless formatting to match existing files.
-- Components live in PascalCase files (`TerminalTabs.jsx` if you extract sections); hooks remain camelCase and start with `use`.
-- Keep derived helpers (`buildTerminalUrl`, `sanitizeHost`) colocated inside `src/App.jsx` unless shared elsewhere.
+- Components live in PascalCase files (`TerminalViewer.jsx` if you extract sections); hooks remain camelCase and start with `use`.
+- Keep derived helpers (`buildTerminalSocketUrl`, `getTerminalBaseUrl`, `sanitizeHost`) colocated inside `src/App.jsx` unless shared elsewhere.
 - Run `npm run lint` before committing; fix warnings rather than suppressing unless there is clear justification.
 
 ## Testing Guidelines
 - No automated test harness ships with this repo yet; add Vitest and React Testing Library when introducing behavior that is risky to regress.
 - Place tests under `src/__tests__/` mirroring component names (`App.test.jsx`) and favor descriptive `describe/it` blocks over numbered cases.
-- Until tooling lands, smoke-test by running `npm run dev`, creating projects/terminals, and verifying URLs (including protocol/host sanitization) render correctly.
+- Until tooling lands, smoke-test by running `npm run dev`, creating projects/terminals, and verifying that WebSocket sessions (`/ws/sessions/:id`) connect, resize correctly, and recover when reconnecting.
 
 ## Commit & Pull Request Guidelines
 - The workspace currently lacks Git history, so use clear Conventional Commit-style subjects (e.g., `feat: add terminal bulk removal`) to keep future logs searchable.
@@ -32,6 +32,7 @@ This dashboard is a Vite-powered React SPA that keeps shellinabox tabs organized
 - Keep PRs small and focused: isolate refactors from feature work to make reviewing and rollback straightforward.
 
 ## Configuration & Security Tips
-- Defaults live near the top of `src/App.jsx` (`DEFAULT_HOST`, `DEFAULT_BASE_PORT`). Update them via constants rather than sprinkling literal values.
+- Default protocol/host values auto-detect via `window.location` at module load; adjust the helper functions in `src/App.jsx` if you need different heuristics, and keep `DEFAULT_BASE_PORT` centralized rather than sprinkling literals.
+- The terminal font-size selector in the header pulls options from `FONT_SIZE_OPTIONS`; edit that constant (and `DEFAULT_FONT_SIZE`) if you want different values, and remember it persists via `localStorage`.
 - `sanitizeHost` strips protocols—reuse it before persisting user input to avoid malformed URLs.
 - Never hard-code credentials inside the repo; store sensitive links in environment-specific deployment configs instead of `localStorage` seeds.

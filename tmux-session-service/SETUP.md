@@ -1,6 +1,41 @@
 # tmux-session-service Setup Guide
 
-This guide will help you set up persistent terminal sessions using tmux-session-service with shellinabox.
+> **Heads up:** The default stack now embeds xterm.js inside `terminal-dashboard` and connects directly to `tmux-session-service` over `/ws/sessions/…`. Shellinabox instructions remain below for historical reference, but new deployments should follow the modern WebSocket flow.
+
+## Modern Setup (xterm.js + WebSocket Bridge)
+
+1. **Start tmux-session-service**
+   ```bash
+   cd /home/cslog/ai-workflow/tmux-session-service
+   npm install   # first run
+   npm start
+   ```
+   Confirm `http://localhost:5001/health` returns `{"ok":true,...}`.
+
+2. **Proxy `/ws/sessions/` through nginx**
+   - Ensure `nginx/nginx.conf` contains the WebSocket location block from the repo.
+   - Restart nginx: `docker-compose exec nginx nginx -s reload`.
+
+3. **Configure the dashboard**
+   - In `terminal-dashboard`, set the project host to your public hostname/IP.
+   - Set the base port to the tmux-service port (default `5001`); the app automatically upgrades to `wss://…/ws/sessions/<id>`.
+
+4. **Test the bridge**
+   ```bash
+   npx wscat -c ws://localhost:5001/ws/sessions/dev-shell
+   ```
+   Run `pwd`, create a file, disconnect (`Ctrl+C`), reconnect with the same command, and verify state is preserved.
+
+5. **Deploy with Docker Compose**
+   ```bash
+   docker-compose up -d
+   docker-compose logs -f tmux-session-service
+   ```
+   The dashboard should now show embedded terminals without needing `shellinabox`.
+
+## Legacy shellinabox workflow (deprecated)
+
+This section documents the previous integration path for reference.
 
 ## What This Does
 

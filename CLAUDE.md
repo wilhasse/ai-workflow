@@ -7,8 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This is a monorepo containing three independent AI workflow tools:
 
 1. **whisper-realtime-api/** - FastAPI service exposing Whisper for audio transcription (batch & streaming)
-2. **terminal-dashboard/** - React SPA for managing shellinabox terminal sessions across projects
-3. **tmux-session-service/** - Node.js HTTP API for persistent tmux session management with shellinabox
+2. **terminal-dashboard/** - React SPA with xterm.js terminals that organize tmux-backed sessions
+3. **tmux-session-service/** - Node.js HTTP + WebSocket API for persistent tmux session management
 
 Each project has its own build system, dependencies, and deployment model. The terminal-dashboard works with tmux-session-service to provide persistent terminal sessions.
 
@@ -23,23 +23,23 @@ Each project has its own build system, dependencies, and deployment model. The t
 - **Static UI**: Browser-based audio recorder in `app/static/index.html`
 
 ### terminal-dashboard
-- **Type**: Vite-powered React SPA with localStorage persistence
+- **Type**: Vite-powered React SPA with localStorage persistence and embedded xterm.js
 - **State Management**: Projects/terminals stored in localStorage, normalized on load
 - **Port Strategies**:
-  - SEQUENTIAL: Each terminal gets `basePort + offset` (e.g., 4200, 4201, 4202)
-  - SINGLE: All terminals share `basePort` (requires server-side multiplexing like tmux)
+  - SEQUENTIAL: Each terminal targets `basePort + offset` (e.g., 5001, 5002) for multi-host bridges
+  - SINGLE: All terminals share `basePort` (default 5001, proxied via nginx)
 - **Key Components**:
-  - `App.jsx` contains all logic (project CRUD, terminal CRUD, URL building)
+  - `App.jsx` contains all logic (project CRUD, terminal CRUD, socket URL building)
   - `useProjectsState()` hook manages localStorage sync
-  - Iframes embed shellinabox sessions with clipboard/script permissions
+  - `TerminalViewer` wraps `@xterm/xterm` + WebSocket bridge to tmux-session-service
 
 ### tmux-session-service
-- **Type**: Lightweight Node.js HTTP API for tmux lifecycle management
+- **Type**: Lightweight Node.js HTTP + WebSocket service for tmux lifecycle management
 - **Purpose**: Enables persistent terminal sessions that survive browser reloads
-- **Key Pattern**: Idempotent session creation via PUT /sessions/:id
-- **Integration**: shellinabox calls `attach-session.sh` which hits API before attaching
+- **Key Pattern**: Idempotent session creation via PUT /sessions/:id, streaming I/O via `/ws/sessions/:id`
+- **WebSocket Flow**: Dashboard connects to `/ws/sessions/:id` which spawns `tmux attach-session` inside `node-pty`
 - **Persistence**: Session metadata stored in `data/sessions.json`
-- **Flow**: React dashboard → shellinabox (via iframe) → attach script → API → tmux session
+- **Flow**: React dashboard (xterm + WebSocket) → tmux-session-service → tmux session
 
 ## Development Commands
 
@@ -99,7 +99,7 @@ npm run lint
 **No testing framework** is currently configured. Manual testing workflow:
 1. Run `npm run dev`
 2. Create projects with different port strategies
-3. Add terminals and verify iframe URLs render correctly
+3. Add terminals and verify the WebSocket (`/ws/sessions/:id`) connects, resizes, and reconnects cleanly
 4. Test protocol/host sanitization with edge cases
 
 ### tmux-session-service
@@ -119,11 +119,8 @@ curl -X PUT http://localhost:5001/sessions/test-session \
   -H 'Content-Type: application/json' \
   -d '{"sessionId":"test-session","projectId":"test-project"}'
 
-# Configure shellinabox to use the service
-export SESSION_SERVICE_URL=http://127.0.0.1:5001
-shellinaboxd \
-  --service=/workspace:USERNAME:/path/to/tmux-session-service/scripts/attach-session.sh \
-  -p 4200
+# Test the WebSocket bridge (requires wscat)
+npx wscat -c ws://localhost:5001/ws/sessions/dev-shell
 ```
 
 **Environment Variables**:
@@ -132,7 +129,7 @@ shellinaboxd \
 - `SHELL_CMD`: Default shell command (defaults to $SHELL or /bin/bash)
 - `DATA_DIR`: Directory for sessions.json persistence
 
-**Setup Guide**: See `tmux-session-service/SETUP.md` for complete integration instructions
+**Setup Guide**: See `tmux-session-service/SETUP.md` for complete integration instructions with the dashboard WebSocket bridge
 
 ## Code Style
 
@@ -146,7 +143,7 @@ shellinaboxd \
 - Modern ES modules with `const`/arrow functions
 - Two-space indentation, semicolonless formatting
 - Components in PascalCase, hooks in camelCase with `use` prefix
-- Derived helpers (`buildTerminalUrl`, `sanitizeHost`) colocated in `App.jsx`
+- Derived helpers (`buildTerminalSocketUrl`, `sanitizeHost`) colocated in `App.jsx`
 - Run `npm run lint` before commits; fix warnings instead of suppressing
 
 ## Important Notes
@@ -158,10 +155,10 @@ shellinaboxd \
 - Browser UI requires HTTPS or localhost for microphone access
 
 ### terminal-dashboard
-- All state persists to `localStorage` under key `terminal-dashboard-shellinabox-v1`
-- Default connection: `https://10.1.0.10:4200`
+- All state persists to `localStorage` under key `terminal-dashboard-xterm-v1`
+- Default connection target auto-detects `window.location` (protocol/hostname) with base port `5001`; update the helpers near the top of `App.jsx` if you need different heuristics
 - `sanitizeHost()` strips protocols before storage—always use it for user input
-- Iframes use `sandbox` attribute with `allow-forms allow-scripts allow-same-origin`
+- `TerminalViewer` opens `@xterm/xterm` and uses `/ws/sessions/:id` via WebSocket
 - Query params (`?project=...&terminal=...`) enable deep linking and browser tab isolation
 
 ## Project-Specific Guidelines
@@ -169,5 +166,5 @@ shellinaboxd \
 See project-specific files for additional context:
 - **whisper-realtime-api/CLAUDE.md** - FastAPI architecture, Docker config, model lifecycle
 - **terminal-dashboard/AGENTS.md** - React patterns, commit conventions, security tips
-- **tmux-session-service/SETUP.md** - Complete integration guide with shellinabox
+- **tmux-session-service/SETUP.md** - Complete integration guide for the WebSocket bridge
 - **tmux-session-service/README.md** - API reference and feature overview

@@ -7,6 +7,7 @@
   display: flex;
   flex-direction: column;
   min-height: 100vh;
+  height: 100vh;
   background: radial-gradient(circle at top, rgba(59, 130, 246, 0.18), transparent 55%),
     #0b1120;
   color: #e2e8f0;
@@ -366,6 +367,12 @@ button:not(:disabled):hover {
   text-align: right;
 }
 
+.terminal-header-controls {
+  display: flex;
+  align-items: flex-end;
+  gap: 1rem;
+}
+
 .terminal-endpoint span {
   font-size: 0.75rem;
   text-transform: uppercase;
@@ -382,6 +389,25 @@ button:not(:disabled):hover {
   font-size: 0.85rem;
 }
 
+.terminal-font-control {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.9);
+}
+
+.terminal-font-control select {
+  padding: 0.25rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(15, 23, 42, 0.85);
+  color: #e2e8f0;
+  font-size: 0.85rem;
+  font-family: inherit;
+}
+
 .terminal-frame {
   flex: 1;
   position: relative;
@@ -389,24 +415,59 @@ button:not(:disabled):hover {
   overflow: hidden;
   border: 1px solid rgba(148, 163, 184, 0.25);
   background: #000;
-  min-height: 360px;
+  min-height: 0;
+  height: 100%;
 }
 
-.terminal-frame-iframe {
+.terminal-surface {
   position: absolute;
   inset: 0;
-  width: 100%;
-  height: 100%;
-  border: none;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.2s ease;
+  padding: 0;
+  background: #030712;
 }
 
-.terminal-frame-iframe.active {
-  opacity: 1;
-  pointer-events: auto;
-  z-index: 1;
+.terminal-surface .xterm {
+  height: 100%;
+  width: 100%;
+}
+
+.terminal-status {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.85rem;
+  font-size: 0.8rem;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  color: #e2e8f0;
+  text-transform: none;
+}
+
+.terminal-status-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: #38bdf8;
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.8);
+}
+
+.terminal-status.terminal-status-connecting .terminal-status-dot {
+  background: #fbbf24;
+  box-shadow: 0 0 10px rgba(251, 191, 36, 0.7);
+}
+
+.terminal-status.terminal-status-error .terminal-status-dot {
+  background: #f87171;
+  box-shadow: 0 0 10px rgba(248, 113, 113, 0.7);
+}
+
+.terminal-status.terminal-status-closed .terminal-status-dot {
+  background: #94a3b8;
+  box-shadow: none;
 }
 
 .terminal-warning {
@@ -641,6 +702,7 @@ button:not(:disabled):hover {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  min-height: 0;
 }
 
 .terminal-tabs-compact {
@@ -737,6 +799,13 @@ button:not(:disabled):hover {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  min-height: 0;
+  padding: 0;
+  background: rgba(3, 7, 18, 0.95);
+}
+
+.terminal-view-fullscreen .terminal-view-header {
+  padding: 1rem 1.5rem 0.5rem;
 }
 
 .terminal-view-fullscreen .terminal-frame {
@@ -744,6 +813,7 @@ button:not(:disabled):hover {
   border-radius: 0;
   border: none;
   min-height: 0;
+  height: 100%;
 }
 
 /* Confirm Dialog */

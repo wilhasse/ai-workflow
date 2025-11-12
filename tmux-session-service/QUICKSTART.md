@@ -1,11 +1,16 @@
 # Quick Start Guide
 
-## TL;DR - Get It Running in 2 Minutes
+## TL;DR – Test the Bridge in Two Minutes
 
-### 1. Start the tmux-session-service
+1. Start `tmux-session-service`.
+2. Connect with `wscat` (or the dashboard) to `ws://localhost:5001/ws/sessions/dev-shell`.
+3. Run a few commands, disconnect, reconnect with the same session id, and confirm your shell picks up exactly where it left off.
+
+## 1. Start tmux-session-service
 
 ```bash
 cd /home/cslog/ai-workflow/tmux-session-service
+npm install        # first run only
 npm start
 ```
 
@@ -14,130 +19,77 @@ You should see:
 tmux-session-service listening on http://0.0.0.0:5001
 ```
 
-Leave this running (open a new terminal for next steps).
+Leave this terminal running.
 
-### 2. Start shellinabox with the correct command
+## 2. Open a WebSocket session
 
-**The correct way** (works with your user `cslog`):
+In a new terminal, install `wscat` if needed and connect to the bridge:
 
 ```bash
-export SESSION_SERVICE_URL=http://127.0.0.1:5001
-
-shellinaboxd \
-  --service=/workspace:cslog:/home/cslog/ai-workflow/tmux-session-service/scripts/attach-session.sh \
-  -p 4200 \
-  --disable-ssl
+npx wscat -c ws://127.0.0.1:5001/ws/sessions/dev-shell
 ```
 
-**Why this works:**
-- `export SESSION_SERVICE_URL=...` - Sets environment variable BEFORE running shellinabox
-- `--service=/workspace:cslog:SCRIPT_PATH` - Format is `/path:username:command`
-- No quotes around `cslog` - It's a literal username
-- No `SESSION_SERVICE_URL=...` inside the command - That causes parsing errors
+Type a few commands once the prompt appears:
 
-### 3. Test it
-
-1. Open your React dashboard: http://localhost:5173
-2. Create a project, add a terminal
-3. Open the terminal, run some commands:
-   ```bash
-   echo "Testing persistence"
-   cd /tmp
-   export MY_VAR="hello"
-   ```
-4. **Reload the browser tab**
-5. Check if it persisted:
-   ```bash
-   pwd        # Should still be /tmp
-   echo $MY_VAR  # Should print "hello"
-   ```
-
-## Common Mistakes
-
-### ❌ Wrong: Including SESSION_SERVICE_URL in the command
-
-```bash
-# DON'T DO THIS - causes "Cannot look up group" error
-shellinaboxd --service=/workspace:cslog:'SESSION_SERVICE_URL=http://127.0.0.1:5001 script.sh'
+```
+pwd
+mkdir -p /tmp/xterm-demo
+cd /tmp/xterm-demo
+echo "bridge test" > note.txt
 ```
 
-The `:` in the URL makes shellinabox think it's a field separator.
+Press `Ctrl+C` to close `wscat` (the tmux session keeps running).
 
-### ❌ Wrong: Quoting LOGIN keyword
+## 3. Reconnect to the same session
+
+Run the exact same command:
 
 ```bash
-# DON'T DO THIS - causes "Cannot look up user id" error
-shellinaboxd --service=/workspace:'LOGIN':'/path/to/script.sh'
+npx wscat -c ws://127.0.0.1:5001/ws/sessions/dev-shell
 ```
 
-`LOGIN` is a special keyword that means "use authenticated user". Only use it if you want shellinabox to prompt for login.
+You should land inside the same tmux session (`pwd` stays `/tmp/xterm-demo`, `cat note.txt` still prints `bridge test`). This mirrors what the React dashboard does via the embedded xterm.js client.
 
-### ✅ Correct: Export first, use username, simple path
-
-```bash
-export SESSION_SERVICE_URL=http://127.0.0.1:5001
-shellinaboxd --service=/workspace:cslog:/path/to/attach-session.sh -p 4200
-```
-
-## Verification Commands
+## Helpful Commands
 
 ```bash
-# Check if service is running
+# Health and metadata
 curl http://127.0.0.1:5001/health
-
-# List active sessions
 curl http://127.0.0.1:5001/sessions | jq .
 
-# List tmux sessions directly
+# Inspect tmux directly
 tmux ls
+tmux attach -t dev-shell
 
-# Check shellinabox is running
-ps aux | grep shellinabox
+# Clean up a session
+curl -X DELETE http://127.0.0.1:5001/sessions/dev-shell
 ```
 
 ## Understanding the Flow
 
 ```
-1. Browser opens: http://localhost:4200/?terminalId=abc123&projectId=myproject
-2. shellinabox receives connection
-3. shellinabox sets: QUERY_terminalId=abc123, QUERY_projectId=myproject
-4. shellinabox runs: attach-session.sh (from --service parameter)
-5. Script reads QUERY_terminalId and calls API:
-   curl -X PUT http://127.0.0.1:5001/sessions/abc123
-6. API ensures tmux session "abc123" exists (creates if needed)
-7. Script runs: tmux new-session -A -s abc123
-8. User gets attached to persistent tmux session
-9. On browser reload → steps 1-8 repeat, but step 6 finds existing session
+React dashboard (xterm.js) ── WebSocket (/ws/sessions/:id) ──> tmux-session-service
+                                                           └─> tmux attach-session -t :id
 ```
 
-## Next Steps
-
-- Read [SETUP.md](./SETUP.md) for complete integration guide
-- See [README.md](./README.md) for API reference
-- Configure systemd for production (see SETUP.md)
+- The dashboard chooses a `terminalId` (stored in localStorage) and connects via `wss://host/ws/sessions/<terminalId>?projectId=<...>`.
+- tmux-session-service ensures the tmux session exists, attaches via `tmux attach-session`, and pipes bytes to the browser.
+- Resizes send `{"type":"resize","cols":..., "rows":...}`; keystrokes are forwarded via `{"type":"input","payload":"ls\n"}`.
+- Disconnecting only detaches the tmux client; reconnecting with the same `terminalId` reattaches instantly.
 
 ## Need Help?
 
-**Sessions not persisting?**
 ```bash
-# Test the script manually
-export SESSION_SERVICE_URL=http://127.0.0.1:5001
-export QUERY_terminalId=test-terminal
-export QUERY_projectId=test-project
-/home/cslog/ai-workflow/tmux-session-service/scripts/attach-session.sh
-```
+# Watch the server logs
+docker-compose logs -f tmux-session-service
 
-**Can't reach API?**
-```bash
-# Check from shellinabox user context
-sudo -u cslog curl http://127.0.0.1:5001/health
-```
+# Test from inside the nginx container (ensures proxy is working)
+docker-compose exec nginx \
+  npx wscat -c ws://tmux-session-service:5001/ws/sessions/proxy-check
 
-**Want to clean up?**
-```bash
-# Delete specific session
-curl -X DELETE http://127.0.0.1:5001/sessions/SESSION_ID
-
-# Kill all tmux sessions (nuclear option)
+# Reset everything
 tmux kill-server
+rm tmux-session-service/data/sessions.json
 ```
+
+If the WebSocket refuses to connect, verify that nginx includes the `/ws/sessions/` location block and that `tmux` is installed inside the service container.

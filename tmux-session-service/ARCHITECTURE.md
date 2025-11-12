@@ -27,7 +27,21 @@ When you open a terminal in a browser and reload the page, you normally lose:
 
 This system uses **tmux** (terminal multiplexer) to create persistent shell sessions that survive browser reloads. Each terminal tab in your React dashboard gets its own unique tmux session that stays alive on the server.
 
-### High-Level Architecture
+> **Note:** The live system now embeds xterm.js inside the dashboard and streams tmux output over `/ws/sessions/:id`. The shellinabox diagram is retained below for teams migrating from the legacy flow.
+
+### High-Level Architecture (current)
+
+```
+Browser (React + xterm.js) ── wss://host/ws/sessions/:id ──> tmux-session-service ── tmux attach-session
+             │
+             └── https://host/api/sessions/...  (HTTP lifecycle calls)
+```
+
+- `terminal-dashboard` stores `terminalId` in localStorage and opens `wss://host/ws/sessions/<terminalId>?projectId=<projectId>`.
+- tmux-session-service ensures the tmux session exists, attaches via `tmux attach-session -t <terminalId>`, and pipes bytes via `node-pty`.
+- Nginx proxies `/api/sessions/` (REST) and `/ws/sessions/` (WebSocket) to the service.
+
+### Legacy architecture (shellinabox)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
