@@ -83,6 +83,29 @@
         margin-bottom: 1rem;
         flex-wrap: wrap;
       }
+      #upload {
+        margin: 1.5rem 0;
+        display: flex;
+        justify-content: center;
+      }
+      .file-upload {
+        display: inline-flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        align-items: center;
+        border: 1px dashed rgba(148, 163, 184, 0.4);
+        border-radius: 12px;
+        padding: 1rem 1.5rem;
+        color: #cbd5f5;
+        cursor: pointer;
+        transition: border-color 150ms ease;
+      }
+      .file-upload:hover {
+        border-color: rgba(226, 232, 240, 0.8);
+      }
+      .file-upload input {
+        display: none;
+      }
       label {
         display: flex;
         flex-direction: column;
@@ -98,12 +121,28 @@
         border: 1px solid rgba(148, 163, 184, 0.4);
         color: #e2e8f0;
       }
+      .warning {
+        background: rgba(248, 113, 113, 0.15);
+        border: 1px solid rgba(248, 113, 113, 0.4);
+        border-radius: 10px;
+        padding: 0.75rem 1rem;
+        font-size: 0.9rem;
+        color: #fecaca;
+        text-align: center;
+        margin-bottom: 1rem;
+      }
+      .hidden {
+        display: none;
+      }
     </style>
   </head>
   <body>
     <main>
       <h1>Whisper Recorder</h1>
       <p id="status">Idle</p>
+      <p id="secure-warning" class="warning hidden">
+        Microphone capture requires HTTPS (or http://localhost). Use the upload option below if you're on plain HTTP.
+      </p>
       <div id="controls">
         <button id="start" class="primary">Start Recording</button>
         <button id="stop" class="secondary" disabled>Stop &amp; Transcribe</button>
@@ -124,6 +163,13 @@
           <input type="checkbox" id="translate" />
         </label>
       </div>
+      <div id="upload">
+        <label class="file-upload">
+          <strong>Upload audio</strong>
+          <span>WAV, MP3, M4A, WEBM…</span>
+          <input type="file" id="fileInput" accept="audio/*" />
+        </label>
+      </div>
       <section>
         <h2>Transcript</h2>
         <div id="transcript">Ready.</div>
@@ -137,12 +183,34 @@
       const transcriptEl = document.getElementById("transcript");
       const languageSelect = document.getElementById("language");
       const translateCheckbox = document.getElementById("translate");
+      const fileInput = document.getElementById("fileInput");
+      const secureWarning = document.getElementById("secure-warning");
 
       let mediaRecorder;
       let audioChunks = [];
       let stream;
 
+      const secureContext =
+        window.isSecureContext ||
+        window.location.protocol === "https:" ||
+        window.location.hostname === "localhost" ||
+        window.location.hostname === "127.0.0.1";
+
+      if (!secureContext) {
+        secureWarning.classList.remove("hidden");
+        startBtn.disabled = true;
+        stopBtn.disabled = true;
+        statusEl.textContent = "Microphone disabled on insecure connection.";
+      } else {
+        secureWarning.classList.add("hidden");
+      }
+
       async function startRecording() {
+        if (!secureContext) {
+          secureWarning.classList.remove("hidden");
+          statusEl.textContent = "Use HTTPS (or localhost) to enable the microphone.";
+          return;
+        }
         try {
           statusEl.textContent = "Requesting microphone...";
           stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -166,6 +234,8 @@
         } catch (error) {
           console.error(error);
           statusEl.textContent = "Microphone permission denied.";
+          startBtn.disabled = false;
+          stopBtn.disabled = true;
         }
       }
 
@@ -226,6 +296,15 @@
 
       startBtn.addEventListener("click", startRecording);
       stopBtn.addEventListener("click", stopRecording);
+      fileInput.addEventListener("change", async (event) => {
+        const [file] = event.target.files;
+        if (!file) {
+          return;
+        }
+        statusEl.textContent = `Uploading ${file.name}...`;
+        await sendForTranscription(file);
+        event.target.value = "";
+      });
     </script>
   </body>
 </html>
