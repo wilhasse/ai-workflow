@@ -882,10 +882,17 @@ button:not(:disabled):hover {
   font-size: 1.1rem;
 }
 
+.voice-title {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
 .voice-status {
   margin: 0;
   color: #93c5fd;
   font-weight: 600;
+  font-size: 0.9rem;
 }
 
 .voice-warning {

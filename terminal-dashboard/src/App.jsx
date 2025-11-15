@@ -1284,12 +1284,14 @@ function App() {
       {showVoicePanel && (
         <section className="voice-panel">
           <div className="voice-panel-header">
-            <h2>Voice transcription</h2>
+            <div className="voice-title">
+              <h2>Voice transcription</h2>
+              <span className="voice-status">{voiceStatus}</span>
+            </div>
             <button className="icon-btn" onClick={() => setShowVoicePanel(false)} title="Close">
               ✕
             </button>
           </div>
-          <p className="voice-status">{voiceStatus}</p>
           {!isSecureContext && (
             <p className="voice-warning">
               Microphone recording requires HTTPS (or http://localhost). You can still upload audio files below.
