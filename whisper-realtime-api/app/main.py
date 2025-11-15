@@ -238,7 +238,7 @@ async def _run_transcription(
                     start=segment.start,
                     end=segment.end,
                     text=text,
-                    avg_log_prob=segment.avg_log_prob,
+                    avg_log_prob=segment.avg_logprob,
                     no_speech_prob=segment.no_speech_prob,
                 )
             )
