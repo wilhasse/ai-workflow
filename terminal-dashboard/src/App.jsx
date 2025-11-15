@@ -539,7 +539,6 @@ function App() {
   const [showVoicePanel, setShowVoicePanel] = useState(false)
   const [isSecureContext, setIsSecureContext] = useState(() => detectSecureContext())
   const [voiceLanguage, setVoiceLanguage] = useState('')
-  const [voiceTranslate, setVoiceTranslate] = useState(false)
   const [voiceTranscript, setVoiceTranscript] = useState('')
   const [voiceStatus, setVoiceStatus] = useState('Idle')
   const [voiceError, setVoiceError] = useState('')
@@ -593,9 +592,6 @@ function App() {
       if (voiceLanguage) {
         form.append('language', voiceLanguage)
       }
-      if (voiceTranslate) {
-        form.append('translate', 'true')
-      }
       try {
         const response = await fetch('/api/whisper/transcribe', {
           method: 'POST',
@@ -618,7 +614,7 @@ function App() {
         setVoicePending(false)
       }
     },
-    [voiceLanguage, voiceTranslate],
+    [voiceLanguage],
   )
 
   const handleVoiceRecordingStart = async () => {
@@ -1299,31 +1295,31 @@ function App() {
               Microphone recording requires HTTPS (or http://localhost). You can still upload audio files below.
             </p>
           )}
-          <div className="voice-controls">
-            <button
-              type="button"
-              className="primary"
-              onClick={handleVoiceRecordingStart}
-              disabled={!isSecureContext || voiceRecording || voicePending}
-            >
-              {voiceRecording ? 'Recording…' : 'Start recording'}
-            </button>
-            <button
-              type="button"
-              className="secondary"
-              onClick={handleVoiceRecordingStop}
-              disabled={!voiceRecording}
-            >
-              Stop
-            </button>
-            <label className="voice-upload">
-              <input type="file" accept="audio/*" onChange={handleVoiceFileInputChange} />
-              <span>Upload audio</span>
-            </label>
-          </div>
-          <div className="voice-options">
-            <label>
-              Language
+          <div className="voice-row">
+            <div className="voice-controls">
+              <button
+                type="button"
+                className="primary"
+                onClick={handleVoiceRecordingStart}
+                disabled={!isSecureContext || voiceRecording || voicePending}
+              >
+                {voiceRecording ? 'Recording…' : 'Start recording'}
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                onClick={handleVoiceRecordingStop}
+                disabled={!voiceRecording}
+              >
+                Stop
+              </button>
+              <label className="voice-upload">
+                <input type="file" accept="audio/*" onChange={handleVoiceFileInputChange} />
+                <span>Upload audio</span>
+              </label>
+            </div>
+            <label className="voice-language">
+              <span>Language</span>
               <select value={voiceLanguage} onChange={(e) => setVoiceLanguage(e.target.value)}>
                 <option value="">Auto-detect</option>
                 <option value="pt">Português</option>
@@ -1333,20 +1329,13 @@ function App() {
                 <option value="de">Deutsch</option>
               </select>
             </label>
-            <label className="voice-checkbox">
-              <input
-                type="checkbox"
-                checked={voiceTranslate}
-                onChange={(e) => setVoiceTranslate(e.target.checked)}
-              />
-              <span>Translate to English</span>
-            </label>
           </div>
           <textarea
             className="voice-transcript"
             placeholder="Transcript will appear here."
             value={voiceTranscript}
             readOnly
+            rows={3}
           />
           {voiceError && <p className="voice-error">{voiceError}</p>}
           <div className="voice-actions">

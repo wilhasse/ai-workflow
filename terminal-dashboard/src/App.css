@@ -861,8 +861,8 @@ button:not(:disabled):hover {
 
 /* Voice Panel */
 .voice-panel {
-  margin: 0.75rem 1.5rem;
-  padding: 1rem 1.5rem;
+  margin: 0.5rem 1.25rem;
+  padding: 0.85rem 1.25rem;
   border-radius: 16px;
   background: rgba(15, 23, 42, 0.85);
   border: 1px solid rgba(148, 163, 184, 0.35);
@@ -898,17 +898,29 @@ button:not(:disabled):hover {
   font-size: 0.9rem;
 }
 
-.voice-controls {
+.voice-row {
   display: flex;
-  gap: 0.75rem;
+  gap: 1rem;
   flex-wrap: wrap;
   align-items: center;
 }
 
+.voice-controls {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.voice-controls button,
+.voice-controls .voice-upload {
+  flex: 0 0 auto;
+}
+
 .voice-upload {
   border: 1px dashed rgba(148, 163, 184, 0.4);
-  border-radius: 12px;
-  padding: 0.75rem 1rem;
+  border-radius: 10px;
+  padding: 0.4rem 0.9rem;
   cursor: pointer;
   color: #cbd5f5;
   font-weight: 600;
@@ -918,48 +930,32 @@ button:not(:disabled):hover {
   display: none;
 }
 
-.voice-options {
-  display: flex;
-  gap: 1rem;
-  flex-wrap: wrap;
-}
-
-.voice-options label {
+.voice-language {
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
+  gap: 0.3rem;
   color: #cbd5f5;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
+  min-width: 180px;
 }
 
-.voice-options select {
+.voice-language select {
   border-radius: 8px;
-  padding: 0.4rem 0.6rem;
+  padding: 0.35rem 0.5rem;
   background: rgba(15, 23, 42, 0.6);
   border: 1px solid rgba(148, 163, 184, 0.35);
   color: #e2e8f0;
-}
-
-.voice-checkbox {
-  display: flex !important;
-  flex-direction: row !important;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.voice-checkbox input {
-  width: 1rem;
-  height: 1rem;
 }
 
 .voice-transcript {
   width: 100%;
-  min-height: 120px;
+  min-height: 72px;
+  max-height: 160px;
   border-radius: 12px;
   border: 1px solid rgba(148, 163, 184, 0.35);
   background: rgba(15, 23, 42, 0.6);
   color: #e2e8f0;
-  padding: 0.9rem;
+  padding: 0.75rem;
   resize: vertical;
 }
 
