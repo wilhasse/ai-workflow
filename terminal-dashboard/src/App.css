@@ -545,6 +545,17 @@ button:not(:disabled):hover {
   color: #e2e8f0;
 }
 
+.project-tabs-inline {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0.5rem;
+  padding: 0.25rem 0.5rem;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 999px;
+  overflow-x: auto;
+}
+
 .header-actions {
   display: flex;
   gap: 0.5rem;
@@ -571,6 +582,21 @@ button:not(:disabled):hover {
 .icon-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.project-view-toggle {
+  width: 2.25rem;
+  height: 2.25rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.95rem;
+  padding: 0.35rem;
+}
+
+.project-view-toggle.active {
+  background: rgba(59, 130, 246, 0.2);
+  border-color: rgba(59, 130, 246, 0.5);
 }
 
 /* Settings Panel (Slide-out) */

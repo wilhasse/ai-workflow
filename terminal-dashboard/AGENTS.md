@@ -34,5 +34,6 @@ This dashboard is a Vite-powered React SPA that embeds an xterm.js client wired 
 ## Configuration & Security Tips
 - Default protocol/host values auto-detect via `window.location` at module load; adjust the helper functions in `src/App.jsx` if you need different heuristics, and keep `DEFAULT_BASE_PORT` centralized rather than sprinkling literals.
 - The terminal font-size selector in the header pulls options from `FONT_SIZE_OPTIONS`; edit that constant (and `DEFAULT_FONT_SIZE`) if you want different values, and remember it persists via `localStorage`.
+- Project view preference (dropdown vs. tabs) persists via `PROJECT_VIEW_MODE_STORAGE_KEY`; the toggle button lives beside the header settings icon, so adjust `PROJECT_VIEW_MODES` or `.project-view-toggle` in `App.css` if you redesign it.
 - `sanitizeHost` strips protocols—reuse it before persisting user input to avoid malformed URLs.
 - Never hard-code credentials inside the repo; store sensitive links in environment-specific deployment configs instead of `localStorage` seeds.
