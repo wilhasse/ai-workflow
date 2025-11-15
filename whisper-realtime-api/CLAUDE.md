@@ -25,6 +25,26 @@ FastAPI service that exposes OpenAI's Whisper model (via `faster-whisper`) for a
 
 ## Development Commands
 
+### Quick Rebuild Script
+
+For rapid development and deployment:
+
+```bash
+# Stop, rebuild, and restart
+./rebuild.sh
+
+# Just restart without rebuilding
+./rebuild.sh -n
+
+# Rebuild and show logs
+./rebuild.sh -l
+
+# Just restart and show logs
+./rebuild.sh -n -l
+```
+
+The script auto-detects GPU availability and configures accordingly.
+
 ### Local Development (without Docker)
 ```bash
 # Install dependencies
@@ -34,7 +54,7 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-### Docker Build & Run
+### Docker Build & Run (Manual)
 ```bash
 # Build image
 docker build -t whisper-realtime-api .

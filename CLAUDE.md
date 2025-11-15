@@ -45,6 +45,27 @@ Each project has its own build system, dependencies, and deployment model. The t
 
 ### Full-Stack Deployment (Docker Compose)
 
+#### Quick Rebuild Script
+
+For rapid development and deployment:
+
+```bash
+# Stop, rebuild, and restart all services
+./rebuild-stack.sh
+
+# Just restart without rebuilding
+./rebuild-stack.sh -n
+
+# Rebuild and show logs
+./rebuild-stack.sh -l
+
+# Rebuild only specific services
+./rebuild-stack.sh terminal-dashboard
+./rebuild-stack.sh tmux-session-service nginx -l
+```
+
+#### Manual Docker Compose Commands
+
 ```bash
 # Start all services (nginx, terminal-dashboard, tmux-session-service)
 docker-compose up -d
