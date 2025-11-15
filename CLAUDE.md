@@ -43,7 +43,55 @@ Each project has its own build system, dependencies, and deployment model. The t
 
 ## Development Commands
 
+### Full-Stack Deployment (Docker Compose)
+
+```bash
+# Start all services (nginx, terminal-dashboard, tmux-session-service)
+docker-compose up -d
+
+# View logs for all services
+docker-compose logs -f
+
+# View logs for specific service
+docker-compose logs -f tmux-session-service
+
+# Check service status and health
+docker-compose ps
+
+# Rebuild after code changes
+docker-compose build
+docker-compose up -d
+
+# Restart specific service
+docker-compose restart terminal-dashboard
+
+# Stop all services
+docker-compose down
+
+# Stop and remove volumes (WARNING: deletes session data)
+docker-compose down -v
+
+# Access the application
+# Open browser to https://localhost (self-signed cert warning expected)
+```
+
+**Docker Compose Architecture**:
+- nginx (`:80`, `:443`) → reverse proxy with SSL termination
+  - Routes `/` to terminal-dashboard (`:3000`)
+  - Routes `/api/sessions/*` to tmux-session-service HTTP API (`:5001`)
+  - Routes `/ws/sessions/*` to tmux-session-service WebSocket bridge (`:5001`)
+- terminal-dashboard → React SPA served via nginx
+- tmux-session-service → Mounts host environment (`/home/cslog`), tmux socket (`/tmp/tmux-1000`), and persists session metadata to Docker volume
+
+**Important Docker Notes**:
+- tmux-session-service runs with `LANG=pt_BR.UTF-8` and `LC_ALL=pt_BR.UTF-8` for locale support
+- Session metadata persists in `tmux-session-data` volume; tmux sessions connect to host's tmux server
+- nginx health check available at `https://localhost/health`
+- Edit `.env.production` to configure ports and SSL settings (self-signed vs Let's Encrypt)
+
 ### whisper-realtime-api
+
+**Note**: whisper-realtime-api is commented out in `docker-compose.yml` by default. Uncomment to enable voice transcription.
 
 ```bash
 # Local development (no Docker)
@@ -160,6 +208,11 @@ npx wscat -c ws://localhost:5001/ws/sessions/dev-shell
 - `sanitizeHost()` strips protocols before storage—always use it for user input
 - `TerminalViewer` opens `@xterm/xterm` and uses `/ws/sessions/:id` via WebSocket
 - Query params (`?project=...&terminal=...`) enable deep linking and browser tab isolation
+
+## Deployment
+
+For production deployment with Let's Encrypt SSL, monitoring, backups, and security hardening:
+- **[DEPLOY.md](DEPLOY.md)** - Complete production deployment guide
 
 ## Project-Specific Guidelines
 
