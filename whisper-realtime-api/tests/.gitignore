@@ -1,0 +1,12 @@
+# Python virtual environment
+venv/
+__pycache__/
+*.pyc
+
+# Generated audio samples (optional - uncomment if you don't want to commit samples)
+# sample-*.wav
+# sample-*.mp3
+
+# Test outputs
+*.log
+test-results/
