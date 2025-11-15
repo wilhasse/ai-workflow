@@ -1,6 +1,6 @@
 import http from 'node:http'
 import { execFile } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, randomBytes, scrypt, timingSafeEqual } from 'node:crypto'
 import { promisify } from 'node:util'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -20,11 +20,27 @@ const config = {
   dataDir: process.env.DATA_DIR ?? path.join(projectRoot, 'data'),
 }
 const storeFile = path.join(config.dataDir, 'sessions.json')
+const userStoreFile = path.join(config.dataDir, 'users.json')
 const sessionStore = new Map()
+const userStoreById = new Map()
+const userStoreByUsername = new Map()
+const authTokens = new Map()
+const scryptAsync = promisify(scrypt)
+
+const defaultHeaders = {
+  'Content-Type': 'application/json',
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
+}
 
 const respond = (res, status, payload) => {
-  res.writeHead(status, { 'Content-Type': 'application/json' })
-  res.end(JSON.stringify(payload))
+  res.writeHead(status, defaultHeaders)
+  if (status === 204) {
+    res.end()
+    return
+  }
+  res.end(JSON.stringify(payload ?? {}))
 }
 
 const sanitizeId = (value) => {
@@ -60,6 +76,152 @@ const readBody = async (req) =>
     })
     req.on('error', reject)
   })
+
+const sanitizeUsername = (value) => {
+  if (!value) {
+    return null
+  }
+  const trimmed = String(value).trim().toLowerCase()
+  if (!trimmed) {
+    return null
+  }
+  const safe = trimmed.match(/[a-z0-9._-]/g)
+  if (!safe) {
+    return null
+  }
+  return safe.join('').slice(0, 64)
+}
+
+const defaultProjectsForUser = () => [
+  {
+    id: 'shell-workspace',
+    name: 'Shell Workspace',
+    description: '',
+    protocol: 'http',
+    baseHost: '10.1.0.10',
+    basePort: 5001,
+    portStrategy: 'single',
+    portStrategyLocked: true,
+    terminals: [],
+  },
+]
+
+const serializeUser = (user) => ({
+  id: user.id,
+  username: user.username,
+  projects: Array.isArray(user.projects) ? user.projects : [],
+})
+
+const persistUsers = async () => {
+  await ensureDataDir()
+  const payload = {}
+  userStoreById.forEach((user) => {
+    payload[user.id] = {
+      id: user.id,
+      username: user.username,
+      passwordHash: user.passwordHash,
+      projects: Array.isArray(user.projects) ? user.projects : [],
+    }
+  })
+  await fs.writeFile(userStoreFile, JSON.stringify(payload, null, 2), 'utf8')
+}
+
+const loadUsers = async () => {
+  try {
+    const raw = await fs.readFile(userStoreFile, 'utf8')
+    const parsed = JSON.parse(raw)
+    Object.values(parsed).forEach((record) => {
+      if (record?.id && record?.username && record?.passwordHash) {
+        const normalized = {
+          id: record.id,
+          username: record.username,
+          passwordHash: record.passwordHash,
+          projects: Array.isArray(record.projects) ? record.projects : [],
+        }
+        userStoreById.set(normalized.id, normalized)
+        userStoreByUsername.set(normalized.username.toLowerCase(), normalized)
+      }
+    })
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      console.warn('Failed to load user store:', error.message)
+    }
+  }
+}
+
+const hashPassword = async (password) => {
+  const salt = randomBytes(16)
+  const derived = await scryptAsync(password, salt, 64)
+  return `${salt.toString('hex')}:${derived.toString('hex')}`
+}
+
+const verifyPassword = async (password, storedHash) => {
+  if (!storedHash) {
+    return false
+  }
+  const [saltHex, hashHex] = storedHash.split(':')
+  if (!saltHex || !hashHex) {
+    return false
+  }
+  const derived = await scryptAsync(password, Buffer.from(saltHex, 'hex'), 64)
+  const existing = Buffer.from(hashHex, 'hex')
+  if (derived.length !== existing.length) {
+    return false
+  }
+  try {
+    return timingSafeEqual(derived, existing)
+  } catch {
+    return false
+  }
+}
+
+const createUserRecord = async (username, password) => {
+  const user = {
+    id: randomUUID(),
+    username,
+    passwordHash: await hashPassword(password),
+    projects: defaultProjectsForUser(),
+  }
+  userStoreById.set(user.id, user)
+  userStoreByUsername.set(username.toLowerCase(), user)
+  await persistUsers()
+  return user
+}
+
+const issueToken = (userId) => {
+  const token = randomUUID()
+  authTokens.set(token, userId)
+  return token
+}
+
+const authenticateRequest = (req) => {
+  const header = req.headers['authorization']
+  if (!header || typeof header !== 'string') {
+    return null
+  }
+  const match = header.match(/^Bearer\s+(.+)$/i)
+  if (!match) {
+    return null
+  }
+  const token = match[1].trim()
+  if (!token) {
+    return null
+  }
+  const userId = authTokens.get(token)
+  if (!userId) {
+    return null
+  }
+  return userStoreById.get(userId) ?? null
+}
+
+const updateUserProjects = async (user, projects) => {
+  const normalizedProjects = Array.isArray(projects) ? projects : []
+  user.projects = normalizedProjects
+  userStoreById.set(user.id, user)
+  userStoreByUsername.set(user.username.toLowerCase(), user)
+  await persistUsers()
+  return user.projects
+}
 
 const ensureDataDir = async () => {
   await fs.mkdir(config.dataDir, { recursive: true })
@@ -270,12 +432,142 @@ const handleKeepAlive = async (res, sessionId) => {
   }
 }
 
+const handleRegister = async (req, res) => {
+  let body
+  try {
+    body = await readBody(req)
+  } catch (error) {
+    respond(res, 400, { error: error.message })
+    return
+  }
+  const username = sanitizeUsername(body.username)
+  const password = typeof body.password === 'string' ? body.password : ''
+  if (!username || password.length < 6) {
+    respond(res, 400, { error: 'Username and password are required (min 6 chars).' })
+    return
+  }
+  if (userStoreByUsername.has(username)) {
+    respond(res, 409, { error: 'User already exists.' })
+    return
+  }
+  try {
+    const user = await createUserRecord(username, password)
+    const token = issueToken(user.id)
+    respond(res, 201, { token, user: serializeUser(user) })
+  } catch (error) {
+    respond(res, 500, { error: error.message })
+  }
+}
+
+const handleLogin = async (req, res) => {
+  let body
+  try {
+    body = await readBody(req)
+  } catch (error) {
+    respond(res, 400, { error: error.message })
+    return
+  }
+  const username = sanitizeUsername(body.username)
+  const password = typeof body.password === 'string' ? body.password : ''
+  if (!username || !password) {
+    respond(res, 400, { error: 'Missing username or password.' })
+    return
+  }
+  const user = userStoreByUsername.get(username)
+  if (!user) {
+    respond(res, 401, { error: 'Invalid username or password.' })
+    return
+  }
+  const valid = await verifyPassword(password, user.passwordHash)
+  if (!valid) {
+    respond(res, 401, { error: 'Invalid username or password.' })
+    return
+  }
+  const token = issueToken(user.id)
+  respond(res, 200, { token, user: serializeUser(user) })
+}
+
+const requireUser = (req, res) => {
+  const user = authenticateRequest(req)
+  if (!user) {
+    respond(res, 401, { error: 'Unauthorized' })
+    return null
+  }
+  return user
+}
+
+const handleGetMe = (req, res) => {
+  const user = requireUser(req, res)
+  if (!user) {
+    return
+  }
+  respond(res, 200, { user: serializeUser(user) })
+}
+
+const handleGetProjects = (req, res) => {
+  const user = requireUser(req, res)
+  if (!user) {
+    return
+  }
+  respond(res, 200, { projects: Array.isArray(user.projects) ? user.projects : [] })
+}
+
+const handleSaveProjects = async (req, res) => {
+  const user = requireUser(req, res)
+  if (!user) {
+    return
+  }
+  let body
+  try {
+    body = await readBody(req)
+  } catch (error) {
+    respond(res, 400, { error: error.message })
+    return
+  }
+  try {
+    const projects = await updateUserProjects(user, body.projects)
+    respond(res, 200, { projects })
+  } catch (error) {
+    respond(res, 500, { error: error.message })
+  }
+}
+
 const notFound = (res) => respond(res, 404, { error: 'Not found' })
 
 const server = http.createServer(async (req, res) => {
   const { method, url } = req
   const parsed = new URL(url, `http://${req.headers.host}`)
   const pathName = parsed.pathname
+
+  if (method === 'OPTIONS') {
+    respond(res, 204, {})
+    return
+  }
+
+  if (method === 'POST' && pathName === '/auth/register') {
+    await handleRegister(req, res)
+    return
+  }
+
+  if (method === 'POST' && pathName === '/auth/login') {
+    await handleLogin(req, res)
+    return
+  }
+
+  if (method === 'GET' && pathName === '/me') {
+    handleGetMe(req, res)
+    return
+  }
+
+  if (method === 'GET' && pathName === '/me/projects') {
+    handleGetProjects(req, res)
+    return
+  }
+
+  if (method === 'PUT' && pathName === '/me/projects') {
+    await handleSaveProjects(req, res)
+    return
+  }
 
   if (method === 'GET' && pathName === '/health') {
     await handleHealth(res)
@@ -431,6 +723,7 @@ server.on('upgrade', (req, socket, head) => {
 
 const start = async () => {
   await ensureDataDir()
+  await loadUsers()
   await loadStore()
   server.listen(config.port, config.host, () => {
     console.log(`tmux-session-service listening on http://${config.host}:${config.port}`)

@@ -8,6 +8,7 @@ import './App.css'
 const STORAGE_KEY = 'terminal-dashboard-xterm-v1'
 const FONT_SIZE_STORAGE_KEY = 'terminal-dashboard-font-size'
 const PROJECT_VIEW_MODE_STORAGE_KEY = 'terminal-dashboard-project-view-mode'
+const AUTH_STORAGE_KEY = 'terminal-dashboard-auth-token'
 const FONT_SIZE_OPTIONS = [12, 14, 16, 18, 20, 22]
 const DEFAULT_FONT_SIZE = 16
 const PROJECT_VIEW_MODES = {
@@ -32,6 +33,21 @@ const detectDefaultHost = () => {
 const DEFAULT_PROTOCOL = detectDefaultProtocol()
 const DEFAULT_HOST = detectDefaultHost()
 const DEFAULT_BASE_PORT = 5001
+
+const detectApiBase = () => {
+  if (typeof window === 'undefined') {
+    return `http://localhost:${DEFAULT_BASE_PORT}`
+  }
+  const { protocol, hostname, port } = window.location
+  const isDevPort = port && port !== '80' && port !== '443'
+  if (isDevPort) {
+    return `${protocol}//${hostname}:${DEFAULT_BASE_PORT}`
+  }
+  const portSuffix = port ? `:${port}` : ''
+  return `${protocol}//${hostname}${portSuffix}/api`
+}
+
+const API_BASE = detectApiBase()
 const PORT_STRATEGIES = {
   SEQUENTIAL: 'sequential',
   SINGLE: 'single',
@@ -45,6 +61,42 @@ const getId = () => {
     return crypto.randomUUID()
   }
   return Math.random().toString(36).slice(2, 11)
+}
+
+const apiFetch = async (path, { method = 'GET', body = null, token = null } = {}) => {
+  const base = API_BASE.endsWith('/') ? API_BASE.slice(0, -1) : API_BASE
+  const normalizedPath = path.startsWith('http')
+    ? path
+    : `${base}${path.startsWith('/') ? path : `/${path}`}`
+  const headers = {
+    'Content-Type': 'application/json',
+  }
+  if (token) {
+    headers.Authorization = `Bearer ${token}`
+  }
+  const options = {
+    method,
+    headers,
+  }
+  if (body) {
+    options.body = JSON.stringify(body)
+  }
+  const response = await fetch(normalizedPath, options)
+  if (response.status === 204) {
+    return {}
+  }
+  let payload = null
+  try {
+    const text = await response.text()
+    payload = text ? JSON.parse(text) : {}
+  } catch (error) {
+    console.warn('Failed to parse API response', error)
+  }
+  if (!response.ok) {
+    const message = payload?.error ?? `Request failed (${response.status})`
+    throw new Error(message)
+  }
+  return payload ?? {}
 }
 
 const findNextOffset = (terminals) => {
@@ -182,37 +234,24 @@ const normalizeProjects = (projects) =>
     }
   })
 
-const useProjectsState = () => {
-  const loadProjects = () => {
-    if (typeof window === 'undefined') {
-      return getDefaultProjects()
-    }
-    const raw = window.localStorage.getItem(STORAGE_KEY)
-    if (!raw) {
-      return getDefaultProjects()
-    }
-    try {
-      const parsed = JSON.parse(raw)
-      if (Array.isArray(parsed) && parsed.length) {
-        return normalizeProjects(parsed)
-      }
-      return getDefaultProjects()
-    } catch (error) {
-      console.warn('Failed to parse stored projects, resetting to defaults.', error)
-      return getDefaultProjects()
-    }
+const loadStoredProjects = () => {
+  if (typeof window === 'undefined') {
+    return getDefaultProjects()
   }
-
-  const [projects, setProjects] = useState(loadProjects)
-
-  useEffect(() => {
-    if (typeof window === 'undefined') {
-      return
+  const raw = window.localStorage.getItem(STORAGE_KEY)
+  if (!raw) {
+    return getDefaultProjects()
+  }
+  try {
+    const parsed = JSON.parse(raw)
+    if (Array.isArray(parsed) && parsed.length) {
+      return normalizeProjects(parsed)
     }
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(projects))
-  }, [projects])
-
-  return [projects, setProjects]
+    return getDefaultProjects()
+  } catch (error) {
+    console.warn('Failed to parse stored projects, resetting to defaults.', error)
+    return getDefaultProjects()
+  }
 }
 
 function ConfirmDialog({ isOpen, title, message, onConfirm, onCancel }) {
@@ -411,7 +450,26 @@ function TerminalViewer({ wsUrl, fontSize }) {
 }
 
 function App() {
-  const [projects, setProjects] = useProjectsState()
+  const [projects, setProjects] = useState(() => loadStoredProjects())
+  const [authToken, setAuthToken] = useState(() => {
+    if (typeof window === 'undefined') {
+      return ''
+    }
+    return window.localStorage.getItem(AUTH_STORAGE_KEY) ?? ''
+  })
+  const guestProjectsRef = useRef(null)
+  if (guestProjectsRef.current === null) {
+    guestProjectsRef.current = projects
+  }
+  const [currentUser, setCurrentUser] = useState(null)
+  const [authMode, setAuthMode] = useState('login')
+  const [authForm, setAuthForm] = useState({ username: '', password: '' })
+  const [authStatus, setAuthStatus] = useState(() => (authToken ? 'checking' : 'loggedOut'))
+  const [authError, setAuthError] = useState('')
+  const [authBusy, setAuthBusy] = useState(false)
+  const [isSyncingProjects, setIsSyncingProjects] = useState(false)
+  const [syncError, setSyncError] = useState('')
+  const [projectSyncNonce, setProjectSyncNonce] = useState(0)
   const [activeProjectId, setActiveProjectId] = useState(null)
   const [activeTerminalId, setActiveTerminalId] = useState(null)
   const [showSettings, setShowSettings] = useState(false)
@@ -438,6 +496,17 @@ function App() {
     if (typeof window === 'undefined') {
       return
     }
+    if (authToken) {
+      window.localStorage.setItem(AUTH_STORAGE_KEY, authToken)
+    } else {
+      window.localStorage.removeItem(AUTH_STORAGE_KEY)
+    }
+  }, [authToken])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
     window.localStorage.setItem(FONT_SIZE_STORAGE_KEY, String(terminalFontSize))
   }, [terminalFontSize])
 
@@ -447,6 +516,96 @@ function App() {
     }
     window.localStorage.setItem(PROJECT_VIEW_MODE_STORAGE_KEY, projectViewMode)
   }, [projectViewMode])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(projects))
+  }, [projects])
+
+  useEffect(() => {
+    if (!currentUser) {
+      guestProjectsRef.current = projects
+    }
+  }, [projects, currentUser])
+
+  useEffect(() => {
+    if (!authToken) {
+      setCurrentUser(null)
+      setAuthStatus('loggedOut')
+      setSyncError('')
+      setIsSyncingProjects(false)
+      return
+    }
+    let cancelled = false
+    const hadUser = Boolean(currentUser)
+    if (!hadUser) {
+      setAuthStatus('checking')
+    }
+    ;(async () => {
+      try {
+        const data = await apiFetch('/me', { token: authToken })
+        if (cancelled) {
+          return
+        }
+        if (data.user) {
+          setCurrentUser(data.user)
+          if (Array.isArray(data.user.projects)) {
+            setProjects(normalizeProjects(data.user.projects))
+          } else {
+            setProjects(getDefaultProjects())
+          }
+          setAuthStatus('authenticated')
+        } else {
+          throw new Error('Invalid response')
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.warn('Session validation failed', error.message)
+          setAuthToken('')
+          setCurrentUser(null)
+          setAuthStatus('loggedOut')
+        }
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authToken])
+
+  useEffect(() => {
+    if (!authToken || !currentUser) {
+      setIsSyncingProjects(false)
+      return
+    }
+    let ignore = false
+    const syncProjects = async () => {
+      setIsSyncingProjects(true)
+      setSyncError('')
+      try {
+        await apiFetch('/me/projects', {
+          method: 'PUT',
+          body: { projects },
+          token: authToken,
+        })
+        if (!ignore) {
+          setIsSyncingProjects(false)
+          setSyncError('')
+        }
+      } catch (error) {
+        if (!ignore) {
+          setIsSyncingProjects(false)
+          setSyncError(error.message ?? 'Failed to sync projects')
+        }
+      }
+    }
+    syncProjects()
+    return () => {
+      ignore = true
+    }
+  }, [projects, authToken, currentUser, projectSyncNonce])
 
   const activeProject = useMemo(
     () => projects.find((project) => project.id === activeProjectId) ?? null,
@@ -540,6 +699,55 @@ function App() {
       setActiveTerminalId(activeProject.terminals[0].id)
     }
   }, [activeProject, activeTerminalId])
+
+  const triggerProjectResync = () => {
+    setProjectSyncNonce((prev) => prev + 1)
+  }
+
+  const handleAuthSubmit = async (event) => {
+    event.preventDefault()
+    const username = authForm.username.trim().toLowerCase()
+    const password = authForm.password
+    if (!username || !password) {
+      setAuthError('Username and password are required.')
+      return
+    }
+    setAuthBusy(true)
+    setAuthError('')
+    try {
+      const endpoint = authMode === 'register' ? '/auth/register' : '/auth/login'
+      const payload = await apiFetch(endpoint, {
+        method: 'POST',
+        body: { username, password },
+      })
+      if (payload.user) {
+        setCurrentUser(payload.user)
+        if (Array.isArray(payload.user.projects)) {
+          setProjects(normalizeProjects(payload.user.projects))
+        } else {
+          setProjects(getDefaultProjects())
+        }
+      }
+      if (payload.token) {
+        setAuthToken(payload.token)
+      }
+      setAuthForm({ username: '', password: '' })
+      setAuthError('')
+    } catch (error) {
+      setAuthError(error.message ?? 'Unable to authenticate.')
+    } finally {
+      setAuthBusy(false)
+    }
+  }
+
+  const handleLogout = () => {
+    setAuthToken('')
+    setCurrentUser(null)
+    setAuthForm({ username: '', password: '' })
+    setProjects(guestProjectsRef.current ?? getDefaultProjects())
+    setSyncError('')
+    setIsSyncingProjects(false)
+  }
 
   const handleSelectProject = (projectId) => {
     setActiveProjectId(projectId)
@@ -711,6 +919,72 @@ function App() {
 
   return (
     <div className="app-shell">
+      <section className="auth-panel">
+        {authStatus === 'checking' ? (
+          <p className="auth-message">Validating session…</p>
+        ) : currentUser ? (
+          <div className="auth-status-row">
+            <div>
+              <span className="auth-label">Signed in as</span>
+              <strong>{currentUser.username}</strong>
+            </div>
+            <div className="auth-status-actions">
+              {isSyncingProjects ? (
+                <span className="sync-indicator syncing">Syncing…</span>
+              ) : syncError ? (
+                <button type="button" className="sync-indicator error" onClick={triggerProjectResync}>
+                  Sync failed — retry
+                </button>
+              ) : (
+                <span className="sync-indicator ok">Projects synced</span>
+              )}
+              <button type="button" className="secondary" onClick={handleLogout}>
+                Logout
+              </button>
+            </div>
+          </div>
+        ) : (
+          <form className="auth-form" onSubmit={handleAuthSubmit}>
+            <div className="auth-fields">
+              <input
+                type="text"
+                placeholder="Username"
+                autoComplete="username"
+                value={authForm.username}
+                onChange={(e) => setAuthForm((prev) => ({ ...prev, username: e.target.value }))}
+                disabled={authBusy}
+                required
+              />
+              <input
+                type="password"
+                placeholder="Password"
+                autoComplete={authMode === 'register' ? 'new-password' : 'current-password'}
+                value={authForm.password}
+                onChange={(e) => setAuthForm((prev) => ({ ...prev, password: e.target.value }))}
+                disabled={authBusy}
+                required
+              />
+            </div>
+            <div className="auth-actions">
+              <button type="submit" className="primary" disabled={authBusy}>
+                {authMode === 'register' ? 'Create account' : 'Sign in'}
+              </button>
+              <button
+                type="button"
+                className="link-btn"
+                onClick={() => {
+                  setAuthMode((prev) => (prev === 'register' ? 'login' : 'register'))
+                  setAuthError('')
+                }}
+                disabled={authBusy}
+              >
+                {authMode === 'register' ? 'Have an account? Sign in' : 'Need an account? Register'}
+              </button>
+            </div>
+            {authError && <p className="auth-error">{authError}</p>}
+          </form>
+        )}
+      </section>
       <header className="app-header-compact">
         <div className="header-left">
           <h1>AI Workflow</h1>
