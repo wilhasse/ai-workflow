@@ -707,6 +707,11 @@ button:not(:disabled):hover {
   cursor: not-allowed;
 }
 
+.icon-btn.active {
+  background: rgba(59, 130, 246, 0.25);
+  border-color: rgba(59, 130, 246, 0.6);
+}
+
 .project-view-toggle {
   width: 2.25rem;
   height: 2.25rem;
@@ -852,6 +857,122 @@ button:not(:disabled):hover {
   flex-direction: column;
   overflow: hidden;
   min-height: 0;
+}
+
+/* Voice Panel */
+.voice-panel {
+  margin: 0.75rem 1.5rem;
+  padding: 1rem 1.5rem;
+  border-radius: 16px;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.voice-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.voice-panel-header h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.voice-status {
+  margin: 0;
+  color: #93c5fd;
+  font-weight: 600;
+}
+
+.voice-warning {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border-radius: 10px;
+  background: rgba(248, 113, 113, 0.15);
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  color: #fecaca;
+  font-size: 0.9rem;
+}
+
+.voice-controls {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.voice-upload {
+  border: 1px dashed rgba(148, 163, 184, 0.4);
+  border-radius: 12px;
+  padding: 0.75rem 1rem;
+  cursor: pointer;
+  color: #cbd5f5;
+  font-weight: 600;
+}
+
+.voice-upload input {
+  display: none;
+}
+
+.voice-options {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.voice-options label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  color: #cbd5f5;
+  font-size: 0.9rem;
+}
+
+.voice-options select {
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  color: #e2e8f0;
+}
+
+.voice-checkbox {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.voice-checkbox input {
+  width: 1rem;
+  height: 1rem;
+}
+
+.voice-transcript {
+  width: 100%;
+  min-height: 120px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(15, 23, 42, 0.6);
+  color: #e2e8f0;
+  padding: 0.9rem;
+  resize: vertical;
+}
+
+.voice-error {
+  margin: 0;
+  color: #fca5a5;
+  font-size: 0.9rem;
+}
+
+.voice-actions {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
 }
 
 .terminal-tabs-compact {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -254,6 +254,21 @@ const loadStoredProjects = () => {
   }
 }
 
+const detectSecureContext = () => {
+  if (typeof window === 'undefined') {
+    return false
+  }
+  if (window.isSecureContext) {
+    return true
+  }
+  const protocol = window.location.protocol
+  if (protocol === 'https:') {
+    return true
+  }
+  const hostname = window.location.hostname
+  return hostname === 'localhost' || hostname === '127.0.0.1'
+}
+
 function ConfirmDialog({ isOpen, title, message, onConfirm, onCancel }) {
   if (!isOpen) {
     return null
@@ -277,10 +292,11 @@ function ConfirmDialog({ isOpen, title, message, onConfirm, onCancel }) {
   )
 }
 
-function TerminalViewer({ wsUrl, fontSize }) {
+function TerminalViewer({ wsUrl, fontSize, onBridgeReady }) {
   const containerRef = useRef(null)
   const termRef = useRef(null)
   const fitAddonRef = useRef(null)
+  const socketRef = useRef(null)
   const fontSizeRef = useRef(fontSize)
   const [connectionState, setConnectionState] = useState({
     status: 'connecting',
@@ -330,6 +346,7 @@ function TerminalViewer({ wsUrl, fontSize }) {
     let socket
     try {
       socket = new window.WebSocket(wsUrl)
+      socketRef.current = socket
     } catch (error) {
       console.warn('Failed to open websocket', error)
       term.dispose()
@@ -415,11 +432,38 @@ function TerminalViewer({ wsUrl, fontSize }) {
       ) {
         socket.close()
       }
+      socketRef.current = null
       term.dispose()
       termRef.current = null
       fitAddonRef.current = null
     }
   }, [wsUrl])
+
+  useEffect(() => {
+    if (typeof onBridgeReady !== 'function') {
+      return undefined
+    }
+    const bridge = {
+      sendInput: (payload) => {
+        if (!payload || typeof payload !== 'string') {
+          return
+        }
+        const target = socketRef.current
+        if (target && target.readyState === window.WebSocket.OPEN) {
+          target.send(
+            JSON.stringify({
+              type: 'input',
+              payload,
+            }),
+          )
+        }
+      },
+    }
+    onBridgeReady(bridge)
+    return () => {
+      onBridgeReady(null)
+    }
+  }, [onBridgeReady, wsUrl])
 
   useEffect(() => {
     const term = termRef.current
@@ -491,6 +535,200 @@ function App() {
     const stored = window.localStorage.getItem(PROJECT_VIEW_MODE_STORAGE_KEY)
     return stored === PROJECT_VIEW_MODES.TABS ? PROJECT_VIEW_MODES.TABS : PROJECT_VIEW_MODES.DROPDOWN
   })
+  const [terminalBridge, setTerminalBridge] = useState(null)
+  const [showVoicePanel, setShowVoicePanel] = useState(false)
+  const [isSecureContext, setIsSecureContext] = useState(() => detectSecureContext())
+  const [voiceLanguage, setVoiceLanguage] = useState('')
+  const [voiceTranslate, setVoiceTranslate] = useState(false)
+  const [voiceTranscript, setVoiceTranscript] = useState('')
+  const [voiceStatus, setVoiceStatus] = useState('Idle')
+  const [voiceError, setVoiceError] = useState('')
+  const [voiceRecording, setVoiceRecording] = useState(false)
+  const [voicePending, setVoicePending] = useState(false)
+  const voiceRecorderRef = useRef(null)
+  const voiceStreamRef = useRef(null)
+  const voiceChunksRef = useRef([])
+
+  const cleanupVoiceResources = useCallback(() => {
+    if (voiceRecorderRef.current && voiceRecorderRef.current.state !== 'inactive') {
+      try {
+        voiceRecorderRef.current.stop()
+      } catch (error) {
+        console.warn('Failed to stop recorder', error)
+      }
+    }
+    voiceRecorderRef.current = null
+    if (voiceStreamRef.current) {
+      voiceStreamRef.current.getTracks().forEach((track) => {
+        try {
+          track.stop()
+        } catch (error) {
+          console.warn('Failed to stop track', error)
+        }
+      })
+    }
+    voiceStreamRef.current = null
+    voiceChunksRef.current = []
+    setVoiceRecording(false)
+  }, [])
+
+  useEffect(() => {
+    setIsSecureContext(detectSecureContext())
+  }, [])
+
+  useEffect(() => () => {
+    cleanupVoiceResources()
+  }, [cleanupVoiceResources])
+
+  const sendVoiceFileForTranscription = useCallback(
+    async (file) => {
+      if (!file) {
+        return
+      }
+      setVoicePending(true)
+      setVoiceStatus(`Uploading ${file.name}…`)
+      setVoiceError('')
+      const form = new FormData()
+      form.append('file', file)
+      if (voiceLanguage) {
+        form.append('language', voiceLanguage)
+      }
+      if (voiceTranslate) {
+        form.append('translate', 'true')
+      }
+      try {
+        const response = await fetch('/api/whisper/transcribe', {
+          method: 'POST',
+          body: form,
+        })
+        if (!response.ok) {
+          const message = await response.text()
+          throw new Error(message || `HTTP ${response.status}`)
+        }
+        const payload = await response.json()
+        const transcript = typeof payload.text === 'string' ? payload.text.trim() : ''
+        setVoiceTranscript(transcript)
+        setVoiceStatus('Transcription complete')
+      } catch (error) {
+        console.error(error)
+        setVoiceError(error.message || 'Failed to transcribe audio.')
+        setVoiceStatus('Error')
+        setVoiceTranscript('')
+      } finally {
+        setVoicePending(false)
+      }
+    },
+    [voiceLanguage, voiceTranslate],
+  )
+
+  const handleVoiceRecordingStart = async () => {
+    if (!isSecureContext) {
+      setVoiceError('Microphone access requires HTTPS or localhost.')
+      return
+    }
+    if (voiceRecording || voicePending) {
+      return
+    }
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+      setVoiceError('Microphone API is unavailable in this browser.')
+      return
+    }
+    try {
+      setVoiceError('')
+      setVoiceTranscript('')
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      voiceStreamRef.current = stream
+      if (typeof window.MediaRecorder === 'undefined') {
+        throw new Error('MediaRecorder is not supported in this browser.')
+      }
+      const recorder = new window.MediaRecorder(stream, { mimeType: 'audio/webm' })
+      voiceChunksRef.current = []
+      recorder.addEventListener('dataavailable', (event) => {
+        if (event.data.size > 0) {
+          voiceChunksRef.current.push(event.data)
+        }
+      })
+      recorder.addEventListener('start', () => {
+        setVoiceRecording(true)
+        setVoiceStatus('Recording…')
+      })
+      recorder.addEventListener('stop', async () => {
+        setVoiceRecording(false)
+        const blob = new Blob(voiceChunksRef.current, { type: 'audio/webm' })
+        cleanupVoiceResources()
+        if (!blob.size) {
+          setVoiceError('No audio captured.')
+          setVoiceStatus('Idle')
+          return
+        }
+        const syntheticFile = new File([blob], 'voice-input.webm', { type: 'audio/webm' })
+        await sendVoiceFileForTranscription(syntheticFile)
+      })
+      recorder.start()
+      voiceRecorderRef.current = recorder
+    } catch (error) {
+      console.error(error)
+      setVoiceError('Unable to access microphone. Grant permission and try again.')
+      cleanupVoiceResources()
+    }
+  }
+
+  const handleVoiceRecordingStop = () => {
+    if (voiceRecorderRef.current && voiceRecorderRef.current.state !== 'inactive') {
+      voiceRecorderRef.current.stop()
+    } else {
+      cleanupVoiceResources()
+    }
+  }
+
+  const handleVoiceFileSelection = async (file) => {
+    if (!file) {
+      return
+    }
+    cleanupVoiceResources()
+    await sendVoiceFileForTranscription(file)
+  }
+
+  const handleVoiceFileInputChange = async (event) => {
+    const file = event.target.files?.[0]
+    if (file) {
+      await handleVoiceFileSelection(file)
+      event.target.value = ''
+    }
+  }
+
+  const handleCopyTranscript = async () => {
+    if (!voiceTranscript.trim()) {
+      setVoiceError('No transcript to copy.')
+      return
+    }
+    if (typeof navigator === 'undefined' || !navigator.clipboard) {
+      setVoiceError('Clipboard access is unavailable in this browser.')
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(voiceTranscript)
+      setVoiceStatus('Copied to clipboard')
+      setVoiceError('')
+    } catch (error) {
+      console.error(error)
+      setVoiceError('Failed to copy transcript.')
+    }
+  }
+
+  const handleSendTranscriptToTerminal = () => {
+    const text = voiceTranscript.trim()
+    if (!text) {
+      setVoiceError('No transcript available.')
+      return
+    }
+    if (!terminalBridge) {
+      setVoiceError('Select a terminal before sending the transcript.')
+      return
+    }
+    terminalBridge.sendInput(`${text}\n`)
+    setVoiceStatus('Sent to terminal')
+  }
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -618,6 +856,12 @@ function App() {
     }
     return activeProject.terminals.find((terminal) => terminal.id === activeTerminalId) ?? null
   }, [activeProject, activeTerminalId])
+
+  useEffect(() => {
+    if (!activeTerminal) {
+      setTerminalBridge(null)
+    }
+  }, [activeTerminal])
 
   const activeConnection = useMemo(() => {
     if (!activeProject || !activeTerminal) {
@@ -1015,6 +1259,14 @@ function App() {
           )}
           <button
             type="button"
+            className={`icon-btn ${showVoicePanel ? 'active' : ''}`}
+            onClick={() => setShowVoicePanel((prev) => !prev)}
+            title="Voice transcription"
+          >
+            🎙️
+          </button>
+          <button
+            type="button"
             className="icon-btn"
             onClick={() => setShowSettings(!showSettings)}
             title="Settings"
@@ -1032,6 +1284,86 @@ function App() {
           </button>
         </div>
       </header>
+
+      {showVoicePanel && (
+        <section className="voice-panel">
+          <div className="voice-panel-header">
+            <h2>Voice transcription</h2>
+            <button className="icon-btn" onClick={() => setShowVoicePanel(false)} title="Close">
+              ✕
+            </button>
+          </div>
+          <p className="voice-status">{voiceStatus}</p>
+          {!isSecureContext && (
+            <p className="voice-warning">
+              Microphone recording requires HTTPS (or http://localhost). You can still upload audio files below.
+            </p>
+          )}
+          <div className="voice-controls">
+            <button
+              type="button"
+              className="primary"
+              onClick={handleVoiceRecordingStart}
+              disabled={!isSecureContext || voiceRecording || voicePending}
+            >
+              {voiceRecording ? 'Recording…' : 'Start recording'}
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              onClick={handleVoiceRecordingStop}
+              disabled={!voiceRecording}
+            >
+              Stop
+            </button>
+            <label className="voice-upload">
+              <input type="file" accept="audio/*" onChange={handleVoiceFileInputChange} />
+              <span>Upload audio</span>
+            </label>
+          </div>
+          <div className="voice-options">
+            <label>
+              Language
+              <select value={voiceLanguage} onChange={(e) => setVoiceLanguage(e.target.value)}>
+                <option value="">Auto-detect</option>
+                <option value="pt">Português</option>
+                <option value="en">English</option>
+                <option value="es">Español</option>
+                <option value="fr">Français</option>
+                <option value="de">Deutsch</option>
+              </select>
+            </label>
+            <label className="voice-checkbox">
+              <input
+                type="checkbox"
+                checked={voiceTranslate}
+                onChange={(e) => setVoiceTranslate(e.target.checked)}
+              />
+              <span>Translate to English</span>
+            </label>
+          </div>
+          <textarea
+            className="voice-transcript"
+            placeholder="Transcript will appear here."
+            value={voiceTranscript}
+            readOnly
+          />
+          {voiceError && <p className="voice-error">{voiceError}</p>}
+          <div className="voice-actions">
+            <button type="button" className="secondary" onClick={handleCopyTranscript} disabled={!voiceTranscript}>
+              Copy transcript
+            </button>
+            <button
+              type="button"
+              className="primary"
+              onClick={handleSendTranscriptToTerminal}
+              disabled={!voiceTranscript || !activeTerminal || voicePending}
+            >
+              Send to terminal
+            </button>
+          </div>
+        </section>
+      )}
 
       {showSettings && (
         <div className="settings-panel">
@@ -1199,6 +1531,7 @@ function App() {
                     key={`${activeProject.id}-${activeTerminal.id}`}
                     wsUrl={activeConnection.wsUrl}
                     fontSize={terminalFontSize}
+                    onBridgeReady={setTerminalBridge}
                   />
                 ) : (
                   <div className="terminal-warning">
