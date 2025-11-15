@@ -724,6 +724,8 @@ function App() {
     }
     terminalBridge.sendInput(`${text}\n`)
     setVoiceStatus('Sent to terminal')
+    setVoiceTranscript('')
+    setVoiceError('')
   }
 
   useEffect(() => {
@@ -1351,6 +1353,17 @@ function App() {
               disabled={!voiceTranscript || !activeTerminal || voicePending}
             >
               Send to terminal
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => {
+                setVoiceTranscript('')
+                setVoiceError('')
+              }}
+              disabled={!voiceTranscript && !voiceError}
+            >
+              Clear
             </button>
           </div>
         </section>
