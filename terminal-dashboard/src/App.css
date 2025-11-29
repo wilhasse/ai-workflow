@@ -978,6 +978,48 @@ button:not(:disabled):hover {
   flex-wrap: wrap;
 }
 
+.voice-service {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  color: #cbd5f5;
+  font-size: 0.85rem;
+  min-width: 140px;
+}
+
+.voice-service select {
+  border-radius: 8px;
+  padding: 0.35rem 0.5rem;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  color: #e2e8f0;
+}
+
+/* Mic toggle button in header */
+.mic-toggle {
+  transition: all 0.2s ease;
+}
+
+.mic-toggle.recording {
+  background: rgba(239, 68, 68, 0.3) !important;
+  border-color: rgba(239, 68, 68, 0.6) !important;
+  animation: pulse-recording 1.5s ease-in-out infinite;
+}
+
+.mic-toggle.pending {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+@keyframes pulse-recording {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(239, 68, 68, 0);
+  }
+}
+
 .terminal-tabs-compact {
   display: flex;
   gap: 0.5rem;

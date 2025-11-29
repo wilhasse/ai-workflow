@@ -9,12 +9,19 @@ const STORAGE_KEY = 'terminal-dashboard-xterm-v1'
 const FONT_SIZE_STORAGE_KEY = 'terminal-dashboard-font-size'
 const PROJECT_VIEW_MODE_STORAGE_KEY = 'terminal-dashboard-project-view-mode'
 const AUTH_STORAGE_KEY = 'terminal-dashboard-auth-token'
+const VOICE_SERVICE_STORAGE_KEY = 'terminal-dashboard-voice-service'
+const VOICE_LANGUAGE_STORAGE_KEY = 'terminal-dashboard-voice-language'
 const FONT_SIZE_OPTIONS = [12, 14, 16, 18, 20, 22]
 const DEFAULT_FONT_SIZE = 16
 const PROJECT_VIEW_MODES = {
   DROPDOWN: 'dropdown',
   TABS: 'tabs',
 }
+const VOICE_SERVICES = {
+  LOCAL: 'local',
+  DEEPGRAM: 'deepgram',
+}
+const DEEPGRAM_API_KEY = import.meta.env.VITE_DEEPGRAM_API_KEY || ''
 
 const detectDefaultProtocol = () => {
   if (typeof window !== 'undefined' && window.location?.protocol) {
@@ -538,7 +545,15 @@ function App() {
   const [terminalBridge, setTerminalBridge] = useState(null)
   const [showVoicePanel, setShowVoicePanel] = useState(false)
   const [isSecureContext, setIsSecureContext] = useState(() => detectSecureContext())
-  const [voiceLanguage, setVoiceLanguage] = useState('')
+  const [voiceLanguage, setVoiceLanguage] = useState(() => {
+    if (typeof window === 'undefined') return 'pt-BR'
+    return window.localStorage.getItem(VOICE_LANGUAGE_STORAGE_KEY) || 'pt-BR'
+  })
+  const [voiceService, setVoiceService] = useState(() => {
+    if (typeof window === 'undefined') return VOICE_SERVICES.DEEPGRAM
+    const stored = window.localStorage.getItem(VOICE_SERVICE_STORAGE_KEY)
+    return stored === VOICE_SERVICES.LOCAL ? VOICE_SERVICES.LOCAL : VOICE_SERVICES.DEEPGRAM
+  })
   const [voiceTranscript, setVoiceTranscript] = useState('')
   const [voiceStatus, setVoiceStatus] = useState('Idle')
   const [voiceError, setVoiceError] = useState('')
@@ -579,32 +594,73 @@ function App() {
     cleanupVoiceResources()
   }, [cleanupVoiceResources])
 
+  const transcribeWithDeepgram = useCallback(async (audioBlob) => {
+    if (!DEEPGRAM_API_KEY) {
+      throw new Error('Deepgram API key not configured. Add VITE_DEEPGRAM_API_KEY to .env')
+    }
+    const langParam = voiceLanguage || 'pt-BR'
+    const response = await fetch(
+      `https://api.deepgram.com/v1/listen?model=nova-2&language=${langParam}&smart_format=true`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Token ${DEEPGRAM_API_KEY}`,
+          'Content-Type': audioBlob.type || 'audio/webm',
+        },
+        body: audioBlob,
+      }
+    )
+    if (!response.ok) {
+      const errText = await response.text()
+      throw new Error(`Deepgram error: ${errText || response.status}`)
+    }
+    const data = await response.json()
+    return data.results?.channels?.[0]?.alternatives?.[0]?.transcript || ''
+  }, [voiceLanguage])
+
+  const transcribeWithLocalWhisper = useCallback(async (file) => {
+    const form = new FormData()
+    form.append('file', file)
+    if (voiceLanguage) {
+      const whisperLang = voiceLanguage.split('-')[0]
+      form.append('language', whisperLang)
+    }
+    const response = await fetch('/api/whisper/transcribe', {
+      method: 'POST',
+      body: form,
+    })
+    if (!response.ok) {
+      const message = await response.text()
+      throw new Error(message || `HTTP ${response.status}`)
+    }
+    const payload = await response.json()
+    return typeof payload.text === 'string' ? payload.text.trim() : ''
+  }, [voiceLanguage])
+
   const sendVoiceFileForTranscription = useCallback(
-    async (file) => {
+    async (file, autoSendToTerminal = false) => {
       if (!file) {
         return
       }
       setVoicePending(true)
-      setVoiceStatus(`Uploading ${file.name}…`)
+      setVoiceStatus('Transcribing…')
       setVoiceError('')
-      const form = new FormData()
-      form.append('file', file)
-      if (voiceLanguage) {
-        form.append('language', voiceLanguage)
-      }
       try {
-        const response = await fetch('/api/whisper/transcribe', {
-          method: 'POST',
-          body: form,
-        })
-        if (!response.ok) {
-          const message = await response.text()
-          throw new Error(message || `HTTP ${response.status}`)
+        let transcript = ''
+        if (voiceService === VOICE_SERVICES.DEEPGRAM) {
+          transcript = await transcribeWithDeepgram(file)
+        } else {
+          transcript = await transcribeWithLocalWhisper(file)
         }
-        const payload = await response.json()
-        const transcript = typeof payload.text === 'string' ? payload.text.trim() : ''
+        transcript = transcript.trim()
         setVoiceTranscript(transcript)
         setVoiceStatus('Transcription complete')
+
+        if (autoSendToTerminal && transcript && terminalBridge) {
+          terminalBridge.sendInput(`${transcript}\n`)
+          setVoiceStatus('Sent to terminal')
+          setVoiceTranscript('')
+        }
       } catch (error) {
         console.error(error)
         setVoiceError(error.message || 'Failed to transcribe audio.')
@@ -614,10 +670,10 @@ function App() {
         setVoicePending(false)
       }
     },
-    [voiceLanguage],
+    [voiceService, transcribeWithDeepgram, transcribeWithLocalWhisper, terminalBridge],
   )
 
-  const handleVoiceRecordingStart = async () => {
+  const handleVoiceRecordingStart = async (autoSendToTerminal = false) => {
     if (!isSecureContext) {
       setVoiceError('Microphone access requires HTTPS or localhost.')
       return
@@ -657,8 +713,7 @@ function App() {
           setVoiceStatus('Idle')
           return
         }
-        const syntheticFile = new File([blob], 'voice-input.webm', { type: 'audio/webm' })
-        await sendVoiceFileForTranscription(syntheticFile)
+        await sendVoiceFileForTranscription(blob, autoSendToTerminal)
       })
       recorder.start()
       voiceRecorderRef.current = recorder
@@ -727,6 +782,25 @@ function App() {
     setVoiceTranscript('')
     setVoiceError('')
   }
+
+  const handleMicToggle = () => {
+    if (voicePending) return
+    if (voiceRecording) {
+      handleVoiceRecordingStop()
+    } else {
+      handleVoiceRecordingStart(true)
+    }
+  }
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(VOICE_SERVICE_STORAGE_KEY, voiceService)
+  }, [voiceService])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(VOICE_LANGUAGE_STORAGE_KEY, voiceLanguage)
+  }, [voiceLanguage])
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -1257,11 +1331,20 @@ function App() {
           )}
           <button
             type="button"
+            className={`icon-btn mic-toggle ${voiceRecording ? 'recording' : ''} ${voicePending ? 'pending' : ''}`}
+            onClick={handleMicToggle}
+            disabled={!isSecureContext || voicePending}
+            title={voiceRecording ? 'Stop & send to terminal' : 'Tap to record'}
+          >
+            {voicePending ? '⏳' : voiceRecording ? '⏹️' : '🎙️'}
+          </button>
+          <button
+            type="button"
             className={`icon-btn ${showVoicePanel ? 'active' : ''}`}
             onClick={() => setShowVoicePanel((prev) => !prev)}
-            title="Voice transcription"
+            title="Voice settings"
           >
-            🎙️
+            {showVoicePanel ? '▲' : '▼'}
           </button>
           <button
             type="button"
@@ -1287,7 +1370,7 @@ function App() {
         <section className="voice-panel">
           <div className="voice-panel-header">
             <div className="voice-title">
-              <h2>Voice transcription</h2>
+              <h2>Voice Settings</h2>
               <span className="voice-status">{voiceStatus}</span>
             </div>
             <button className="icon-btn" onClick={() => setShowVoicePanel(false)} title="Close">
@@ -1300,51 +1383,45 @@ function App() {
             </p>
           )}
           <div className="voice-row">
-            <div className="voice-controls">
-              <button
-                type="button"
-                className="primary"
-                onClick={handleVoiceRecordingStart}
-                disabled={!isSecureContext || voiceRecording || voicePending}
-              >
-                {voiceRecording ? 'Recording…' : 'Start recording'}
-              </button>
-              <button
-                type="button"
-                className="secondary"
-                onClick={handleVoiceRecordingStop}
-                disabled={!voiceRecording}
-              >
-                Stop
-              </button>
-              <label className="voice-upload">
-                <input type="file" accept="audio/*" onChange={handleVoiceFileInputChange} />
-                <span>Upload audio</span>
-              </label>
-            </div>
+            <label className="voice-service">
+              <span>Service</span>
+              <select value={voiceService} onChange={(e) => setVoiceService(e.target.value)}>
+                <option value={VOICE_SERVICES.DEEPGRAM}>Deepgram (cloud)</option>
+                <option value={VOICE_SERVICES.LOCAL}>Local Whisper</option>
+              </select>
+            </label>
             <label className="voice-language">
               <span>Language</span>
               <select value={voiceLanguage} onChange={(e) => setVoiceLanguage(e.target.value)}>
-                <option value="">Auto-detect</option>
-                <option value="pt">Português</option>
+                <option value="pt-BR">Português (BR)</option>
+                <option value="pt-PT">Português (PT)</option>
                 <option value="en">English</option>
                 <option value="es">Español</option>
                 <option value="fr">Français</option>
                 <option value="de">Deutsch</option>
               </select>
             </label>
+            <label className="voice-upload">
+              <input type="file" accept="audio/*" onChange={handleVoiceFileInputChange} />
+              <span>Upload audio</span>
+            </label>
           </div>
+          {voiceService === VOICE_SERVICES.DEEPGRAM && !DEEPGRAM_API_KEY && (
+            <p className="voice-warning">
+              Deepgram API key not configured. Add VITE_DEEPGRAM_API_KEY to .env file.
+            </p>
+          )}
           <textarea
             className="voice-transcript"
-            placeholder="Transcript will appear here."
+            placeholder="Tap 🎙️ to record → auto-sends to terminal. Or upload audio file above."
             value={voiceTranscript}
             readOnly
-            rows={3}
+            rows={2}
           />
           {voiceError && <p className="voice-error">{voiceError}</p>}
           <div className="voice-actions">
             <button type="button" className="secondary" onClick={handleCopyTranscript} disabled={!voiceTranscript}>
-              Copy transcript
+              Copy
             </button>
             <button
               type="button"
@@ -1360,6 +1437,7 @@ function App() {
               onClick={() => {
                 setVoiceTranscript('')
                 setVoiceError('')
+                setVoiceStatus('Idle')
               }}
               disabled={!voiceTranscript && !voiceError}
             >
