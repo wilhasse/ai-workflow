@@ -22,8 +22,13 @@ COPY . .
 # Create data directory and set permissions
 RUN mkdir -p /app/data && chown -R cslog:cslog /app
 
+# Set up entrypoint script (already copied via COPY . .)
+RUN cp /app/docker-entrypoint.sh /usr/local/bin/ \
+  && chmod +x /usr/local/bin/docker-entrypoint.sh
+
 # Switch to cslog user
 USER cslog
 
 EXPOSE 5001
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["node", "src/server.js"]
