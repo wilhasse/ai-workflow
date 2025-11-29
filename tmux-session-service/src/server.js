@@ -698,6 +698,15 @@ const handleTerminalSocket = async (ws, sessionIdRaw, searchParams) => {
     cleanup()
   })
 
+  // Ping/pong keepalive to prevent timeout
+  const pingInterval = setInterval(() => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.ping()
+    }
+  }, 30000) // Ping every 30 seconds
+
+  ws.on('close', () => clearInterval(pingInterval))
+
   sendWsMessage(ws, { type: 'ready', sessionId: sanitizedSessionId })
 }
 
