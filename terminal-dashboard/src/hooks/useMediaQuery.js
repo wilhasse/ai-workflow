@@ -28,11 +28,11 @@ export function useMediaQuery(query) {
 }
 
 export function useIsMobile() {
-  return useMediaQuery('(max-width: 799px)')
+  return useMediaQuery('(max-width: 767px)')
 }
 
 export function useIsTablet() {
-  return useMediaQuery('(min-width: 600px) and (max-width: 799px)')
+  return useMediaQuery('(min-width: 600px) and (max-width: 767px)')
 }
 
 export function useIsPhone() {

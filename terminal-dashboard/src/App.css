@@ -1841,7 +1841,7 @@ button:not(:disabled):hover {
 }
 
 /* Mobile Terminal View adjustments */
-@media (max-width: 799px) {
+@media (max-width: 767px) {
   /* Hide desktop elements on mobile */
   .app-shell > .auth-panel,
   .app-shell > .app-header-compact,
@@ -1901,8 +1901,8 @@ button:not(:disabled):hover {
   }
 }
 
-/* Show desktop, hide mobile at 800px+ */
-@media (min-width: 800px) {
+/* Show desktop, hide mobile at 768px+ */
+@media (min-width: 768px) {
   .mobile-layout {
     display: none !important;
   }
