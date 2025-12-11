@@ -1,14 +1,34 @@
 version: '3.8'
 
 services:
-  # React frontend - exposed on port 80
+  # Reverse proxy and SSL termination
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    container_name: ai-workflow-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    networks:
+      - ai-workflow-network
+    depends_on:
+      - terminal-dashboard
+      - tmux-session-service
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  # React frontend
   terminal-dashboard:
     build:
       context: ./terminal-dashboard
       dockerfile: Dockerfile
     container_name: ai-workflow-dashboard
-    ports:
-      - "80:3000"  # Expose dashboard on port 80 (Nginx Proxy Manager will forward here)
     networks:
       - ai-workflow-network
     restart: unless-stopped
@@ -19,7 +39,7 @@ services:
       retries: 3
       start_period: 10s
 
-  # TMux session management API - exposed on port 5001
+  # TMux session management API
   tmux-session-service:
     build:
       context: ./tmux-session-service
@@ -38,8 +58,6 @@ services:
       - /tmp/tmux-1000:/tmp/tmux-1000
       # Mount host's home directory so sessions have access to host environment
       - /home/cslog:/home/cslog
-    ports:
-      - "5001:5001"  # Expose API on port 5001 (for WebSocket and REST API)
     networks:
       - ai-workflow-network
     restart: unless-stopped
@@ -50,7 +68,7 @@ services:
       retries: 3
       start_period: 5s
 
-  # Plane-Claude orchestrator daemon - exposed on port 5002
+  # Plane-Claude orchestrator daemon
   plane-claude-orchestrator:
     build:
       context: ./plane-claude-orchestrator
@@ -69,8 +87,6 @@ services:
       - /tmp:/tmp
       # Mount workspace for potential file access
       - /home/cslog/ai-workflow:/workspace:ro
-    ports:
-      - "5002:5002"  # Expose orchestrator API on port 5002
     networks:
       - ai-workflow-network
     depends_on:
@@ -82,6 +98,30 @@ services:
       timeout: 3s
       retries: 3
       start_period: 10s
+
+  # Whisper API (optional - uncomment to enable voice transcription)
+  # whisper-realtime-api:
+  #   build:
+  #     context: ./whisper-realtime-api
+  #     dockerfile: Dockerfile
+  #   container_name: ai-workflow-whisper
+  #   environment:
+  #     - MODEL_SIZE=base
+  #     - DEVICE=cpu
+  #   ports:
+  #     - "8000:8000"
+  #   networks:
+  #     - ai-workflow-network
+  #   restart: unless-stopped
+  #   # Uncomment below for GPU support
+  #   # runtime: nvidia
+  #   # deploy:
+  #   #   resources:
+  #   #     reservations:
+  #   #       devices:
+  #   #         - driver: nvidia
+  #   #           count: 1
+  #   #           capabilities: [gpu]
 
 networks:
   ai-workflow-network:
