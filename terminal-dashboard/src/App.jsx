@@ -46,7 +46,7 @@ const detectDefaultHost = () => {
   if (typeof window !== 'undefined' && window.location?.hostname) {
     return window.location.hostname
   }
-  return '10.1.0.10'
+  return 'localhost'  // Fallback to localhost instead of Docker internal IP
 }
 
 const DEFAULT_PROTOCOL = detectDefaultProtocol()
@@ -190,12 +190,29 @@ const getDefaultProjects = () => [
   },
 ]
 
-const normalizeProjects = (projects) =>
-  projects.map((project) => {
+const normalizeProjects = (projects) => {
+  console.log('[Migration] Starting project normalization, count:', projects.length)
+  return projects.map((project) => {
     const protocol = project.protocol === 'http' ? 'http' : DEFAULT_PROTOCOL
     const storedHost = project.baseHost ? sanitizeHost(project.baseHost) : DEFAULT_HOST
-    const baseHost =
-      storedHost === '10.1.0.10' && DEFAULT_HOST !== '10.1.0.10' ? DEFAULT_HOST : storedHost
+
+    // Auto-migrate Docker internal IPs to current hostname
+    const isDockerInternalIP =
+      typeof storedHost === 'string' && (
+        storedHost === '10.1.0.10' ||
+        storedHost.startsWith('172.') ||
+        storedHost.startsWith('192.168.')
+      )
+
+    const currentHostname = typeof window !== 'undefined' && window.location?.hostname
+    const baseHost = isDockerInternalIP && currentHostname
+      ? currentHostname
+      : storedHost
+
+    // Debug logging for all projects
+    console.log(`[Migration] Project "${project.name}": baseHost="${storedHost}" → "${baseHost}" (isDockerIP: ${isDockerInternalIP})`)
+
+
     const basePort = Number.isFinite(project.basePort) ? project.basePort : DEFAULT_BASE_PORT
     const portStrategyLocked = project.portStrategyLocked === true
     const requestedStrategy =
@@ -252,6 +269,7 @@ const normalizeProjects = (projects) =>
       terminals: normalizedTerminals,
     }
   })
+}
 
 const loadStoredProjects = () => {
   if (typeof window === 'undefined') {
@@ -596,12 +614,17 @@ function App() {
 
     if (!planeProject) {
       // Create plane-automation project if it doesn't exist
+      // Always use current hostname to avoid Docker internal IPs
+      const currentHost = typeof window !== 'undefined' && window.location?.hostname
+        ? window.location.hostname
+        : DEFAULT_HOST
+
       planeProject = {
         id: 'plane-automation',
         name: '⚡ Plane Automation',
         description: 'Claude Code sessions for Plane tickets',
         protocol: DEFAULT_PROTOCOL,
-        baseHost: DEFAULT_HOST,
+        baseHost: currentHost,
         basePort: DEFAULT_BASE_PORT,
         portStrategy: DEFAULT_PORT_STRATEGY,
         portStrategyLocked: true,

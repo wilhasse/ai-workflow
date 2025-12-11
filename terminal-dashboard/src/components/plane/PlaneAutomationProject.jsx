@@ -17,9 +17,12 @@ const PlaneAutomationProject = ({ onApproveTicket, onUpdatePlane }) => {
   const [editingSummary, setEditingSummary] = useState(null)
   const [editedText, setEditedText] = useState('')
   const [processingTicket, setProcessingTicket] = useState(null)
+  const [confirmDelete, setConfirmDelete] = useState(null)
+  const [errorMessage, setErrorMessage] = useState(null)
 
   const handleApprove = async (ticket) => {
     setProcessingTicket(ticket.id)
+    setErrorMessage(null)
     try {
       const result = await approveTicket(ticket.id)
       // Call parent handler to create terminal
@@ -27,7 +30,7 @@ const PlaneAutomationProject = ({ onApproveTicket, onUpdatePlane }) => {
         onApproveTicket(ticket, result)
       }
     } catch (err) {
-      alert(`Failed to approve ticket: ${err.message}`)
+      setErrorMessage(`Failed to approve ticket: ${err.message}`)
     } finally {
       setProcessingTicket(null)
     }
@@ -36,6 +39,7 @@ const PlaneAutomationProject = ({ onApproveTicket, onUpdatePlane }) => {
   const handleUpdatePlane = async (ticket) => {
     const summary = editingSummary === ticket.id ? editedText : ticket.summary
     setProcessingTicket(ticket.id)
+    setErrorMessage(null)
     try {
       await updatePlaneTicket(ticket.id, summary)
       setEditingSummary(null)
@@ -44,21 +48,20 @@ const PlaneAutomationProject = ({ onApproveTicket, onUpdatePlane }) => {
         onUpdatePlane(ticket)
       }
     } catch (err) {
-      alert(`Failed to update Plane: ${err.message}`)
+      setErrorMessage(`Failed to update Plane: ${err.message}`)
     } finally {
       setProcessingTicket(null)
     }
   }
 
   const handleDelete = async (ticketId) => {
-    if (!confirm(`Are you sure you want to remove ticket ${ticketId} from the queue?`)) {
-      return
-    }
     setProcessingTicket(ticketId)
+    setErrorMessage(null)
     try {
       await deleteTicket(ticketId)
+      setConfirmDelete(null)
     } catch (err) {
-      alert(`Failed to delete ticket: ${err.message}`)
+      setErrorMessage(`Failed to delete ticket: ${err.message}`)
     } finally {
       setProcessingTicket(null)
     }
@@ -170,7 +173,7 @@ const PlaneAutomationProject = ({ onApproveTicket, onUpdatePlane }) => {
                   </button>
                   <button
                     className="btn btn-secondary"
-                    onClick={() => handleDelete(ticket.id)}
+                    onClick={() => setConfirmDelete(ticket.id)}
                     disabled={processingTicket === ticket.id}
                   >
                     Skip
@@ -245,7 +248,7 @@ const PlaneAutomationProject = ({ onApproveTicket, onUpdatePlane }) => {
                       </button>
                       <button
                         className="btn btn-secondary"
-                        onClick={() => handleDelete(ticket.id)}
+                        onClick={() => setConfirmDelete(ticket.id)}
                         disabled={processingTicket === ticket.id}
                       >
                         Skip
@@ -263,6 +266,58 @@ const PlaneAutomationProject = ({ onApproveTicket, onUpdatePlane }) => {
         <div className="plane-empty">
           <p>No tickets in queue</p>
           <p className="empty-details">Pending tickets will appear here when triggered in Plane</p>
+        </div>
+      )}
+
+      {/* Error Message Display */}
+      {errorMessage && (
+        <div className="plane-error-banner">
+          <span className="error-icon">⚠️</span>
+          <span className="error-text">{errorMessage}</span>
+          <button
+            className="error-dismiss"
+            onClick={() => setErrorMessage(null)}
+            aria-label="Dismiss error"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* Confirmation Modal */}
+      {confirmDelete && (
+        <div className="modal-overlay" onClick={() => setConfirmDelete(null)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Remove Ticket from Queue?</h3>
+              <button
+                className="modal-close"
+                onClick={() => setConfirmDelete(null)}
+                aria-label="Close modal"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="modal-body">
+              <p>Are you sure you want to remove ticket <strong>{confirmDelete}</strong> from the queue?</p>
+              <p className="modal-warning">This action cannot be undone.</p>
+            </div>
+            <div className="modal-actions">
+              <button
+                className="btn btn-secondary"
+                onClick={() => setConfirmDelete(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn btn-danger"
+                onClick={() => handleDelete(confirmDelete)}
+                disabled={processingTicket === confirmDelete}
+              >
+                {processingTicket === confirmDelete ? 'Removing...' : 'Remove'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

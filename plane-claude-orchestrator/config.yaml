@@ -11,10 +11,13 @@ plane:
 
   # Plane project IDs to monitor
   project_ids:
-    - "60293f71-b90e-4329-b432-22d1e4227126"  # OLOS project
+    - "60293f71-b90e-4329-b432-22d1e4227126"  # CSLOG project
+    - "b1768c31-1c80-4046-ab0c-d38641e823dd"  # OLOS project
+    - "2058962d-3196-4f01-b4f8-4168d7d34bed"  # DELTA project
+    - "2d808368-97b7-4f9e-a522-fdc707cc7b85"  # INFRA project
 
-  # Plane project identifier for readable issue IDs
-  project_identifier: "CSLOG"
+  # Plane project identifier for readable issue IDs (will use project's own identifier)
+  project_identifier: "MULTI"
 
 tmux_session_service:
   # tmux-session-service API URL (use service name in Docker)
