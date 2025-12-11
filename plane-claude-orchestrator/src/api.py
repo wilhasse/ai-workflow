@@ -155,8 +155,9 @@ class OrchestratorAPI:
 
             ticket = self.pending_tickets[ticket_id]
 
-            # Create session ID
-            session_id = f"{self.config.automation.session_prefix}{ticket_id}"
+            # Create unique session ID with timestamp to allow re-approving same ticket
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            session_id = f"{self.config.automation.session_prefix}{ticket_id}-{timestamp}"
 
             # Build command to run claude-ticket-worker
             command = (
