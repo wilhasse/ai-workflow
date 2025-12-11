@@ -554,6 +554,304 @@ button:not(:disabled):hover {
   width: 100%;
 }
 
+/* xterm.js scrollbar - always visible */
+.terminal-surface .xterm-viewport {
+  overflow-y: scroll !important;
+  /* Firefox */
+  scrollbar-width: thin;
+  scrollbar-color: #4b5563 rgba(15, 23, 42, 0.5);
+}
+
+/* Chrome/Safari/Edge */
+.terminal-surface .xterm-viewport::-webkit-scrollbar {
+  width: 12px;
+  background: rgba(15, 23, 42, 0.5);
+}
+
+.terminal-surface .xterm-viewport::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.5);
+}
+
+.terminal-surface .xterm-viewport::-webkit-scrollbar-thumb {
+  background: #4b5563;
+  border-radius: 6px;
+  border: 2px solid rgba(15, 23, 42, 0.5);
+}
+
+.terminal-surface .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: #6b7280;
+}
+
+/* Force scrollbar visibility even when not needed */
+.terminal-surface .xterm-viewport::-webkit-scrollbar-corner {
+  background: rgba(15, 23, 42, 0.5);
+}
+
+/* Terminal Shortcut Bar */
+.terminal-shortcut-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  background: rgba(15, 23, 42, 0.95);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+
+.terminal-shortcut-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.shortcut-buttons {
+  display: flex;
+  gap: 0.35rem;
+  flex: 1;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.shortcut-btn {
+  flex-shrink: 0;
+  padding: 0.4rem 0.7rem;
+  font-size: 0.85rem;
+  font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+  font-weight: 500;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 6px;
+  background: rgba(30, 41, 59, 0.8);
+  color: #e2e8f0;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.shortcut-btn:hover {
+  background: rgba(59, 130, 246, 0.3);
+  border-color: rgba(59, 130, 246, 0.5);
+}
+
+.shortcut-btn:active {
+  background: rgba(59, 130, 246, 0.5);
+  transform: scale(0.95);
+}
+
+.shortcut-config-btn {
+  flex-shrink: 0;
+  width: 2rem;
+  height: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 6px;
+  background: rgba(30, 41, 59, 0.6);
+  color: #94a3b8;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.shortcut-config-btn:hover {
+  background: rgba(59, 130, 246, 0.2);
+  color: #e2e8f0;
+}
+
+/* Shortcut Configuration Panel */
+.shortcut-config-panel {
+  background: rgba(15, 23, 42, 0.98);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.25);
+  padding: 0.75rem;
+  max-height: 300px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.shortcut-config-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.shortcut-config-header button {
+  background: none;
+  border: none;
+  color: #94a3b8;
+  font-size: 1.2rem;
+  cursor: pointer;
+  padding: 0.25rem;
+}
+
+.shortcut-config-header button:hover {
+  color: #e2e8f0;
+}
+
+.shortcut-config-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.shortcut-config-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem;
+  background: rgba(30, 41, 59, 0.5);
+  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.15);
+}
+
+.shortcut-config-item .shortcut-label {
+  font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+  font-weight: 600;
+  color: #60a5fa;
+  min-width: 3rem;
+}
+
+.shortcut-config-item .shortcut-desc {
+  flex: 1;
+  color: #94a3b8;
+  font-size: 0.85rem;
+}
+
+.shortcut-config-item .shortcut-actions {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.shortcut-config-item .shortcut-actions button {
+  width: 1.75rem;
+  height: 1.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(30, 41, 59, 0.8);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 4px;
+  color: #94a3b8;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.shortcut-config-item .shortcut-actions button:hover:not(:disabled) {
+  background: rgba(59, 130, 246, 0.3);
+  color: #e2e8f0;
+}
+
+.shortcut-config-item .shortcut-actions button:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.shortcut-config-item .shortcut-actions button.remove-btn:hover {
+  background: rgba(239, 68, 68, 0.3);
+  border-color: rgba(239, 68, 68, 0.5);
+  color: #fca5a5;
+}
+
+.shortcut-add-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  background: rgba(30, 41, 59, 0.5);
+  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  margin-bottom: 0.75rem;
+}
+
+.shortcut-add-form input {
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: rgba(15, 23, 42, 0.7);
+  color: #e2e8f0;
+  font-size: 0.9rem;
+}
+
+.shortcut-add-form input::placeholder {
+  color: #64748b;
+}
+
+.shortcut-add-form .form-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.shortcut-add-form button {
+  flex: 1;
+  padding: 0.5rem;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.shortcut-add-form button[type="submit"] {
+  background: rgba(59, 130, 246, 0.8);
+  color: #fff;
+}
+
+.shortcut-add-form button[type="button"] {
+  background: rgba(71, 85, 105, 0.6);
+  color: #e2e8f0;
+}
+
+.shortcut-config-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.shortcut-config-actions button {
+  flex: 1;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: rgba(30, 41, 59, 0.6);
+  color: #e2e8f0;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.shortcut-config-actions button:hover {
+  background: rgba(59, 130, 246, 0.2);
+}
+
+.shortcut-help {
+  font-size: 0.75rem;
+  color: #64748b;
+  line-height: 1.5;
+}
+
+.shortcut-help p {
+  margin: 0 0 0.25rem 0;
+}
+
+.shortcut-help strong {
+  color: #94a3b8;
+}
+
+/* Adjust terminal-surface position when shortcut bar is present */
+.terminal-frame {
+  display: flex;
+  flex-direction: column;
+}
+
+.terminal-frame .terminal-surface {
+  position: relative;
+  flex: 1;
+  inset: unset;
+}
+
 .terminal-status {
   position: absolute;
   top: 0.75rem;
@@ -1344,6 +1642,25 @@ button:not(:disabled):hover {
 .bottom-nav-item .nav-icon {
   font-size: 1.25rem;
   line-height: 1;
+  position: relative;
+}
+
+.nav-badge {
+  position: absolute;
+  top: -4px;
+  right: -8px;
+  background: #f87171;
+  color: white;
+  font-size: 0.65rem;
+  font-weight: 600;
+  min-width: 16px;
+  height: 16px;
+  border-radius: 8px;
+  padding: 0 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
 }
 
 .bottom-nav-item .nav-label {

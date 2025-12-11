@@ -235,6 +235,13 @@ npx wscat -c ws://localhost:5001/ws/sessions/dev-shell
 For production deployment with Let's Encrypt SSL, monitoring, backups, and security hardening:
 - **[DEPLOY.md](DEPLOY.md)** - Complete production deployment guide
 
+## Native SSH Access
+
+For native Windows terminal access using WezTerm or other SSH clients:
+- **[NATIVE-SSH-ACCESS.md](NATIVE-SSH-ACCESS.md)** - SSH + tmux hybrid architecture guide
+
+This enables connecting directly from Windows with persistent sessions that work alongside the web dashboard.
+
 ## Project-Specific Guidelines
 
 See project-specific files for additional context:
@@ -242,3 +249,4 @@ See project-specific files for additional context:
 - **terminal-dashboard/AGENTS.md** - React patterns, commit conventions, security tips
 - **tmux-session-service/SETUP.md** - Complete integration guide for the WebSocket bridge
 - **tmux-session-service/README.md** - API reference and feature overview
+- **wezterm/wezterm-example.lua** - Example WezTerm config for native SSH access

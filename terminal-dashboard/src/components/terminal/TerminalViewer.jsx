@@ -1,9 +1,47 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 
-function TerminalViewer({ wsUrl, fontSize, onBridgeReady }) {
+const SHORTCUTS_STORAGE_KEY = 'terminal-dashboard-shortcuts'
+
+const DEFAULT_SHORTCUTS = [
+  { id: 'ctrl-c', label: 'C-c', keys: '\x03', description: 'Interrupt (Ctrl+C)' },
+  { id: 'ctrl-d', label: 'C-d', keys: '\x04', description: 'EOF (Ctrl+D)' },
+  { id: 'ctrl-z', label: 'C-z', keys: '\x1a', description: 'Suspend (Ctrl+Z)' },
+  { id: 'ctrl-l', label: 'C-l', keys: '\x0c', description: 'Clear (Ctrl+L)' },
+  { id: 'tab', label: 'Tab', keys: '\t', description: 'Tab / Autocomplete' },
+  { id: 'esc', label: 'Esc', keys: '\x1b', description: 'Escape' },
+  { id: 'up', label: '↑', keys: '\x1b[A', description: 'Arrow Up' },
+  { id: 'down', label: '↓', keys: '\x1b[B', description: 'Arrow Down' },
+]
+
+const loadShortcuts = () => {
+  if (typeof window === 'undefined') return DEFAULT_SHORTCUTS
+  try {
+    const stored = window.localStorage.getItem(SHORTCUTS_STORAGE_KEY)
+    if (stored) {
+      const parsed = JSON.parse(stored)
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to load shortcuts', e)
+  }
+  return DEFAULT_SHORTCUTS
+}
+
+const saveShortcuts = (shortcuts) => {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(SHORTCUTS_STORAGE_KEY, JSON.stringify(shortcuts))
+  } catch (e) {
+    console.warn('Failed to save shortcuts', e)
+  }
+}
+
+function TerminalViewer({ wsUrl, fontSize, onBridgeReady, showShortcutBar = true }) {
   const containerRef = useRef(null)
   const termRef = useRef(null)
   const fitAddonRef = useRef(null)
@@ -13,6 +51,9 @@ function TerminalViewer({ wsUrl, fontSize, onBridgeReady }) {
     status: 'connecting',
     message: 'Connecting…',
   })
+  const [shortcuts, setShortcuts] = useState(() => loadShortcuts())
+  const [showShortcutConfig, setShowShortcutConfig] = useState(false)
+  const [editingShortcut, setEditingShortcut] = useState(null)
 
   useEffect(() => {
     fontSizeRef.current = fontSize
@@ -38,6 +79,8 @@ function TerminalViewer({ wsUrl, fontSize, onBridgeReady }) {
       convertEol: true,
       fontSize: fontSizeRef.current,
       fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+      scrollback: 10000,
+      smoothScrollDuration: 100,
       theme: {
         background: '#030712',
         foreground: '#f8fafc',
@@ -193,8 +236,189 @@ function TerminalViewer({ wsUrl, fontSize, onBridgeReady }) {
     fitAddonRef.current?.fit()
   }, [fontSize])
 
+  const sendShortcut = useCallback((keys) => {
+    const socket = socketRef.current
+    if (socket && socket.readyState === window.WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: 'input', payload: keys }))
+    }
+    termRef.current?.focus()
+  }, [])
+
+  const handleAddShortcut = useCallback((newShortcut) => {
+    setShortcuts((prev) => {
+      const updated = [...prev, { ...newShortcut, id: `custom-${Date.now()}` }]
+      saveShortcuts(updated)
+      return updated
+    })
+    setEditingShortcut(null)
+  }, [])
+
+  const handleRemoveShortcut = useCallback((id) => {
+    setShortcuts((prev) => {
+      const updated = prev.filter((s) => s.id !== id)
+      saveShortcuts(updated)
+      return updated
+    })
+  }, [])
+
+  const handleResetShortcuts = useCallback(() => {
+    setShortcuts(DEFAULT_SHORTCUTS)
+    saveShortcuts(DEFAULT_SHORTCUTS)
+  }, [])
+
+  const handleMoveShortcut = useCallback((id, direction) => {
+    setShortcuts((prev) => {
+      const index = prev.findIndex((s) => s.id === id)
+      if (index === -1) return prev
+      const newIndex = direction === 'left' ? index - 1 : index + 1
+      if (newIndex < 0 || newIndex >= prev.length) return prev
+      const updated = [...prev]
+      const temp = updated[index]
+      updated[index] = updated[newIndex]
+      updated[newIndex] = temp
+      saveShortcuts(updated)
+      return updated
+    })
+  }, [])
+
+  const parseKeysInput = (input) => {
+    return input
+      .replace(/\\x([0-9a-fA-F]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+      .replace(/\\t/g, '\t')
+      .replace(/\\n/g, '\n')
+      .replace(/\\e/g, '\x1b')
+      .replace(/\\033/g, '\x1b')
+  }
+
   return (
     <div className="terminal-frame">
+      {showShortcutBar && (
+        <div className="terminal-shortcut-bar">
+          <div className="shortcut-buttons">
+            {shortcuts.map((shortcut) => (
+              <button
+                key={shortcut.id}
+                type="button"
+                className="shortcut-btn"
+                onClick={() => sendShortcut(shortcut.keys)}
+                title={shortcut.description}
+              >
+                {shortcut.label}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            className="shortcut-config-btn"
+            onClick={() => setShowShortcutConfig(!showShortcutConfig)}
+            title="Configure shortcuts"
+          >
+            ⚙
+          </button>
+        </div>
+      )}
+      
+      {showShortcutConfig && (
+        <div className="shortcut-config-panel">
+          <div className="shortcut-config-header">
+            <span>Configure Shortcuts</span>
+            <button type="button" onClick={() => setShowShortcutConfig(false)}>✕</button>
+          </div>
+          <div className="shortcut-config-list">
+            {shortcuts.map((shortcut, index) => (
+              <div key={shortcut.id} className="shortcut-config-item">
+                <span className="shortcut-label">{shortcut.label}</span>
+                <span className="shortcut-desc">{shortcut.description}</span>
+                <div className="shortcut-actions">
+                  <button
+                    type="button"
+                    onClick={() => handleMoveShortcut(shortcut.id, 'left')}
+                    disabled={index === 0}
+                    title="Move left"
+                  >
+                    ←
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleMoveShortcut(shortcut.id, 'right')}
+                    disabled={index === shortcuts.length - 1}
+                    title="Move right"
+                  >
+                    →
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveShortcut(shortcut.id)}
+                    title="Remove"
+                    className="remove-btn"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+          
+          {editingShortcut ? (
+            <form
+              className="shortcut-add-form"
+              onSubmit={(e) => {
+                e.preventDefault()
+                if (editingShortcut.label && editingShortcut.keys) {
+                  handleAddShortcut({
+                    label: editingShortcut.label,
+                    keys: parseKeysInput(editingShortcut.keys),
+                    description: editingShortcut.description || editingShortcut.label,
+                  })
+                }
+              }}
+            >
+              <input
+                type="text"
+                placeholder="Label (e.g., C-a)"
+                value={editingShortcut.label}
+                onChange={(e) => setEditingShortcut((prev) => ({ ...prev, label: e.target.value }))}
+                required
+              />
+              <input
+                type="text"
+                placeholder="Keys (e.g., \x01 or \e[A)"
+                value={editingShortcut.keys}
+                onChange={(e) => setEditingShortcut((prev) => ({ ...prev, keys: e.target.value }))}
+                required
+              />
+              <input
+                type="text"
+                placeholder="Description"
+                value={editingShortcut.description}
+                onChange={(e) => setEditingShortcut((prev) => ({ ...prev, description: e.target.value }))}
+              />
+              <div className="form-actions">
+                <button type="submit">Add</button>
+                <button type="button" onClick={() => setEditingShortcut(null)}>Cancel</button>
+              </div>
+            </form>
+          ) : (
+            <div className="shortcut-config-actions">
+              <button
+                type="button"
+                onClick={() => setEditingShortcut({ label: '', keys: '', description: '' })}
+              >
+                + Add Shortcut
+              </button>
+              <button type="button" onClick={handleResetShortcuts}>
+                Reset to Defaults
+              </button>
+            </div>
+          )}
+          
+          <div className="shortcut-help">
+            <p><strong>Key codes:</strong> \x03 = Ctrl+C, \x04 = Ctrl+D, \t = Tab, \e or \x1b = Escape</p>
+            <p><strong>Arrows:</strong> \e[A = Up, \e[B = Down, \e[C = Right, \e[D = Left</p>
+          </div>
+        </div>
+      )}
+
       <div ref={containerRef} className="terminal-surface" />
       <div className={`terminal-status terminal-status-${connectionState.status}`}>
         <span className="terminal-status-dot" />

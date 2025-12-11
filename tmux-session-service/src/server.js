@@ -272,6 +272,38 @@ const tmuxListSessions = async () => {
     .filter(Boolean)
 }
 
+/**
+ * Discovers tmux sessions that exist but are not yet in the metadata store.
+ * This allows SSH-created sessions to appear in the web dashboard.
+ */
+const discoverTmuxSessions = async () => {
+  try {
+    const activeSessions = await tmuxListSessions()
+    let discovered = 0
+    for (const sessionId of activeSessions) {
+      if (!sessionStore.has(sessionId)) {
+        const now = new Date().toISOString()
+        const record = {
+          sessionId,
+          projectId: null,
+          command: config.defaultShell,
+          source: 'discovered',
+          createdAt: now,
+          updatedAt: now,
+        }
+        sessionStore.set(sessionId, record)
+        discovered++
+      }
+    }
+    if (discovered > 0) {
+      await persistStore()
+      console.log(`[discovery] Found ${discovered} new tmux session(s)`)
+    }
+  } catch (error) {
+    console.warn('[discovery] Session discovery failed:', error.message)
+  }
+}
+
 const tmuxSessionExists = async (sessionId) => {
   const response = await runTmux(['has-session', '-t', sessionId])
   if (response.ok) {
@@ -734,8 +766,15 @@ const start = async () => {
   await ensureDataDir()
   await loadUsers()
   await loadStore()
+
+  // Discover any existing tmux sessions not in metadata
+  await discoverTmuxSessions()
+
   server.listen(config.port, config.host, () => {
     console.log(`tmux-session-service listening on http://${config.host}:${config.port}`)
+
+    // Periodic session discovery (every 60 seconds)
+    setInterval(discoverTmuxSessions, 60000)
   })
 }
 

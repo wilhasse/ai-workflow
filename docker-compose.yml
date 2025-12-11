@@ -68,6 +68,37 @@ services:
       retries: 3
       start_period: 5s
 
+  # Plane-Claude orchestrator daemon
+  plane-claude-orchestrator:
+    build:
+      context: ./plane-claude-orchestrator
+      dockerfile: Dockerfile
+    container_name: ai-workflow-plane-orchestrator
+    environment:
+      - PORT=5002
+      - HOST=0.0.0.0
+    volumes:
+      # Persist state and logs
+      - plane-orchestrator-data:/app/data
+      - plane-orchestrator-logs:/app/logs
+      # Mount Plane MCP config for API access
+      - /home/cslog/.claude.json:/root/.claude.json:ro
+      # Mount /tmp for completion signal files (written by host tmux sessions)
+      - /tmp:/tmp
+      # Mount workspace for potential file access
+      - /home/cslog/ai-workflow:/workspace:ro
+    networks:
+      - ai-workflow-network
+    depends_on:
+      - tmux-session-service
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5002/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
   # Whisper API (optional - uncomment to enable voice transcription)
   # whisper-realtime-api:
   #   build:
@@ -98,4 +129,8 @@ networks:
 
 volumes:
   tmux-session-data:
+    driver: local
+  plane-orchestrator-data:
+    driver: local
+  plane-orchestrator-logs:
     driver: local
