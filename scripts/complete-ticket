@@ -1,0 +1,22 @@
+#!/bin/bash
+# Helper script to manually signal ticket completion for testing
+# Usage: complete-ticket CSLOG-16 "Fixed the database connection retry logic"
+
+set -e
+
+TICKET_ID=$1
+SUMMARY=$2
+
+if [[ -z "$TICKET_ID" ]] || [[ -z "$SUMMARY" ]]; then
+  echo "Usage: complete-ticket TICKET-ID \"SUMMARY\""
+  echo "Example: complete-ticket CSLOG-16 \"Fixed database retry logic with exponential backoff\""
+  exit 1
+fi
+
+# Write completion signal
+echo "$SUMMARY" > "/tmp/completion-$TICKET_ID.txt"
+
+echo "✅ Marked $TICKET_ID as complete"
+echo "📝 Summary: $SUMMARY"
+echo ""
+echo "The daemon will detect this within 5 seconds and move the ticket to the completed queue."

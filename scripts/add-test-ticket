@@ -1,0 +1,54 @@
+#!/bin/bash
+# Helper script to add a test ticket via API
+# Usage: add-test-ticket [TICKET-ID] [TITLE]
+
+set -e
+
+TICKET_ID="${1:-CSLOG-999}"
+TITLE="${2:-Test ticket for workflow verification}"
+# Use nginx proxy in Docker deployment
+DAEMON_URL="https://localhost"
+CURL_OPTS="-k"  # Accept self-signed certificates in dev
+
+echo "Adding test ticket to daemon..."
+echo "Ticket ID: $TICKET_ID"
+echo "Title: $TITLE"
+echo ""
+
+# Create ticket payload
+PAYLOAD=$(cat <<JSON_EOF
+{
+  "id": "$TICKET_ID",
+  "uuid": "test-uuid-$(date +%s)",
+  "project_id": "60293f71-b90e-4329-b432-22d1e4227126",
+  "title": "$TITLE",
+  "description": "<p>This is a test ticket for verifying the Plane automation workflow.</p><p>Created by add-test-ticket script at $(date).</p>",
+  "trigger_type": "manual_test",
+  "created_at": "$(date -Iseconds)"
+}
+JSON_EOF
+)
+
+# Post to API
+RESPONSE=$(curl -s $CURL_OPTS -X POST "$DAEMON_URL/api/test/add-ticket" \
+  -H "Content-Type: application/json" \
+  -d "$PAYLOAD")
+
+if [[ $? -eq 0 ]]; then
+  echo "✅ Ticket added successfully!"
+  echo ""
+  echo "Response:"
+  echo "$RESPONSE" | jq '.' 2>/dev/null || echo "$RESPONSE"
+  echo ""
+  echo "📊 Check daemon health:"
+  curl -s $CURL_OPTS "$DAEMON_URL/orchestrator/health" | jq '.'
+  echo ""
+  echo "🎯 Next steps:"
+  echo "  1. Open dashboard: https://localhost"
+  echo "  2. Click the ⚡ icon in bottom nav"
+  echo "  3. Click 'Approve & Start Claude' on the test ticket"
+else
+  echo "❌ Failed to add ticket"
+  echo "Make sure the daemon is running: curl $CURL_OPTS $DAEMON_URL/orchestrator/health"
+  exit 1
+fi

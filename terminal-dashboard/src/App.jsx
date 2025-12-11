@@ -10,9 +10,11 @@ import ProjectSheet from './components/sheets/ProjectSheet'
 import TerminalSheet from './components/sheets/TerminalSheet'
 import VoiceSheet from './components/sheets/VoiceSheet'
 import SettingsSheet from './components/sheets/SettingsSheet'
+import PlaneSheet from './components/sheets/PlaneSheet'
 
 // Hooks
 import { useIsMobile } from './hooks/useMediaQuery'
+import { usePlaneTickets } from './hooks/usePlaneTickets'
 
 const STORAGE_KEY = 'terminal-dashboard-xterm-v1'
 const FONT_SIZE_STORAGE_KEY = 'terminal-dashboard-font-size'
@@ -311,6 +313,7 @@ function App() {
   const [activeProjectId, setActiveProjectId] = useState(null)
   const [activeTerminalId, setActiveTerminalId] = useState(null)
   const [showSettings, setShowSettings] = useState(false)
+  const [showPlanePanel, setShowPlanePanel] = useState(false)
   const [projectForm, setProjectForm] = useState({ name: '', description: '' })
   const [terminalForm, setTerminalForm] = useState({ name: '', notes: '' })
   const [showTerminalForm, setShowTerminalForm] = useState(false)
@@ -349,6 +352,9 @@ function App() {
   const voiceRecorderRef = useRef(null)
   const voiceStreamRef = useRef(null)
   const voiceChunksRef = useRef([])
+
+  // Plane automation hook
+  const { pendingTickets } = usePlaneTickets()
 
   const cleanupVoiceResources = useCallback(() => {
     if (voiceRecorderRef.current && voiceRecorderRef.current.state !== 'inactive') {
@@ -578,6 +584,54 @@ function App() {
       handleVoiceRecordingStart(true)
     }
   }
+
+  // Plane automation handlers
+  const handleApproveTicket = useCallback((ticket, result) => {
+    // Ensure we have a "plane-automation" project
+    let planeProject = projects.find((p) => p.id === 'plane-automation')
+
+    if (!planeProject) {
+      // Create plane-automation project if it doesn't exist
+      planeProject = {
+        id: 'plane-automation',
+        name: '⚡ Plane Automation',
+        description: 'Claude Code sessions for Plane tickets',
+        protocol: DEFAULT_PROTOCOL,
+        baseHost: DEFAULT_HOST,
+        basePort: DEFAULT_BASE_PORT,
+        portStrategy: DEFAULT_PORT_STRATEGY,
+        portStrategyLocked: true,
+        terminals: [],
+      }
+      setProjects((prev) => [...prev, planeProject])
+    }
+
+    // Create terminal for this ticket
+    const terminal = {
+      id: result.session_id,
+      name: ticket.id,
+      offset: findNextOffset(planeProject.terminals),
+      notes: ticket.title,
+    }
+
+    setProjects((prev) =>
+      prev.map((project) =>
+        project.id === 'plane-automation'
+          ? { ...project, terminals: [...project.terminals, terminal] }
+          : project,
+      ),
+    )
+
+    // Switch to plane-automation project and select the new terminal
+    setActiveProjectId('plane-automation')
+    setActiveTerminalId(terminal.id)
+    setActiveSheet(null)
+  }, [projects])
+
+  const handleUpdatePlane = useCallback((ticket) => {
+    // Optionally close the sheet after Plane update
+    console.log('Plane updated for ticket:', ticket.id)
+  }, [])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -1181,6 +1235,7 @@ function App() {
           projectName={activeProject?.name}
           isRecording={voiceRecording}
           isPending={voicePending}
+          planePendingCount={pendingTickets.length}
         >
           {renderTerminalView()}
         </MobileLayout>
@@ -1231,6 +1286,13 @@ function App() {
             setVoiceError('')
             setVoiceStatus('Idle')
           }}
+        />
+
+        <PlaneSheet
+          isOpen={activeSheet === 'plane'}
+          onClose={() => setActiveSheet(null)}
+          onApproveTicket={handleApproveTicket}
+          onUpdatePlane={handleUpdatePlane}
         />
 
         <SettingsSheet
@@ -1386,6 +1448,17 @@ function App() {
           </button>
           <button
             type="button"
+            className={`icon-btn ${showPlanePanel ? 'active' : ''}`}
+            onClick={() => setShowPlanePanel((prev) => !prev)}
+            title="Plane Automation"
+          >
+            ⚡
+            {pendingTickets.length > 0 && (
+              <span className="badge">{pendingTickets.length}</span>
+            )}
+          </button>
+          <button
+            type="button"
             className="icon-btn"
             onClick={() => setShowSettings(!showSettings)}
             title="Settings"
@@ -1483,6 +1556,23 @@ function App() {
             </button>
           </div>
         </section>
+      )}
+
+      {showPlanePanel && (
+        <div className="settings-panel">
+          <div className="settings-content">
+            <div className="settings-header">
+              <h2>⚡ Plane Automation</h2>
+              <button className="icon-btn" onClick={() => setShowPlanePanel(false)}>✕</button>
+            </div>
+            <PlaneSheet
+              isOpen={true}
+              onClose={() => setShowPlanePanel(false)}
+              onApproveTicket={handleApproveTicket}
+              onUpdatePlane={handleUpdatePlane}
+            />
+          </div>
+        </div>
       )}
 
       {showSettings && (

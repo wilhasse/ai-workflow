@@ -1,0 +1,85 @@
+#!/bin/bash
+# claude-ticket-worker CSLOG-16
+# Launches interactive Claude Code session with ticket context
+# User can type /complete <summary> to signal completion
+
+set -e
+
+TICKET_ID=$1
+REPO_PATH="/home/cslog/ai-workflow"
+
+if [[ -z "$TICKET_ID" ]]; then
+  echo "Error: Ticket ID required"
+  echo "Usage: claude-ticket-worker CSLOG-16"
+  exit 1
+fi
+
+cd "$REPO_PATH" || exit 1
+
+# Extract project identifier and issue number
+# CSLOG-16 -> project=CSLOG, issue=16
+PROJECT_ID="${TICKET_ID%%-*}"
+ISSUE_NUM="${TICKET_ID##*-}"
+
+echo "==== 🎫 Working on $TICKET_ID ===="
+echo ""
+
+# Fetch ticket details via Plane MCP
+echo "📡 Fetching ticket details from Plane..."
+TICKET_DATA=$(claude mcp call plane get_issue_using_readable_identifier \
+  --project_identifier "$PROJECT_ID" \
+  --issue_identifier "$ISSUE_NUM" 2>/dev/null || echo "{}")
+
+if [[ "$TICKET_DATA" == "{}" ]] || [[ -z "$TICKET_DATA" ]]; then
+  echo "⚠️  Warning: Could not fetch ticket details from Plane"
+  echo "Continuing with ticket ID only..."
+  TICKET_TITLE="$TICKET_ID"
+  TICKET_DESC=""
+else
+  TICKET_TITLE=$(echo "$TICKET_DATA" | jq -r '.name // "Unknown"' 2>/dev/null || echo "$TICKET_ID")
+  TICKET_DESC=$(echo "$TICKET_DATA" | jq -r '.description_text // ""' 2>/dev/null || echo "")
+
+  echo "📋 Title: $TICKET_TITLE"
+  if [[ -n "$TICKET_DESC" ]]; then
+    echo "📝 Description:"
+    echo "$TICKET_DESC" | head -10
+    echo ""
+  fi
+fi
+
+echo "=============================="
+echo ""
+echo "🤖 Claude Code will start with ticket context."
+echo "💬 You can interact with Claude to guide the work."
+echo ""
+echo "When complete, type: /complete <summary of what was done>"
+echo ""
+echo "=============================="
+echo ""
+
+# Launch interactive Claude Code session
+# Initial prompt gives context, then user takes over
+PROMPT="I'm working on Plane ticket $TICKET_ID.
+
+Ticket: $TICKET_TITLE"
+
+if [[ -n "$TICKET_DESC" ]]; then
+  PROMPT="$PROMPT
+
+Description:
+$TICKET_DESC"
+fi
+
+PROMPT="$PROMPT
+
+Please help me:
+1. Understand the issue by exploring the codebase
+2. Propose a solution
+3. Implement the fix with my guidance
+
+I'll interact with you during this process. Use Plane MCP if you need more details about the ticket.
+
+When we're done, I'll signal completion by typing: /complete <summary>"
+
+# Launch Claude Code with the ticket context
+exec claude code --prompt "$PROMPT"
