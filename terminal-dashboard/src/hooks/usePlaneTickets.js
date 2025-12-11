@@ -2,11 +2,19 @@ import { useCallback, useEffect, useState } from 'react'
 
 const POLL_INTERVAL = 5000 // Poll every 5 seconds
 
-// Use relative URL in production (nginx proxy) or localhost in development
-const DAEMON_API_BASE =
-  import.meta.env.MODE === 'production'
-    ? '' // Relative URLs - nginx will proxy /api/* to plane-claude-orchestrator
-    : 'http://localhost:5002' // Direct connection in dev mode
+// Build daemon URL based on current host (similar to WebSocket connections)
+const getDaemonApiBase = () => {
+  if (import.meta.env.MODE === 'development') {
+    return 'http://localhost:5002'
+  }
+
+  // Production: use current protocol and host with port 5002
+  const protocol = window.location.protocol
+  const hostname = window.location.hostname
+  return `${protocol}//${hostname}:5002`
+}
+
+const DAEMON_API_BASE = getDaemonApiBase()
 
 /**
  * Hook to poll the Plane orchestrator daemon for pending and completed tickets
@@ -21,11 +29,7 @@ export const usePlaneTickets = () => {
 
   const fetchHealth = useCallback(async () => {
     try {
-      // Use /orchestrator/health in production (nginx proxy), /health in dev
-      const healthEndpoint = import.meta.env.MODE === 'production'
-        ? '/orchestrator/health'
-        : `${DAEMON_API_BASE}/health`
-      const response = await fetch(healthEndpoint)
+      const response = await fetch(`${DAEMON_API_BASE}/health`)
       if (!response.ok) {
         throw new Error(`Health check failed: ${response.status}`)
       }
