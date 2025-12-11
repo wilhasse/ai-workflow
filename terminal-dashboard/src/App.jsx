@@ -11,6 +11,7 @@ import TerminalSheet from './components/sheets/TerminalSheet'
 import VoiceSheet from './components/sheets/VoiceSheet'
 import SettingsSheet from './components/sheets/SettingsSheet'
 import PlaneSheet from './components/sheets/PlaneSheet'
+import PlaneAutomationProject from './components/plane/PlaneAutomationProject'
 
 // Hooks
 import { useIsMobile } from './hooks/useMediaQuery'
@@ -587,6 +588,9 @@ function App() {
 
   // Plane automation handlers
   const handleApproveTicket = useCallback((ticket, result) => {
+    // Note: API call is handled by usePlaneTickets.approveTicket()
+    // This function only handles terminal creation after approval
+
     // Ensure we have a "plane-automation" project
     let planeProject = projects.find((p) => p.id === 'plane-automation')
 
@@ -1565,9 +1569,7 @@ function App() {
               <h2>⚡ Plane Automation</h2>
               <button className="icon-btn" onClick={() => setShowPlanePanel(false)}>✕</button>
             </div>
-            <PlaneSheet
-              isOpen={true}
-              onClose={() => setShowPlanePanel(false)}
+            <PlaneAutomationProject
               onApproveTicket={handleApproveTicket}
               onUpdatePlane={handleUpdatePlane}
             />
