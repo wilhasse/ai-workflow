@@ -82,4 +82,5 @@ I'll interact with you during this process. Use Plane MCP if you need more detai
 When we're done, I'll signal completion by typing: /complete <summary>"
 
 # Launch Claude Code with the ticket context
-exec claude code --prompt "$PROMPT"
+# Pass prompt as positional argument, not --prompt flag
+exec claude code "$PROMPT"
