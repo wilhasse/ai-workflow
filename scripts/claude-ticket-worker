@@ -49,38 +49,26 @@ fi
 
 echo "=============================="
 echo ""
-echo "🤖 Claude Code will start with ticket context."
-echo "💬 You can interact with Claude to guide the work."
+echo "🤖 Starting Claude Code session..."
+echo "💬 Copy/paste this to start working on the ticket:"
 echo ""
-echo "When complete, type: /complete <summary of what was done>"
-echo ""
-echo "=============================="
-echo ""
-
-# Launch interactive Claude Code session
-# Initial prompt gives context, then user takes over
-PROMPT="I'm working on Plane ticket $TICKET_ID.
-
-Ticket: $TICKET_TITLE"
-
+echo "────────────────────────────────────────────────"
+echo "I'm working on Plane ticket $TICKET_ID: $TICKET_TITLE"
 if [[ -n "$TICKET_DESC" ]]; then
-  PROMPT="$PROMPT
-
-Description:
-$TICKET_DESC"
+  echo ""
+  echo "Description:"
+  echo "$TICKET_DESC" | head -5
 fi
+echo ""
+echo "Please help me:"
+echo "1. Understand the issue by exploring the codebase"
+echo "2. Propose a solution"
+echo "3. Implement the fix with my guidance"
+echo ""
+echo "When done, type: /complete <summary of changes>"
+echo "────────────────────────────────────────────────"
+echo ""
 
-PROMPT="$PROMPT
-
-Please help me:
-1. Understand the issue by exploring the codebase
-2. Propose a solution
-3. Implement the fix with my guidance
-
-I'll interact with you during this process. Use Plane MCP if you need more details about the ticket.
-
-When we're done, I'll signal completion by typing: /complete <summary>"
-
-# Launch Claude Code with the ticket context
-# Pass prompt as positional argument, not --prompt flag
-exec claude code "$PROMPT"
+# Launch Claude Code in interactive mode
+# User will paste the ticket context above to start
+exec claude code
