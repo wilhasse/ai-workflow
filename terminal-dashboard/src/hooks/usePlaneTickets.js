@@ -8,10 +8,11 @@ const getDaemonApiBase = () => {
     return 'http://localhost:5002'
   }
 
-  // Production: use current protocol and host with port 5002
+  // Production: use nginx proxy (no port, routes via /orchestrator/* and /api/*)
   const protocol = window.location.protocol
   const hostname = window.location.hostname
-  return `${protocol}//${hostname}:5002`
+  const port = window.location.port ? `:${window.location.port}` : ''
+  return `${protocol}//${hostname}${port}`
 }
 
 const DAEMON_API_BASE = getDaemonApiBase()
@@ -29,7 +30,7 @@ export const usePlaneTickets = () => {
 
   const fetchHealth = useCallback(async () => {
     try {
-      const response = await fetch(`${DAEMON_API_BASE}/health`)
+      const response = await fetch(`${DAEMON_API_BASE}/orchestrator/health`)
       if (!response.ok) {
         throw new Error(`Health check failed: ${response.status}`)
       }
