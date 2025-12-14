@@ -198,6 +198,64 @@
         font-size: 0.85rem;
         color: #94a3b8;
       }
+      /* Reference Voice Recording */
+      .voice-section {
+        background: rgba(15, 23, 42, 0.6);
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        border-radius: 12px;
+        padding: 1rem;
+        margin: 1rem 0;
+      }
+      .voice-section h3 {
+        margin: 0 0 0.75rem 0;
+        font-size: 1rem;
+        color: #94a3b8;
+      }
+      .voice-controls {
+        display: flex;
+        gap: 0.75rem;
+        align-items: center;
+        flex-wrap: wrap;
+        justify-content: center;
+      }
+      button.recording {
+        background: linear-gradient(135deg, #ef4444, #dc2626);
+        animation: pulse 1.5s infinite;
+      }
+      @keyframes pulse {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+        50% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+      }
+      .voice-indicator {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.5rem 1rem;
+        background: rgba(34, 197, 94, 0.15);
+        border: 1px solid rgba(34, 197, 94, 0.4);
+        border-radius: 8px;
+        font-size: 0.9rem;
+        color: #86efac;
+      }
+      .voice-indicator.hidden {
+        display: none;
+      }
+      .voice-indicator .dot {
+        width: 8px;
+        height: 8px;
+        background: #22c55e;
+        border-radius: 50%;
+      }
+      #voice-preview {
+        width: 100%;
+        margin-top: 0.75rem;
+        border-radius: 8px;
+      }
+      .or-divider {
+        color: #64748b;
+        font-size: 0.85rem;
+        padding: 0 0.5rem;
+      }
     </style>
   </head>
   <body>
@@ -269,13 +327,24 @@
           </label>
         </div>
 
-        <div id="voice-upload">
-          <label class="file-upload">
-            <strong>Reference Voice (optional)</strong>
-            <span>5-10s audio for voice cloning</span>
-            <input type="file" id="voiceInput" accept="audio/*" />
-          </label>
-          <span id="voice-filename"></span>
+        <div class="voice-section">
+          <h3>Reference Voice (for accent/voice cloning)</h3>
+          <div class="voice-controls">
+            <button id="record-voice" class="secondary">Record Voice</button>
+            <button id="stop-voice" class="secondary" disabled>Stop</button>
+            <span class="or-divider">or</span>
+            <label class="file-upload" style="padding: 0.5rem 1rem;">
+              <span>Upload audio</span>
+              <input type="file" id="voiceInput" accept="audio/*" />
+            </label>
+            <button id="clear-voice" class="secondary">Clear</button>
+          </div>
+          <div id="voice-active" class="voice-indicator hidden">
+            <span class="dot"></span>
+            <span id="voice-filename">Reference voice active</span>
+          </div>
+          <audio id="voice-preview" controls style="display: none;"></audio>
+          <p id="voice-status" style="text-align: center; font-size: 0.85rem; color: #94a3b8; margin: 0.5rem 0 0 0;"></p>
         </div>
 
         <div id="tts-controls">
@@ -431,11 +500,117 @@
       const ttsAudio = document.getElementById("tts-audio");
       const ttsStatus = document.getElementById("tts-status");
 
-      let selectedVoiceFile = null;
+      // Voice recording elements
+      const recordVoiceBtn = document.getElementById("record-voice");
+      const stopVoiceBtn = document.getElementById("stop-voice");
+      const clearVoiceBtn = document.getElementById("clear-voice");
+      const voiceActive = document.getElementById("voice-active");
+      const voicePreview = document.getElementById("voice-preview");
+      const voiceStatus = document.getElementById("voice-status");
 
+      let selectedVoiceFile = null;
+      let voiceRecorder = null;
+      let voiceChunks = [];
+      let voiceStream = null;
+
+      // Voice file upload handler
       voiceInput.addEventListener("change", (e) => {
-        selectedVoiceFile = e.target.files[0];
-        voiceFilename.textContent = selectedVoiceFile ? selectedVoiceFile.name : "";
+        const file = e.target.files[0];
+        if (file) {
+          selectedVoiceFile = file;
+          voiceFilename.textContent = file.name;
+          voiceActive.classList.remove("hidden");
+          voicePreview.src = URL.createObjectURL(file);
+          voicePreview.style.display = "block";
+          voiceStatus.textContent = "Voice loaded from file";
+        }
+      });
+
+      // Record voice button
+      recordVoiceBtn.addEventListener("click", async () => {
+        if (!secureContext) {
+          voiceStatus.textContent = "Microphone requires HTTPS or localhost";
+          return;
+        }
+        try {
+          voiceStatus.textContent = "Requesting microphone...";
+          voiceStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          voiceRecorder = new MediaRecorder(voiceStream, { mimeType: "audio/webm" });
+
+          voiceRecorder.addEventListener("dataavailable", (event) => {
+            if (event.data.size > 0) {
+              voiceChunks.push(event.data);
+            }
+          });
+
+          voiceRecorder.addEventListener("start", () => {
+            voiceChunks = [];
+            voiceStatus.textContent = "Recording... (5-10 seconds recommended)";
+            recordVoiceBtn.disabled = true;
+            recordVoiceBtn.classList.add("recording");
+            stopVoiceBtn.disabled = false;
+          });
+
+          voiceRecorder.addEventListener("stop", () => {
+            const blob = new Blob(voiceChunks, { type: "audio/webm" });
+            selectedVoiceFile = new File([blob], "reference_voice.webm", { type: "audio/webm" });
+
+            // Show preview
+            if (voicePreview.src && voicePreview.src.startsWith("blob:")) {
+              URL.revokeObjectURL(voicePreview.src);
+            }
+            voicePreview.src = URL.createObjectURL(blob);
+            voicePreview.style.display = "block";
+
+            voiceFilename.textContent = "Recorded voice";
+            voiceActive.classList.remove("hidden");
+            voiceStatus.textContent = `Voice recorded (${(blob.size / 1024).toFixed(1)} KB)`;
+
+            // Cleanup
+            if (voiceStream) {
+              voiceStream.getTracks().forEach(t => t.stop());
+              voiceStream = null;
+            }
+            recordVoiceBtn.disabled = false;
+            recordVoiceBtn.classList.remove("recording");
+            stopVoiceBtn.disabled = true;
+          });
+
+          voiceRecorder.start();
+        } catch (error) {
+          console.error(error);
+          voiceStatus.textContent = "Microphone permission denied";
+          recordVoiceBtn.disabled = false;
+          recordVoiceBtn.classList.remove("recording");
+        }
+      });
+
+      // Stop voice recording
+      stopVoiceBtn.addEventListener("click", () => {
+        if (voiceRecorder && voiceRecorder.state === "recording") {
+          voiceRecorder.stop();
+        }
+      });
+
+      // Clear voice
+      clearVoiceBtn.addEventListener("click", () => {
+        selectedVoiceFile = null;
+        voiceFilename.textContent = "Reference voice active";
+        voiceActive.classList.add("hidden");
+        voiceInput.value = "";
+        if (voicePreview.src && voicePreview.src.startsWith("blob:")) {
+          URL.revokeObjectURL(voicePreview.src);
+        }
+        voicePreview.src = "";
+        voicePreview.style.display = "none";
+        voiceStatus.textContent = "";
+        if (voiceStream) {
+          voiceStream.getTracks().forEach(t => t.stop());
+          voiceStream = null;
+        }
+        if (voiceRecorder && voiceRecorder.state === "recording") {
+          voiceRecorder.stop();
+        }
       });
 
       clearTtsBtn.addEventListener("click", () => {
@@ -443,9 +618,6 @@
         ttsAudio.style.display = "none";
         ttsAudio.src = "";
         ttsStatus.textContent = "";
-        selectedVoiceFile = null;
-        voiceFilename.textContent = "";
-        voiceInput.value = "";
       });
 
       synthesizeBtn.addEventListener("click", async () => {

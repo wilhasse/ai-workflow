@@ -220,8 +220,8 @@ async def load_model() -> None:
     # Load TTS model
     try:
         if TTS_BACKEND == "chatterbox":
-            from chatterbox.tts import ChatterboxTTS
-            app.state.tts_model = ChatterboxTTS.from_pretrained(device=TTS_DEVICE)
+            from chatterbox.mtl_tts import ChatterboxMultilingualTTS
+            app.state.tts_model = ChatterboxMultilingualTTS.from_pretrained(device=TTS_DEVICE)
             app.state.tts_backend = "chatterbox"
         elif TTS_BACKEND == "f5tts":
             from f5_tts.api import F5TTS
@@ -402,12 +402,14 @@ def _run_tts_synthesis(
             wav = model.generate(
                 text,
                 audio_prompt_path=ref_audio_path,
+                language_id=language,
                 exaggeration=CHATTERBOX_EXAGGERATION,
                 cfg_weight=CHATTERBOX_CFG,
             )
         else:
             wav = model.generate(
                 text,
+                language_id=language,
                 exaggeration=CHATTERBOX_EXAGGERATION,
                 cfg_weight=CHATTERBOX_CFG,
             )
