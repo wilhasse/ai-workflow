@@ -1,21 +1,35 @@
 import asyncio
+import base64
+import io
 import json
 import os
+import re
+import subprocess
 import tempfile
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Literal, Optional
 from urllib.parse import urljoin
 
 import httpx
-from fastapi import FastAPI, File, HTTPException, UploadFile, status
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from faster_whisper import WhisperModel
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 MAX_AUDIO_BYTES = int(os.getenv("WHISPER_MAX_AUDIO_BYTES", 60 * 1024 * 1024))
+
+# TTS Configuration
+TTS_BACKEND = os.getenv("TTS_BACKEND", "chatterbox")
+TTS_DEVICE = os.getenv("TTS_DEVICE", "cuda")
+TTS_LANGUAGE = os.getenv("TTS_LANGUAGE", "pt")
+TTS_MAX_TEXT_LENGTH = int(os.getenv("TTS_MAX_TEXT_LENGTH", "5000"))
+TTS_SAMPLE_RATE = int(os.getenv("TTS_SAMPLE_RATE", "24000"))
+TTS_DEFAULT_VOICE = os.getenv("TTS_DEFAULT_VOICE", "")
+CHATTERBOX_EXAGGERATION = float(os.getenv("CHATTERBOX_EXAGGERATION", "0.5"))
+CHATTERBOX_CFG = float(os.getenv("CHATTERBOX_CFG", "0.5"))
 
 
 class Segment(BaseModel):
@@ -32,6 +46,31 @@ class TranscriptionResponse(BaseModel):
     language: str
     duration: float
     segments: List[Segment]
+
+
+# TTS Models
+class TTSStreamChunk(BaseModel):
+    """Streaming TTS chunk."""
+    type: Literal["audio", "metadata", "error"]
+    data: Optional[str] = None  # Base64 encoded audio chunk
+    duration: Optional[float] = None
+    sample_rate: Optional[int] = None
+    detail: Optional[str] = None
+
+
+class VoiceInfo(BaseModel):
+    """Voice information model."""
+    id: str
+    name: str
+    language: str
+    description: Optional[str] = None
+
+
+class VoicesResponse(BaseModel):
+    """Response model for available voices."""
+    backend: str
+    voices: List[VoiceInfo]
+    default_voice: Optional[str] = None
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -159,8 +198,11 @@ def _build_form_fields(language: Optional[str], translate: bool, vad_filter: boo
 async def load_model() -> None:
     if REMOTE_MODE:
         app.state.model = None
+        app.state.tts_model = None
+        app.state.tts_backend = None
         return
 
+    # Load Whisper model
     model_size = os.getenv("WHISPER_MODEL_SIZE", "medium")
     device = os.getenv("WHISPER_DEVICE", "cuda")
     compute_type = _initial_compute_type(device)
@@ -175,6 +217,25 @@ async def load_model() -> None:
     except Exception as exc:  # pragma: no cover
         raise RuntimeError("Failed to load Whisper model") from exc
 
+    # Load TTS model
+    try:
+        if TTS_BACKEND == "chatterbox":
+            from chatterbox.tts import ChatterboxTTS
+            app.state.tts_model = ChatterboxTTS.from_pretrained(device=TTS_DEVICE)
+            app.state.tts_backend = "chatterbox"
+        elif TTS_BACKEND == "f5tts":
+            from f5_tts.api import F5TTS
+            app.state.tts_model = F5TTS(device=TTS_DEVICE)
+            app.state.tts_backend = "f5tts"
+        else:
+            app.state.tts_model = None
+            app.state.tts_backend = None
+    except Exception as exc:  # pragma: no cover
+        # TTS is optional - log error but don't fail startup
+        print(f"Warning: Failed to load TTS model ({TTS_BACKEND}): {exc}")
+        app.state.tts_model = None
+        app.state.tts_backend = None
+
 
 @app.on_event("shutdown")
 async def cleanup_model() -> None:
@@ -182,6 +243,8 @@ async def cleanup_model() -> None:
         return
     if hasattr(app.state, "model"):
         delattr(app.state, "model")
+    if hasattr(app.state, "tts_model"):
+        delattr(app.state, "tts_model")
 
 
 def get_model() -> WhisperModel:
@@ -193,6 +256,22 @@ def get_model() -> WhisperModel:
     model = getattr(app.state, "model", None)
     if model is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Model is not ready")
+    return model
+
+
+def get_tts_model():
+    """Get the loaded TTS model."""
+    if REMOTE_MODE:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Running in remote proxy mode; local TTS model disabled.",
+        )
+    model = getattr(app.state, "tts_model", None)
+    if model is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="TTS model is not ready or not configured",
+        )
     return model
 
 
@@ -255,6 +334,107 @@ async def _run_transcription(
     return await asyncio.to_thread(worker)
 
 
+# TTS Helper Functions
+def _preprocess_portuguese(text: str) -> str:
+    """Preprocess text for Brazilian Portuguese TTS."""
+    try:
+        from num2words import num2words
+        # Convert numbers to Portuguese words
+        text = re.sub(
+            r'\d+',
+            lambda m: num2words(int(m.group()), lang='pt_BR'),
+            text
+        )
+    except Exception:
+        pass  # If num2words fails, use original text
+    return text
+
+
+def _convert_to_wav(audio_data, sample_rate: int) -> bytes:
+    """Convert numpy audio to WAV bytes."""
+    import soundfile as sf
+    buffer = io.BytesIO()
+    sf.write(buffer, audio_data, sample_rate, format='WAV')
+    buffer.seek(0)
+    return buffer.read()
+
+
+def _convert_to_mp3(audio_data, sample_rate: int) -> bytes:
+    """Convert numpy audio to MP3 bytes using ffmpeg."""
+    import soundfile as sf
+
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_tmp:
+        sf.write(wav_tmp.name, audio_data, sample_rate)
+        wav_path = wav_tmp.name
+
+    mp3_path = wav_path.replace(".wav", ".mp3")
+    try:
+        subprocess.run([
+            "ffmpeg", "-y", "-i", wav_path,
+            "-codec:a", "libmp3lame", "-qscale:a", "2",
+            mp3_path
+        ], check=True, capture_output=True)
+
+        with open(mp3_path, "rb") as f:
+            return f.read()
+    finally:
+        if os.path.exists(wav_path):
+            os.remove(wav_path)
+        if os.path.exists(mp3_path):
+            os.remove(mp3_path)
+
+
+def _run_tts_synthesis(
+    text: str,
+    language: str,
+    ref_audio_path: Optional[str] = None,
+) -> tuple:
+    """Run TTS synthesis synchronously (called from thread pool)."""
+    model = get_tts_model()
+    backend = getattr(app.state, "tts_backend", None)
+
+    # Preprocess text for pt-BR
+    if language == "pt":
+        text = _preprocess_portuguese(text)
+
+    if backend == "chatterbox":
+        if ref_audio_path:
+            wav = model.generate(
+                text,
+                audio_prompt_path=ref_audio_path,
+                exaggeration=CHATTERBOX_EXAGGERATION,
+                cfg_weight=CHATTERBOX_CFG,
+            )
+        else:
+            wav = model.generate(
+                text,
+                exaggeration=CHATTERBOX_EXAGGERATION,
+                cfg_weight=CHATTERBOX_CFG,
+            )
+        # Chatterbox returns tensor, convert to numpy
+        audio_np = wav.cpu().numpy().squeeze()
+        return audio_np, model.sr
+
+    elif backend == "f5tts":
+        ref_file = ref_audio_path or TTS_DEFAULT_VOICE
+        if not ref_file:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="F5-TTS requires a reference audio file for voice cloning"
+            )
+        wav, sr, _ = model.infer(
+            ref_file=ref_file,
+            ref_text="",  # Auto-transcribe reference
+            gen_text=text,
+        )
+        return wav, sr
+
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail=f"Unknown TTS backend: {backend}"
+    )
+
+
 @app.get("/health", tags=["system"])
 async def healthcheck() -> JSONResponse:
     if REMOTE_MODE:
@@ -270,8 +450,18 @@ async def healthcheck() -> JSONResponse:
             ) from exc
         return JSONResponse(content={"status": "proxy", "upstream": upstream})
 
-    model_loaded = hasattr(app.state, "model")
-    return JSONResponse(content={"status": "ok" if model_loaded else "loading"})
+    model_loaded = hasattr(app.state, "model") and app.state.model is not None
+    tts_loaded = hasattr(app.state, "tts_model") and app.state.tts_model is not None
+    tts_backend = getattr(app.state, "tts_backend", None)
+
+    return JSONResponse(content={
+        "status": "ok" if model_loaded else "loading",
+        "whisper": "ready" if model_loaded else "loading",
+        "tts": {
+            "status": "ready" if tts_loaded else "not_loaded",
+            "backend": tts_backend,
+        }
+    })
 
 
 @app.get("/", response_class=HTMLResponse, tags=["ui"])
@@ -368,5 +558,208 @@ async def transcribe_stream(
         finally:
             if os.path.exists(audio_path):
                 os.remove(audio_path)
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+# TTS Endpoints
+@app.get("/tts/voices", response_model=VoicesResponse, tags=["tts"])
+async def list_voices() -> VoicesResponse:
+    """List available voices and models for TTS."""
+    backend = getattr(app.state, "tts_backend", None)
+    voices = []
+
+    if backend == "chatterbox":
+        # Chatterbox supports these languages natively
+        languages = [
+            ("pt", "Portuguese"),
+            ("en", "English"),
+            ("es", "Spanish"),
+            ("fr", "French"),
+            ("de", "German"),
+            ("it", "Italian"),
+            ("ja", "Japanese"),
+            ("ko", "Korean"),
+            ("zh", "Chinese"),
+            ("ar", "Arabic"),
+            ("ru", "Russian"),
+            ("nl", "Dutch"),
+            ("pl", "Polish"),
+            ("tr", "Turkish"),
+            ("sv", "Swedish"),
+            ("da", "Danish"),
+            ("fi", "Finnish"),
+            ("no", "Norwegian"),
+            ("he", "Hebrew"),
+            ("hi", "Hindi"),
+            ("ms", "Malay"),
+            ("sw", "Swahili"),
+            ("el", "Greek"),
+        ]
+        for lang_code, lang_name in languages:
+            voices.append(VoiceInfo(
+                id=f"chatterbox-{lang_code}",
+                name=f"Chatterbox {lang_name}",
+                language=lang_code,
+                description="Chatterbox voice with emotion control and voice cloning",
+            ))
+
+    elif backend == "f5tts":
+        voices.append(VoiceInfo(
+            id="f5tts-ptbr",
+            name="F5-TTS Brazilian Portuguese",
+            language="pt",
+            description="F5-TTS fine-tuned for Brazilian Portuguese (requires reference audio)",
+        ))
+
+    return VoicesResponse(
+        backend=backend or "none",
+        voices=voices,
+        default_voice=TTS_DEFAULT_VOICE or None,
+    )
+
+
+@app.post("/tts", tags=["tts"])
+async def synthesize_speech(
+    text: str = Form(...),
+    language: Optional[str] = Form(None),
+    format: str = Form("wav"),
+    reference_audio: Optional[UploadFile] = File(None),
+) -> Response:
+    """
+    Synthesize speech from text.
+
+    - **text**: Text to convert to speech (max 5000 chars)
+    - **language**: Language code (default: pt for Brazilian Portuguese)
+    - **format**: Output format (wav or mp3)
+    - **reference_audio**: Optional audio file for voice cloning (5-10s recommended)
+    """
+    # Validate text length
+    if len(text) > TTS_MAX_TEXT_LENGTH:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Text exceeds maximum length of {TTS_MAX_TEXT_LENGTH} characters"
+        )
+
+    if not text.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Text cannot be empty"
+        )
+
+    # Handle reference audio if provided
+    ref_audio_path = None
+    if reference_audio:
+        ref_audio_path = await _save_upload_temporarily(reference_audio)
+
+    try:
+        # Run synthesis in thread pool
+        audio_data, sample_rate = await asyncio.to_thread(
+            _run_tts_synthesis,
+            text=text,
+            language=language or TTS_LANGUAGE,
+            ref_audio_path=ref_audio_path,
+        )
+
+        # Convert to requested format
+        if format == "mp3":
+            audio_bytes = _convert_to_mp3(audio_data, sample_rate)
+            media_type = "audio/mpeg"
+            filename = "speech.mp3"
+        else:
+            audio_bytes = _convert_to_wav(audio_data, sample_rate)
+            media_type = "audio/wav"
+            filename = "speech.wav"
+
+        return Response(
+            content=audio_bytes,
+            media_type=media_type,
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+
+    finally:
+        if ref_audio_path and os.path.exists(ref_audio_path):
+            os.remove(ref_audio_path)
+
+
+@app.post("/tts/stream", tags=["tts"])
+async def synthesize_speech_stream(
+    text: str = Form(...),
+    language: Optional[str] = Form(None),
+    reference_audio: Optional[UploadFile] = File(None),
+) -> StreamingResponse:
+    """
+    Stream synthesized speech via Server-Sent Events.
+
+    Emits audio data as base64-encoded chunks.
+    """
+    # Validate text length
+    if len(text) > TTS_MAX_TEXT_LENGTH:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Text exceeds maximum length of {TTS_MAX_TEXT_LENGTH} characters"
+        )
+
+    if not text.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Text cannot be empty"
+        )
+
+    ref_audio_path = None
+    if reference_audio:
+        ref_audio_path = await _save_upload_temporarily(reference_audio)
+
+    queue: asyncio.Queue[Optional[dict]] = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+
+    def worker() -> None:
+        try:
+            audio_data, sample_rate = _run_tts_synthesis(
+                text=text,
+                language=language or TTS_LANGUAGE,
+                ref_audio_path=ref_audio_path,
+            )
+
+            # Convert to WAV bytes
+            wav_bytes = _convert_to_wav(audio_data, sample_rate)
+            audio_b64 = base64.b64encode(wav_bytes).decode('utf-8')
+
+            # Send audio chunk
+            loop.call_soon_threadsafe(queue.put_nowait, {
+                "type": "audio",
+                "data": audio_b64,
+                "sample_rate": sample_rate,
+                "format": "wav",
+            })
+
+            # Send completion metadata
+            duration = len(audio_data) / sample_rate if sample_rate > 0 else 0
+            loop.call_soon_threadsafe(queue.put_nowait, {
+                "type": "metadata",
+                "duration": duration,
+                "text_length": len(text),
+            })
+
+        except Exception as exc:
+            loop.call_soon_threadsafe(queue.put_nowait, {
+                "type": "error",
+                "detail": str(exc),
+            })
+        finally:
+            loop.call_soon_threadsafe(queue.put_nowait, None)
+
+    asyncio.create_task(asyncio.to_thread(worker))
+
+    async def event_stream():
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                yield f"data: {json.dumps(item)}\n\n"
+        finally:
+            if ref_audio_path and os.path.exists(ref_audio_path):
+                os.remove(ref_audio_path)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

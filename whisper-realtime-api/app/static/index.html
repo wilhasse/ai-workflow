@@ -134,6 +134,70 @@
       .hidden {
         display: none;
       }
+      /* TTS Section Styles */
+      .section-divider {
+        border: none;
+        border-top: 1px solid rgba(148, 163, 184, 0.2);
+        margin: 2rem 0;
+      }
+      #tts-section h2 {
+        margin-top: 0;
+      }
+      #tts-text {
+        width: 100%;
+        min-height: 100px;
+        padding: 1rem;
+        border-radius: 12px;
+        background: rgba(15, 23, 42, 0.6);
+        border: 1px solid rgba(148, 163, 184, 0.4);
+        color: #e2e8f0;
+        font-family: inherit;
+        font-size: 1rem;
+        resize: vertical;
+        box-sizing: border-box;
+      }
+      #tts-text:focus {
+        outline: none;
+        border-color: #6366f1;
+      }
+      #tts-options {
+        display: flex;
+        gap: 1rem;
+        margin: 1rem 0;
+        flex-wrap: wrap;
+        justify-content: center;
+      }
+      #tts-controls {
+        display: flex;
+        gap: 1rem;
+        justify-content: center;
+        margin: 1rem 0;
+      }
+      #tts-result {
+        margin-top: 1rem;
+      }
+      #tts-audio {
+        width: 100%;
+        border-radius: 8px;
+      }
+      #tts-status {
+        text-align: center;
+        min-height: 1.2em;
+        font-weight: 500;
+        color: #38bdf8;
+        margin-top: 0.5rem;
+      }
+      #voice-upload {
+        margin: 1rem 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.5rem;
+      }
+      #voice-filename {
+        font-size: 0.85rem;
+        color: #94a3b8;
+      }
     </style>
   </head>
   <body>
@@ -173,6 +237,56 @@
       <section>
         <h2>Transcript</h2>
         <div id="transcript">Ready.</div>
+      </section>
+
+      <hr class="section-divider" />
+
+      <section id="tts-section">
+        <h2>Text to Speech</h2>
+        <textarea id="tts-text" placeholder="Enter text to synthesize..."></textarea>
+
+        <div id="tts-options">
+          <label>
+            Language
+            <select id="tts-language">
+              <option value="pt" selected>Português (BR)</option>
+              <option value="en">English</option>
+              <option value="es">Español</option>
+              <option value="fr">Français</option>
+              <option value="de">Deutsch</option>
+              <option value="it">Italiano</option>
+              <option value="ja">日本語</option>
+              <option value="ko">한국어</option>
+              <option value="zh">中文</option>
+            </select>
+          </label>
+          <label>
+            Format
+            <select id="tts-format">
+              <option value="wav">WAV</option>
+              <option value="mp3">MP3</option>
+            </select>
+          </label>
+        </div>
+
+        <div id="voice-upload">
+          <label class="file-upload">
+            <strong>Reference Voice (optional)</strong>
+            <span>5-10s audio for voice cloning</span>
+            <input type="file" id="voiceInput" accept="audio/*" />
+          </label>
+          <span id="voice-filename"></span>
+        </div>
+
+        <div id="tts-controls">
+          <button id="synthesize" class="primary">Synthesize</button>
+          <button id="clear-tts" class="secondary">Clear</button>
+        </div>
+
+        <div id="tts-result">
+          <audio id="tts-audio" controls style="display: none;"></audio>
+          <p id="tts-status"></p>
+        </div>
       </section>
     </main>
 
@@ -304,6 +418,85 @@
         statusEl.textContent = `Uploading ${file.name}...`;
         await sendForTranscription(file);
         event.target.value = "";
+      });
+
+      // TTS Elements and Logic
+      const ttsText = document.getElementById("tts-text");
+      const ttsLanguage = document.getElementById("tts-language");
+      const ttsFormat = document.getElementById("tts-format");
+      const synthesizeBtn = document.getElementById("synthesize");
+      const clearTtsBtn = document.getElementById("clear-tts");
+      const voiceInput = document.getElementById("voiceInput");
+      const voiceFilename = document.getElementById("voice-filename");
+      const ttsAudio = document.getElementById("tts-audio");
+      const ttsStatus = document.getElementById("tts-status");
+
+      let selectedVoiceFile = null;
+
+      voiceInput.addEventListener("change", (e) => {
+        selectedVoiceFile = e.target.files[0];
+        voiceFilename.textContent = selectedVoiceFile ? selectedVoiceFile.name : "";
+      });
+
+      clearTtsBtn.addEventListener("click", () => {
+        ttsText.value = "";
+        ttsAudio.style.display = "none";
+        ttsAudio.src = "";
+        ttsStatus.textContent = "";
+        selectedVoiceFile = null;
+        voiceFilename.textContent = "";
+        voiceInput.value = "";
+      });
+
+      synthesizeBtn.addEventListener("click", async () => {
+        const text = ttsText.value.trim();
+        if (!text) {
+          ttsStatus.textContent = "Please enter some text.";
+          return;
+        }
+
+        ttsStatus.textContent = "Synthesizing...";
+        synthesizeBtn.disabled = true;
+        ttsAudio.style.display = "none";
+
+        const form = new FormData();
+        form.append("text", text);
+        form.append("language", ttsLanguage.value);
+        form.append("format", ttsFormat.value);
+
+        if (selectedVoiceFile) {
+          form.append("reference_audio", selectedVoiceFile);
+        }
+
+        try {
+          const response = await fetch("/tts", {
+            method: "POST",
+            body: form,
+          });
+
+          if (!response.ok) {
+            const error = await response.text();
+            throw new Error(error || `HTTP ${response.status}`);
+          }
+
+          const blob = await response.blob();
+          const url = URL.createObjectURL(blob);
+
+          // Revoke previous URL if exists
+          if (ttsAudio.src && ttsAudio.src.startsWith("blob:")) {
+            URL.revokeObjectURL(ttsAudio.src);
+          }
+
+          ttsAudio.src = url;
+          ttsAudio.style.display = "block";
+          ttsStatus.textContent = "Synthesis complete!";
+
+        } catch (error) {
+          console.error(error);
+          ttsStatus.textContent = `Error: ${error.message}`;
+        } finally {
+          synthesizeBtn.disabled = false;
+        }
       });
     </script>
   </body>
