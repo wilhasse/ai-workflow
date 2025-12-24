@@ -1,0 +1,25 @@
+{
+  "workspaces": [
+    {
+      "id": "ai-workflow",
+      "name": "AI Workflow",
+      "path": "/home/cslog/ai-workflow",
+      "color": "#3498db",
+      "icon": "folder-blue",
+      "description": "Terminal dashboard & Whisper API"
+    },
+    {
+      "id": "scratch",
+      "name": "Scratch",
+      "path": "/home/cslog",
+      "color": "#9b59b6",
+      "icon": "folder-violet",
+      "description": "Quick experiments"
+    }
+  ],
+  "settings": {
+    "terminal": "xfce4-terminal",
+    "shell": "/bin/bash",
+    "defaultEditor": "code"
+  }
+}

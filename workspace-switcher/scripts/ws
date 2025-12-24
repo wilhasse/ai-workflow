@@ -1,0 +1,131 @@
+#!/bin/bash
+# ws - Quick workspace session manager
+# Usage: ws [command] [workspace-id]
+#   ws              - List workspaces and sessions
+#   ws <id>         - Attach or create workspace session
+#   ws new <id>     - Force create new session (kills existing)
+#   ws kill <id>    - Kill a session
+#   ws list         - List all tmux sessions
+#   ws add          - Launch GUI to add workspace
+
+CONFIG_FILE="$HOME/workspace-switcher/workspaces.json"
+
+# Colors
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+GRAY='\033[0;90m'
+NC='\033[0m' # No Color
+
+list_workspaces() {
+    echo -e "${BLUE}Workspaces:${NC}"
+    echo ""
+
+    # Get active sessions
+    active_sessions=$(tmux list-sessions -F '#{session_name}' 2>/dev/null || echo "")
+
+    # Parse JSON and list workspaces
+    if command -v jq &> /dev/null; then
+        jq -r '.workspaces[] | "\(.id)|\(.name)|\(.path)"' "$CONFIG_FILE" 2>/dev/null | while IFS='|' read -r id name path; do
+            if echo "$active_sessions" | grep -q "^${id}$"; then
+                windows=$(tmux list-windows -t "$id" 2>/dev/null | wc -l)
+                echo -e "  ${GREEN}●${NC} ${name} (${id}) - ${windows} window(s)"
+            else
+                echo -e "  ${GRAY}○${NC} ${name} (${id})"
+            fi
+            echo -e "    ${GRAY}$path${NC}"
+        done
+    else
+        echo "  (install jq for better output)"
+        cat "$CONFIG_FILE"
+    fi
+    echo ""
+}
+
+attach_workspace() {
+    local ws_id="$1"
+
+    # Get workspace path from config
+    local ws_path
+    if command -v jq &> /dev/null; then
+        ws_path=$(jq -r --arg id "$ws_id" '.workspaces[] | select(.id == $id) | .path' "$CONFIG_FILE" 2>/dev/null)
+    fi
+
+    if [ -z "$ws_path" ]; then
+        ws_path="$HOME"
+    fi
+
+    # Check if session exists
+    if tmux has-session -t "$ws_id" 2>/dev/null; then
+        echo -e "${GREEN}Attaching to session: $ws_id${NC}"
+        tmux attach-session -t "$ws_id"
+    else
+        echo -e "${YELLOW}Creating new session: $ws_id in $ws_path${NC}"
+        tmux new-session -s "$ws_id" -c "$ws_path"
+    fi
+}
+
+kill_workspace() {
+    local ws_id="$1"
+    if tmux has-session -t "$ws_id" 2>/dev/null; then
+        echo -e "${YELLOW}Killing session: $ws_id${NC}"
+        tmux kill-session -t "$ws_id"
+    else
+        echo "Session not found: $ws_id"
+    fi
+}
+
+new_workspace() {
+    local ws_id="$1"
+
+    # Get workspace path
+    local ws_path
+    if command -v jq &> /dev/null; then
+        ws_path=$(jq -r --arg id "$ws_id" '.workspaces[] | select(.id == $id) | .path' "$CONFIG_FILE" 2>/dev/null)
+    fi
+
+    if [ -z "$ws_path" ]; then
+        ws_path="$HOME"
+    fi
+
+    # Kill existing if present
+    tmux kill-session -t "$ws_id" 2>/dev/null
+
+    echo -e "${YELLOW}Creating fresh session: $ws_id${NC}"
+    tmux new-session -s "$ws_id" -c "$ws_path"
+}
+
+case "$1" in
+    ""|"help"|"-h"|"--help")
+        list_workspaces
+        echo "Commands:"
+        echo "  ws <id>       Attach or create workspace"
+        echo "  ws new <id>   Force new session"
+        echo "  ws kill <id>  Kill session"
+        echo "  ws list       List tmux sessions"
+        echo "  ws add        Open GUI to add workspace"
+        ;;
+    "list")
+        tmux list-sessions
+        ;;
+    "add")
+        python3 ~/workspace-switcher/workspace-panel.py &
+        ;;
+    "kill")
+        if [ -n "$2" ]; then
+            kill_workspace "$2"
+        else
+            echo "Usage: ws kill <workspace-id>"
+        fi
+        ;;
+    "new")
+        if [ -n "$2" ]; then
+            new_workspace "$2"
+        else
+            echo "Usage: ws new <workspace-id>"
+        fi
+        ;;
+    *)
+        attach_workspace "$1"
+        ;;
+esac
