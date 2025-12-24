@@ -20,10 +20,11 @@ REFRESH_INTERVAL = 3000  # ms
 class WorkspaceButton(Gtk.Button):
     """A styled button representing a workspace/tmux session"""
 
-    def __init__(self, workspace, session_info=None):
+    def __init__(self, workspace, session_info=None, on_remove=None):
         super().__init__()
         self.workspace = workspace
         self.session_info = session_info
+        self.on_remove_callback = on_remove
 
         # Main container
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
@@ -75,6 +76,40 @@ class WorkspaceButton(Gtk.Button):
 
         # Connect click handler
         self.connect('clicked', self.on_clicked)
+
+        # Right-click context menu
+        self.connect('button-press-event', self.on_button_press)
+
+    def on_button_press(self, widget, event):
+        """Handle right-click for context menu"""
+        if event.button == 3:  # Right click
+            menu = Gtk.Menu()
+
+            # Remove item
+            remove_item = Gtk.MenuItem(label=f"Remove '{self.workspace['name']}'")
+            remove_item.connect('activate', self.on_remove_clicked)
+            menu.append(remove_item)
+
+            # Kill session item (if session exists)
+            if self.session_info:
+                kill_item = Gtk.MenuItem(label="Kill tmux session")
+                kill_item.connect('activate', self.on_kill_session)
+                menu.append(kill_item)
+
+            menu.show_all()
+            menu.popup_at_pointer(event)
+            return True
+        return False
+
+    def on_remove_clicked(self, menu_item):
+        """Remove this workspace from config"""
+        if self.on_remove_callback:
+            self.on_remove_callback(self.workspace['id'])
+
+    def on_kill_session(self, menu_item):
+        """Kill the tmux session for this workspace"""
+        session_name = self.workspace['id']
+        subprocess.run(['tmux', 'kill-session', '-t', session_name])
 
     def _apply_color(self, color):
         """Apply workspace color to button"""
@@ -371,7 +406,7 @@ class WorkspaceSwitcher(Gtk.Window):
             session_info = sessions.get(ws['id'])
             if session_info:
                 active_count += 1
-            btn = WorkspaceButton(ws, session_info)
+            btn = WorkspaceButton(ws, session_info, on_remove=self.remove_workspace)
             self.workspace_box.pack_start(btn, False, False, 0)
 
         # Update footer
@@ -405,6 +440,13 @@ class WorkspaceSwitcher(Gtk.Window):
 
         with open(CONFIG_FILE, 'w') as f:
             json.dump(config, f, indent=2)
+
+    def remove_workspace(self, workspace_id):
+        """Remove a workspace from config"""
+        workspaces = self.load_config()
+        workspaces = [ws for ws in workspaces if ws['id'] != workspace_id]
+        self.save_config(workspaces)
+        self.refresh_workspaces()
 
     def get_tmux_sessions(self):
         """Get info about running tmux sessions"""
