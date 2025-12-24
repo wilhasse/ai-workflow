@@ -9,6 +9,14 @@
       "description": "Terminal dashboard & Whisper API"
     },
     {
+      "id": "cslog-crm",
+      "name": "CRM",
+      "path": "/home/cslog/cslog-crm",
+      "color": "#e74c3c",
+      "icon": "folder-red",
+      "description": "CRM project"
+    },
+    {
       "id": "scratch",
       "name": "Scratch",
       "path": "/home/cslog",

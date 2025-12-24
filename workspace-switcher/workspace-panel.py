@@ -14,7 +14,7 @@ import os
 import signal
 import sys
 
-CONFIG_FILE = os.path.expanduser("~/workspace-switcher/workspaces.json")
+CONFIG_FILE = os.path.expanduser("~/ai-workflow/workspace-switcher/workspaces.json")
 REFRESH_INTERVAL = 3000  # ms
 
 class WorkspaceButton(Gtk.Button):
