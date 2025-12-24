@@ -456,7 +456,30 @@ class WorkspaceSwitcher(Gtk.Window):
             json.dump(config, f, indent=2)
 
     def remove_workspace(self, workspace_id):
-        """Remove a workspace from config"""
+        """Remove a workspace from config, optionally killing tmux session"""
+        # Check if tmux session exists
+        result = subprocess.run(['tmux', 'has-session', '-t', workspace_id],
+                                capture_output=True)
+        session_exists = result.returncode == 0
+
+        if session_exists:
+            # Ask user if they want to kill the session too
+            dialog = Gtk.MessageDialog(
+                transient_for=self,
+                flags=0,
+                message_type=Gtk.MessageType.QUESTION,
+                buttons=Gtk.ButtonsType.YES_NO,
+                text=f"Kill tmux session '{workspace_id}'?"
+            )
+            dialog.format_secondary_text(
+                "A tmux session is running for this workspace. Kill it too?"
+            )
+            response = dialog.run()
+            dialog.destroy()
+
+            if response == Gtk.ResponseType.YES:
+                subprocess.run(['tmux', 'kill-session', '-t', workspace_id])
+
         workspaces = self.load_config()
         workspaces = [ws for ws in workspaces if ws['id'] != workspace_id]
         self.save_config(workspaces)

@@ -10,19 +10,11 @@
     },
     {
       "id": "cslog-crm",
-      "name": "CRM",
+      "name": "CRM Review",
       "path": "/home/cslog/cslog-crm",
       "color": "#e74c3c",
       "icon": "folder-red",
       "description": "CRM project"
-    },
-    {
-      "id": "scratch",
-      "name": "Scratch",
-      "path": "/home/cslog",
-      "color": "#9b59b6",
-      "icon": "folder-violet",
-      "description": "Quick experiments"
     }
   ],
   "settings": {
