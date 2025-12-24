@@ -1,4 +1,5 @@
 import http from 'node:http'
+import os from 'node:os'
 import { execFile } from 'node:child_process'
 import { randomUUID, randomBytes, scrypt, timingSafeEqual } from 'node:crypto'
 import { promisify } from 'node:util'
@@ -18,7 +19,7 @@ const config = {
   tmuxBin: process.env.TMUX_BIN ?? 'tmux',
   defaultShell: process.env.SHELL_CMD ?? process.env.SHELL ?? '/bin/bash',
   dataDir: process.env.DATA_DIR ?? path.join(projectRoot, 'data'),
-  workspacesConfig: process.env.WORKSPACES_CONFIG ?? '/home/cslog/ai-workflow/workspace-switcher/workspaces.json',
+  workspacesConfig: process.env.WORKSPACES_CONFIG ?? path.join(os.homedir(), 'workspace-switcher', 'workspaces.json'),
 }
 const storeFile = path.join(config.dataDir, 'sessions.json')
 const userStoreFile = path.join(config.dataDir, 'users.json')
