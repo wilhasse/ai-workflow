@@ -6,362 +6,94 @@ import './App.css'
 import TerminalViewer from './components/terminal/TerminalViewer'
 import ConfirmDialog from './components/dialogs/ConfirmDialog'
 import MobileLayout from './components/layout/MobileLayout'
-import ProjectSheet from './components/sheets/ProjectSheet'
-import TerminalSheet from './components/sheets/TerminalSheet'
+import WorkspaceSheet from './components/sheets/WorkspaceSheet'
+import WindowSheet from './components/sheets/WindowSheet'
 import VoiceSheet from './components/sheets/VoiceSheet'
 import SettingsSheet from './components/sheets/SettingsSheet'
-import PlaneSheet from './components/sheets/PlaneSheet'
-import PlaneAutomationProject from './components/plane/PlaneAutomationProject'
+import WorkspaceCard from './components/workspace/WorkspaceCard'
+import WindowTabs from './components/workspace/WindowTabs'
 
 // Hooks
 import { useIsMobile } from './hooks/useMediaQuery'
-import { usePlaneTickets } from './hooks/usePlaneTickets'
+import { useWorkspaces } from './hooks/useWorkspaces'
 
-const STORAGE_KEY = 'terminal-dashboard-xterm-v1'
+// Storage keys
 const FONT_SIZE_STORAGE_KEY = 'terminal-dashboard-font-size'
-const PROJECT_VIEW_MODE_STORAGE_KEY = 'terminal-dashboard-project-view-mode'
-const AUTH_STORAGE_KEY = 'terminal-dashboard-auth-token'
 const VOICE_SERVICE_STORAGE_KEY = 'terminal-dashboard-voice-service'
 const VOICE_LANGUAGE_STORAGE_KEY = 'terminal-dashboard-voice-language'
+
+// Constants
 const FONT_SIZE_OPTIONS = [12, 14, 16, 18, 20, 22]
 const DEFAULT_FONT_SIZE = 16
-const PROJECT_VIEW_MODES = {
-  DROPDOWN: 'dropdown',
-  TABS: 'tabs',
-}
 const VOICE_SERVICES = {
   LOCAL: 'local',
   DEEPGRAM: 'deepgram',
 }
 const DEEPGRAM_API_KEY = import.meta.env.VITE_DEEPGRAM_API_KEY || ''
 
-const detectDefaultProtocol = () => {
-  if (typeof window !== 'undefined' && window.location?.protocol) {
-    return window.location.protocol === 'http:' ? 'http' : 'https'
-  }
-  return 'https'
-}
-
-const detectDefaultHost = () => {
-  if (typeof window !== 'undefined' && window.location?.hostname) {
-    return window.location.hostname
-  }
-  return 'localhost'  // Fallback to localhost instead of Docker internal IP
-}
-
-const DEFAULT_PROTOCOL = detectDefaultProtocol()
-const DEFAULT_HOST = detectDefaultHost()
-const DEFAULT_BASE_PORT = 5001
-
+// API base detection for voice transcription
 const detectApiBase = () => {
   if (typeof window === 'undefined') {
-    return `http://localhost:${DEFAULT_BASE_PORT}`
+    return 'http://localhost:5001'
   }
   const { protocol, hostname, port } = window.location
   const isDevPort = port && port !== '80' && port !== '443'
   if (isDevPort) {
-    return `${protocol}//${hostname}:${DEFAULT_BASE_PORT}`
+    return `${protocol}//${hostname}:5001`
   }
   const portSuffix = port ? `:${port}` : ''
   return `${protocol}//${hostname}${portSuffix}/api`
 }
 
 const API_BASE = detectApiBase()
-const PORT_STRATEGIES = {
-  SEQUENTIAL: 'sequential',
-  SINGLE: 'single',
-}
-const DEFAULT_PORT_STRATEGY = PORT_STRATEGIES.SINGLE
 
-const sanitizeHost = (host) => host.trim().replace(/^https?:\/\//i, '').replace(/\/.*/, '')
-
-const getId = () => {
-  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
-    return crypto.randomUUID()
+/**
+ * Build WebSocket URL for workspace terminal connection
+ */
+const buildWorkspaceSocketUrl = (workspaceId, windowIndex = null) => {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const port = window.location.port ? `:${window.location.port}` : ''
+  let url = `${protocol}//${window.location.hostname}${port}/ws/sessions/${workspaceId}`
+  if (windowIndex !== null && Number.isFinite(windowIndex)) {
+    url += `?windowIndex=${windowIndex}`
   }
-  return Math.random().toString(36).slice(2, 11)
-}
-
-const apiFetch = async (path, { method = 'GET', body = null, token = null } = {}) => {
-  const base = API_BASE.endsWith('/') ? API_BASE.slice(0, -1) : API_BASE
-  const normalizedPath = path.startsWith('http')
-    ? path
-    : `${base}${path.startsWith('/') ? path : `/${path}`}`
-  const headers = {
-    'Content-Type': 'application/json',
-  }
-  if (token) {
-    headers.Authorization = `Bearer ${token}`
-  }
-  const options = {
-    method,
-    headers,
-  }
-  if (body) {
-    options.body = JSON.stringify(body)
-  }
-  const response = await fetch(normalizedPath, options)
-  if (response.status === 204) {
-    return {}
-  }
-  let payload = null
-  try {
-    const text = await response.text()
-    payload = text ? JSON.parse(text) : {}
-  } catch (error) {
-    console.warn('Failed to parse API response', error)
-  }
-  if (!response.ok) {
-    const message = payload?.error ?? `Request failed (${response.status})`
-    throw new Error(message)
-  }
-  return payload ?? {}
-}
-
-const findNextOffset = (terminals) => {
-  const used = new Set(terminals.map((terminal) => terminal.offset ?? 0))
-  let candidate = 0
-  while (used.has(candidate)) {
-    candidate += 1
-  }
-  return candidate
-}
-
-const buildUrlForOffset = (project, offset) => {
-  const port = project.basePort + offset
-  return `${project.protocol}://${project.baseHost}:${port}`
-}
-
-const getTerminalBaseUrl = (project, terminal) => {
-  if (project.portStrategy === PORT_STRATEGIES.SINGLE) {
-    return `${project.protocol}://${project.baseHost}:${project.basePort}`
-  }
-  const offset = Number.isFinite(terminal.offset) ? terminal.offset : 0
-  return buildUrlForOffset(project, offset)
-}
-
-const buildTerminalSocketUrl = (project, terminal) => {
-  try {
-    // Check if we're connecting to the same host (Docker deployment via nginx)
-    const currentHost = window.location.hostname
-    const targetHost = project.baseHost
-
-    // If connecting to same host or localhost, use nginx proxy (no port)
-    if (currentHost === targetHost || targetHost === 'localhost' || targetHost === '127.0.0.1') {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const port = window.location.port ? `:${window.location.port}` : ''
-      const url = `${protocol}//${currentHost}${port}/ws/sessions/${terminal.id}?projectId=${project.id}`
-      return url
-    }
-
-    // Otherwise use the configured host:port (for external/multi-host setups)
-    const baseUrl = new URL(getTerminalBaseUrl(project, terminal))
-    baseUrl.protocol = project.protocol === 'http' ? 'ws:' : 'wss:'
-    baseUrl.pathname = `/ws/sessions/${terminal.id}`
-    baseUrl.search = ''
-    baseUrl.searchParams.set('projectId', project.id)
-    return baseUrl.toString()
-  } catch (error) {
-    console.warn('Failed to build socket URL', error.message)
-    return ''
-  }
-}
-
-const formatEndpointLabel = (url) => {
-  try {
-    const parsed = new URL(url)
-    return parsed.host
-  } catch {
-    return url.replace(/^https?:\/\//i, '')
-  }
-}
-
-const getDefaultProjects = () => [
-  {
-    id: 'shell-workspace',
-    name: 'Shell Workspace',
-    description: '',
-    protocol: DEFAULT_PROTOCOL,
-    baseHost: DEFAULT_HOST,
-    basePort: DEFAULT_BASE_PORT,
-    portStrategy: DEFAULT_PORT_STRATEGY,
-    portStrategyLocked: true,
-    terminals: [],
-  },
-]
-
-const normalizeProjects = (projects) => {
-  console.log('[Migration] Starting project normalization, count:', projects.length)
-  return projects.map((project) => {
-    const protocol = project.protocol === 'http' ? 'http' : DEFAULT_PROTOCOL
-    const storedHost = project.baseHost ? sanitizeHost(project.baseHost) : DEFAULT_HOST
-
-    // Auto-migrate Docker internal IPs to current hostname
-    const isDockerInternalIP =
-      typeof storedHost === 'string' && (
-        storedHost === '10.1.0.10' ||
-        storedHost.startsWith('172.') ||
-        storedHost.startsWith('192.168.')
-      )
-
-    const currentHostname = typeof window !== 'undefined' && window.location?.hostname
-    const baseHost = isDockerInternalIP && currentHostname
-      ? currentHostname
-      : storedHost
-
-    // Debug logging for all projects
-    console.log(`[Migration] Project "${project.name}": baseHost="${storedHost}" → "${baseHost}" (isDockerIP: ${isDockerInternalIP})`)
-
-
-    const basePort = Number.isFinite(project.basePort) ? project.basePort : DEFAULT_BASE_PORT
-    const portStrategyLocked = project.portStrategyLocked === true
-    const requestedStrategy =
-      project.portStrategy === PORT_STRATEGIES.SEQUENTIAL
-        ? PORT_STRATEGIES.SEQUENTIAL
-        : PORT_STRATEGIES.SINGLE
-    const portStrategy = portStrategyLocked ? requestedStrategy : DEFAULT_PORT_STRATEGY
-    const usedOffsets = new Set()
-
-    const normalizedTerminals = Array.isArray(project.terminals)
-      ? project.terminals.map((terminal, index) => {
-          let offset = Number.isFinite(terminal.offset) ? terminal.offset : null
-          if (offset === null && terminal.url) {
-            try {
-              const parsed = new URL(terminal.url)
-              if (parsed.port) {
-                const portNumber = Number.parseInt(parsed.port, 10)
-                if (!Number.isNaN(portNumber)) {
-                  offset = portNumber - basePort
-                }
-              }
-            } catch (error) {
-              console.warn('Could not derive offset from URL', terminal.url, error)
-            }
-          }
-
-          if (!Number.isFinite(offset)) {
-            offset = index
-          }
-
-          while (usedOffsets.has(offset)) {
-            offset += 1
-          }
-          usedOffsets.add(offset)
-
-          return {
-            id: terminal.id ?? getId(),
-            name: terminal.name ?? 'Shell session',
-            offset,
-            notes: terminal.notes ?? '',
-          }
-        })
-      : []
-
-    return {
-      id: project.id ?? getId(),
-      name: project.name ?? 'Shell Project',
-      description: project.description ?? '',
-      protocol,
-      baseHost,
-      basePort,
-      portStrategy,
-      portStrategyLocked,
-      terminals: normalizedTerminals,
-    }
-  })
-}
-
-const loadStoredProjects = () => {
-  if (typeof window === 'undefined') {
-    return getDefaultProjects()
-  }
-  const raw = window.localStorage.getItem(STORAGE_KEY)
-  if (!raw) {
-    return getDefaultProjects()
-  }
-  try {
-    const parsed = JSON.parse(raw)
-    if (Array.isArray(parsed) && parsed.length) {
-      return normalizeProjects(parsed)
-    }
-    return getDefaultProjects()
-  } catch (error) {
-    console.warn('Failed to parse stored projects, resetting to defaults.', error)
-    return getDefaultProjects()
-  }
-}
-
-const detectSecureContext = () => {
-  if (typeof window === 'undefined') {
-    return false
-  }
-  if (window.isSecureContext) {
-    return true
-  }
-  const protocol = window.location.protocol
-  if (protocol === 'https:') {
-    return true
-  }
-  const hostname = window.location.hostname
-  return hostname === 'localhost' || hostname === '127.0.0.1'
+  return url
 }
 
 function App() {
   const isMobile = useIsMobile()
-  const [activeSheet, setActiveSheet] = useState(null)
-  const [projects, setProjects] = useState(() => loadStoredProjects())
-  const [authToken, setAuthToken] = useState(() => {
-    if (typeof window === 'undefined') {
-      return ''
-    }
-    return window.localStorage.getItem(AUTH_STORAGE_KEY) ?? ''
-  })
-  const guestProjectsRef = useRef(null)
-  if (guestProjectsRef.current === null) {
-    guestProjectsRef.current = projects
-  }
-  const [currentUser, setCurrentUser] = useState(null)
-  const [authMode, setAuthMode] = useState('login')
-  const [authForm, setAuthForm] = useState({ username: '', password: '' })
-  const [authStatus, setAuthStatus] = useState(() => (authToken ? 'checking' : 'loggedOut'))
-  const [authError, setAuthError] = useState('')
-  const [authBusy, setAuthBusy] = useState(false)
-  const [isSyncingProjects, setIsSyncingProjects] = useState(false)
-  const [syncError, setSyncError] = useState('')
-  const [projectSyncNonce, setProjectSyncNonce] = useState(0)
-  const [activeProjectId, setActiveProjectId] = useState(null)
-  const [activeTerminalId, setActiveTerminalId] = useState(null)
-  const [showSettings, setShowSettings] = useState(false)
-  const [showPlanePanel, setShowPlanePanel] = useState(false)
-  const [projectForm, setProjectForm] = useState({ name: '', description: '' })
-  const [terminalForm, setTerminalForm] = useState({ name: '', notes: '' })
-  const [showTerminalForm, setShowTerminalForm] = useState(false)
-  const [confirmDialog, setConfirmDialog] = useState({ isOpen: false, message: '', onConfirm: null })
+
+  // Workspaces from API (read-only)
+  const {
+    workspaces,
+    loading: workspacesLoading,
+    error: workspacesError,
+    refresh: refreshWorkspaces,
+    fetchWindows,
+  } = useWorkspaces()
+
+  // Active workspace and window state
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState(null)
+  const [activeWindowIndex, setActiveWindowIndex] = useState(null)
+  const [windows, setWindows] = useState([])
+  const [windowsLoading, setWindowsLoading] = useState(false)
+
+  // Terminal state
   const [terminalFontSize, setTerminalFontSize] = useState(() => {
-    if (typeof window === 'undefined') {
-      return DEFAULT_FONT_SIZE
-    }
-    const stored = Number.parseInt(window.localStorage.getItem(FONT_SIZE_STORAGE_KEY) ?? '', 10)
-    return FONT_SIZE_OPTIONS.includes(stored) ? stored : DEFAULT_FONT_SIZE
-  })
-  const [projectViewMode, setProjectViewMode] = useState(() => {
-    if (typeof window === 'undefined') {
-      return PROJECT_VIEW_MODES.DROPDOWN
-    }
-    const stored = window.localStorage.getItem(PROJECT_VIEW_MODE_STORAGE_KEY)
-    return stored === PROJECT_VIEW_MODES.TABS ? PROJECT_VIEW_MODES.TABS : PROJECT_VIEW_MODES.DROPDOWN
+    if (typeof window === 'undefined') return DEFAULT_FONT_SIZE
+    const stored = window.localStorage.getItem(FONT_SIZE_STORAGE_KEY)
+    return stored ? Number(stored) : DEFAULT_FONT_SIZE
   })
   const [terminalBridge, setTerminalBridge] = useState(null)
-  const [showVoicePanel, setShowVoicePanel] = useState(false)
-  const [isSecureContext, setIsSecureContext] = useState(() => detectSecureContext())
-  const [voiceLanguage, setVoiceLanguage] = useState(() => {
-    if (typeof window === 'undefined') return 'pt-BR'
-    return window.localStorage.getItem(VOICE_LANGUAGE_STORAGE_KEY) || 'pt-BR'
-  })
+
+  // Voice transcription state
   const [voiceService, setVoiceService] = useState(() => {
-    if (typeof window === 'undefined') return VOICE_SERVICES.DEEPGRAM
-    const stored = window.localStorage.getItem(VOICE_SERVICE_STORAGE_KEY)
-    return stored === VOICE_SERVICES.LOCAL ? VOICE_SERVICES.LOCAL : VOICE_SERVICES.DEEPGRAM
+    if (typeof window === 'undefined') return VOICE_SERVICES.LOCAL
+    return window.localStorage.getItem(VOICE_SERVICE_STORAGE_KEY) || VOICE_SERVICES.LOCAL
+  })
+  const [voiceLanguage, setVoiceLanguage] = useState(() => {
+    if (typeof window === 'undefined') return 'pt'
+    return window.localStorage.getItem(VOICE_LANGUAGE_STORAGE_KEY) || 'pt'
   })
   const [voiceTranscript, setVoiceTranscript] = useState('')
   const [voiceStatus, setVoiceStatus] = useState('Idle')
@@ -372,131 +104,162 @@ function App() {
   const voiceStreamRef = useRef(null)
   const voiceChunksRef = useRef([])
 
-  // Plane automation hook
-  const { pendingTickets } = usePlaneTickets()
+  // UI state
+  const [activeSheet, setActiveSheet] = useState(null)
+  const [confirmDialog, setConfirmDialog] = useState({
+    isOpen: false,
+    message: '',
+    onConfirm: null,
+  })
 
-  const cleanupVoiceResources = useCallback(() => {
-    if (voiceRecorderRef.current && voiceRecorderRef.current.state !== 'inactive') {
-      try {
-        voiceRecorderRef.current.stop()
-      } catch (error) {
-        console.warn('Failed to stop recorder', error)
+  // Check if we're in a secure context (for microphone access)
+  const isSecureContext = typeof window !== 'undefined' &&
+    (window.isSecureContext || window.location.protocol === 'https:')
+
+  // Get active workspace
+  const activeWorkspace = useMemo(
+    () => workspaces.find((ws) => ws.id === activeWorkspaceId) ?? null,
+    [workspaces, activeWorkspaceId]
+  )
+
+  // Load windows when workspace changes
+  useEffect(() => {
+    if (!activeWorkspaceId) {
+      setWindows([])
+      setActiveWindowIndex(null)
+      return
+    }
+
+    let cancelled = false
+    const loadWindows = async () => {
+      setWindowsLoading(true)
+      const windowList = await fetchWindows(activeWorkspaceId)
+      if (!cancelled) {
+        setWindows(windowList)
+        setWindowsLoading(false)
+        // Auto-select first window if none selected
+        if (windowList.length > 0 && activeWindowIndex === null) {
+          const activeWindow = windowList.find((w) => w.active)
+          setActiveWindowIndex(activeWindow?.index ?? windowList[0].index)
+        }
       }
     }
-    voiceRecorderRef.current = null
-    if (voiceStreamRef.current) {
-      voiceStreamRef.current.getTracks().forEach((track) => {
-        try {
-          track.stop()
-        } catch (error) {
-          console.warn('Failed to stop track', error)
-        }
-      })
+
+    loadWindows()
+    return () => {
+      cancelled = true
     }
-    voiceStreamRef.current = null
-    voiceChunksRef.current = []
-    setVoiceRecording(false)
-  }, [])
+  }, [activeWorkspaceId, fetchWindows])
+
+  // Refresh windows
+  const handleRefreshWindows = useCallback(async () => {
+    if (!activeWorkspaceId) return
+    setWindowsLoading(true)
+    const windowList = await fetchWindows(activeWorkspaceId)
+    setWindows(windowList)
+    setWindowsLoading(false)
+  }, [activeWorkspaceId, fetchWindows])
+
+  // Persist font size
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(FONT_SIZE_STORAGE_KEY, String(terminalFontSize))
+  }, [terminalFontSize])
+
+  // Persist voice settings
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(VOICE_SERVICE_STORAGE_KEY, voiceService)
+  }, [voiceService])
 
   useEffect(() => {
-    setIsSecureContext(detectSecureContext())
-  }, [])
-
-  useEffect(() => () => {
-    cleanupVoiceResources()
-  }, [cleanupVoiceResources])
-
-  const transcribeWithDeepgram = useCallback(async (audioBlob) => {
-    if (!DEEPGRAM_API_KEY) {
-      throw new Error('Deepgram API key not configured. Add VITE_DEEPGRAM_API_KEY to .env')
-    }
-    const langParam = voiceLanguage || 'pt-BR'
-    const response = await fetch(
-      `https://api.deepgram.com/v1/listen?model=nova-2&language=${langParam}&smart_format=true`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Token ${DEEPGRAM_API_KEY}`,
-          'Content-Type': audioBlob.type || 'audio/webm',
-        },
-        body: audioBlob,
-      }
-    )
-    if (!response.ok) {
-      const errText = await response.text()
-      throw new Error(`Deepgram error: ${errText || response.status}`)
-    }
-    const data = await response.json()
-    return data.results?.channels?.[0]?.alternatives?.[0]?.transcript || ''
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(VOICE_LANGUAGE_STORAGE_KEY, voiceLanguage)
   }, [voiceLanguage])
 
-  const transcribeWithLocalWhisper = useCallback(async (file) => {
-    const form = new FormData()
-    form.append('file', file)
-    if (voiceLanguage) {
-      const whisperLang = voiceLanguage.split('-')[0]
-      form.append('language', whisperLang)
-    }
-    const response = await fetch('/api/whisper/transcribe', {
-      method: 'POST',
-      body: form,
-    })
-    if (!response.ok) {
-      const message = await response.text()
-      throw new Error(message || `HTTP ${response.status}`)
-    }
-    const payload = await response.json()
-    return typeof payload.text === 'string' ? payload.text.trim() : ''
-  }, [voiceLanguage])
-
-  const sendVoiceFileForTranscription = useCallback(
-    async (file, autoSendToTerminal = false) => {
-      if (!file) {
-        return
-      }
-      setVoicePending(true)
-      setVoiceStatus('Transcribing…')
-      setVoiceError('')
+  // Voice transcription functions
+  const cleanupVoiceResources = () => {
+    if (voiceRecorderRef.current) {
       try {
-        let transcript = ''
-        if (voiceService === VOICE_SERVICES.DEEPGRAM) {
-          transcript = await transcribeWithDeepgram(file)
-        } else {
-          transcript = await transcribeWithLocalWhisper(file)
-        }
-        transcript = transcript.trim()
-        setVoiceTranscript(transcript)
-        setVoiceStatus('Transcription complete')
-
-        if (autoSendToTerminal && transcript && terminalBridge) {
-          terminalBridge.sendInput(`${transcript}\n`)
-          setVoiceStatus('Sent to terminal')
-          setVoiceTranscript('')
-        }
-      } catch (error) {
-        console.error(error)
-        setVoiceError(error.message || 'Failed to transcribe audio.')
-        setVoiceStatus('Error')
-        setVoiceTranscript('')
-      } finally {
-        setVoicePending(false)
+        voiceRecorderRef.current.stop()
+      } catch {
+        // ignore
       }
-    },
-    [voiceService, transcribeWithDeepgram, transcribeWithLocalWhisper, terminalBridge],
-  )
+      voiceRecorderRef.current = null
+    }
+    if (voiceStreamRef.current) {
+      voiceStreamRef.current.getTracks().forEach((track) => track.stop())
+      voiceStreamRef.current = null
+    }
+    voiceChunksRef.current = []
+  }
+
+  const sendVoiceFileForTranscription = async (blob, autoSend = false) => {
+    setVoicePending(true)
+    setVoiceStatus('Transcribing…')
+    setVoiceError('')
+    try {
+      const formData = new FormData()
+      formData.append('file', blob, 'recording.webm')
+      formData.append('language', voiceLanguage)
+      formData.append('translate', 'false')
+
+      let transcriptText = ''
+
+      if (voiceService === VOICE_SERVICES.DEEPGRAM && DEEPGRAM_API_KEY) {
+        const deepgramResponse = await fetch(
+          `https://api.deepgram.com/v1/listen?model=nova-2&language=${voiceLanguage}&punctuate=true`,
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Token ${DEEPGRAM_API_KEY}`,
+              'Content-Type': 'audio/webm',
+            },
+            body: blob,
+          }
+        )
+        if (!deepgramResponse.ok) {
+          throw new Error('Deepgram transcription failed')
+        }
+        const deepgramData = await deepgramResponse.json()
+        transcriptText =
+          deepgramData.results?.channels?.[0]?.alternatives?.[0]?.transcript ?? ''
+      } else {
+        const base = API_BASE.endsWith('/') ? API_BASE.slice(0, -1) : API_BASE
+        const response = await fetch(`${base}/transcribe`, {
+          method: 'POST',
+          body: formData,
+        })
+        if (!response.ok) {
+          throw new Error('Transcription service unavailable')
+        }
+        const data = await response.json()
+        transcriptText = data.text ?? ''
+      }
+
+      setVoiceTranscript(transcriptText)
+      setVoiceStatus('Ready')
+
+      if (autoSend && transcriptText.trim() && terminalBridge) {
+        terminalBridge.sendInput(`${transcriptText.trim()}\n`)
+        setVoiceTranscript('')
+        setVoiceStatus('Sent to terminal')
+      }
+    } catch (error) {
+      console.error(error)
+      setVoiceError(error.message ?? 'Transcription failed')
+      setVoiceStatus('Error')
+    } finally {
+      setVoicePending(false)
+    }
+  }
 
   const handleVoiceRecordingStart = async (autoSendToTerminal = false) => {
     if (!isSecureContext) {
-      setVoiceError('Microphone access requires HTTPS or localhost.')
+      setVoiceError('Microphone requires HTTPS or localhost.')
       return
     }
-    if (voiceRecording || voicePending) {
-      return
-    }
-    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
-      setVoiceError('Microphone API is unavailable in this browser.')
-      return
-    }
+    cleanupVoiceResources()
     try {
       setVoiceError('')
       setVoiceTranscript('')
@@ -518,14 +281,14 @@ function App() {
       })
       recorder.addEventListener('stop', async () => {
         setVoiceRecording(false)
-        const blob = new Blob(voiceChunksRef.current, { type: 'audio/webm' })
+        const blobData = new Blob(voiceChunksRef.current, { type: 'audio/webm' })
         cleanupVoiceResources()
-        if (!blob.size) {
+        if (!blobData.size) {
           setVoiceError('No audio captured.')
           setVoiceStatus('Idle')
           return
         }
-        await sendVoiceFileForTranscription(blob, autoSendToTerminal)
+        await sendVoiceFileForTranscription(blobData, autoSendToTerminal)
       })
       recorder.start()
       voiceRecorderRef.current = recorder
@@ -545,19 +308,9 @@ function App() {
   }
 
   const handleVoiceFileSelection = async (file) => {
-    if (!file) {
-      return
-    }
+    if (!file) return
     cleanupVoiceResources()
     await sendVoiceFileForTranscription(file)
-  }
-
-  const handleVoiceFileInputChange = async (event) => {
-    const file = event.target.files?.[0]
-    if (file) {
-      await handleVoiceFileSelection(file)
-      event.target.value = ''
-    }
   }
 
   const handleCopyTranscript = async () => {
@@ -586,7 +339,7 @@ function App() {
       return
     }
     if (!terminalBridge) {
-      setVoiceError('Select a terminal before sending the transcript.')
+      setVoiceError('Select a workspace and window first.')
       return
     }
     terminalBridge.sendInput(`${text}\n`)
@@ -604,603 +357,54 @@ function App() {
     }
   }
 
-  // Plane automation handlers
-  const handleApproveTicket = useCallback((ticket, result) => {
-    // Note: API call is handled by usePlaneTickets.approveTicket()
-    // This function only handles terminal creation after approval
+  // Build WebSocket URL
+  const wsUrl = useMemo(() => {
+    if (!activeWorkspaceId) return null
+    return buildWorkspaceSocketUrl(activeWorkspaceId, activeWindowIndex)
+  }, [activeWorkspaceId, activeWindowIndex])
 
-    // Ensure we have a "plane-automation" project
-    let planeProject = projects.find((p) => p.id === 'plane-automation')
-
-    if (!planeProject) {
-      // Create plane-automation project if it doesn't exist
-      // Always use current hostname to avoid Docker internal IPs
-      const currentHost = typeof window !== 'undefined' && window.location?.hostname
-        ? window.location.hostname
-        : DEFAULT_HOST
-
-      planeProject = {
-        id: 'plane-automation',
-        name: '⚡ Plane Automation',
-        description: 'Claude Code sessions for Plane tickets',
-        protocol: DEFAULT_PROTOCOL,
-        baseHost: currentHost,
-        basePort: DEFAULT_BASE_PORT,
-        portStrategy: DEFAULT_PORT_STRATEGY,
-        portStrategyLocked: true,
-        terminals: [],
-      }
-      setProjects((prev) => [...prev, planeProject])
-    }
-
-    // Create terminal for this ticket
-    const terminal = {
-      id: result.session_id,
-      name: ticket.id,
-      offset: findNextOffset(planeProject.terminals),
-      notes: ticket.title,
-    }
-
-    setProjects((prev) =>
-      prev.map((project) =>
-        project.id === 'plane-automation'
-          ? { ...project, terminals: [...project.terminals, terminal] }
-          : project,
-      ),
-    )
-
-    // Switch to plane-automation project and select the new terminal
-    setActiveProjectId('plane-automation')
-    setActiveTerminalId(terminal.id)
-    setActiveSheet(null)
-  }, [projects])
-
-  const handleUpdatePlane = useCallback((ticket) => {
-    // Optionally close the sheet after Plane update
-    console.log('Plane updated for ticket:', ticket.id)
-  }, [])
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    window.localStorage.setItem(VOICE_SERVICE_STORAGE_KEY, voiceService)
-  }, [voiceService])
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    window.localStorage.setItem(VOICE_LANGUAGE_STORAGE_KEY, voiceLanguage)
-  }, [voiceLanguage])
-
-  useEffect(() => {
-    if (typeof window === 'undefined') {
-      return
-    }
-    if (authToken) {
-      window.localStorage.setItem(AUTH_STORAGE_KEY, authToken)
-    } else {
-      window.localStorage.removeItem(AUTH_STORAGE_KEY)
-    }
-  }, [authToken])
-
-  useEffect(() => {
-    if (typeof window === 'undefined') {
-      return
-    }
-    window.localStorage.setItem(FONT_SIZE_STORAGE_KEY, String(terminalFontSize))
-  }, [terminalFontSize])
-
-  useEffect(() => {
-    if (typeof window === 'undefined') {
-      return
-    }
-    window.localStorage.setItem(PROJECT_VIEW_MODE_STORAGE_KEY, projectViewMode)
-  }, [projectViewMode])
-
-  useEffect(() => {
-    if (typeof window === 'undefined') {
-      return
-    }
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(projects))
-  }, [projects])
-
-  useEffect(() => {
-    if (!currentUser) {
-      guestProjectsRef.current = projects
-    }
-  }, [projects, currentUser])
-
-  useEffect(() => {
-    if (!authToken) {
-      setCurrentUser(null)
-      setAuthStatus('loggedOut')
-      setSyncError('')
-      setIsSyncingProjects(false)
-      return
-    }
-    let cancelled = false
-    const hadUser = Boolean(currentUser)
-    if (!hadUser) {
-      setAuthStatus('checking')
-    }
-    ;(async () => {
-      try {
-        const data = await apiFetch('/me', { token: authToken })
-        if (cancelled) {
-          return
-        }
-        if (data.user) {
-          setCurrentUser(data.user)
-          if (Array.isArray(data.user.projects)) {
-            setProjects(normalizeProjects(data.user.projects))
-          } else {
-            setProjects(getDefaultProjects())
-          }
-          setAuthStatus('authenticated')
-        } else {
-          throw new Error('Invalid response')
-        }
-      } catch (error) {
-        if (!cancelled) {
-          console.warn('Session validation failed', error.message)
-          setAuthToken('')
-          setCurrentUser(null)
-          setAuthStatus('loggedOut')
-        }
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authToken])
-
-  useEffect(() => {
-    if (!authToken || !currentUser) {
-      setIsSyncingProjects(false)
-      return
-    }
-    let ignore = false
-    const syncProjects = async () => {
-      setIsSyncingProjects(true)
-      setSyncError('')
-      try {
-        await apiFetch('/me/projects', {
-          method: 'PUT',
-          body: { projects },
-          token: authToken,
-        })
-        if (!ignore) {
-          setIsSyncingProjects(false)
-          setSyncError('')
-        }
-      } catch (error) {
-        if (!ignore) {
-          setIsSyncingProjects(false)
-          setSyncError(error.message ?? 'Failed to sync projects')
-        }
-      }
-    }
-    syncProjects()
-    return () => {
-      ignore = true
-    }
-  }, [projects, authToken, currentUser, projectSyncNonce])
-
-  const activeProject = useMemo(
-    () => projects.find((project) => project.id === activeProjectId) ?? null,
-    [projects, activeProjectId],
-  )
-
-  const activeTerminal = useMemo(() => {
-    if (!activeProject) {
-      return null
-    }
-    return activeProject.terminals.find((terminal) => terminal.id === activeTerminalId) ?? null
-  }, [activeProject, activeTerminalId])
-
-  useEffect(() => {
-    if (!activeTerminal) {
-      setTerminalBridge(null)
-    }
-  }, [activeTerminal])
-
-  const activeConnection = useMemo(() => {
-    if (!activeProject || !activeTerminal) {
-      return null
-    }
-    const baseUrl = getTerminalBaseUrl(activeProject, activeTerminal)
-    return {
-      wsUrl: buildTerminalSocketUrl(activeProject, activeTerminal),
-      endpointLabel: formatEndpointLabel(baseUrl),
-    }
-  }, [activeProject, activeTerminal])
-
-  useEffect(() => {
-    if (!projects.length) {
-      setActiveProjectId(null)
-      return
-    }
-
-    // Check if current active project is still valid
-    if (activeProjectId && projects.some((project) => project.id === activeProjectId)) {
-      return // Current selection is valid, don't change it
-    }
-
-    // Try to read from URL
-    const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null
-    const requestedId = params?.get('project') ?? null
-    if (requestedId && projects.some((project) => project.id === requestedId)) {
-      setActiveProjectId(requestedId)
-      return
-    }
-
-    // Fall back to first project
-    setActiveProjectId(projects[0].id)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projects])
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || !activeProject) {
-      return
-    }
-    const params = new URLSearchParams(window.location.search)
-    const requestedTerminalId = params.get('terminal')
-    if (!requestedTerminalId) {
-      return
-    }
-    const terminalExists = activeProject.terminals.some((terminal) => terminal.id === requestedTerminalId)
-    if (terminalExists) {
-      setActiveTerminalId(requestedTerminalId)
-    }
-  }, [activeProject])
-
-  useEffect(() => {
-    if (typeof window === 'undefined') {
-      return
-    }
-    const params = new URLSearchParams(window.location.search)
-    if (activeProjectId) {
-      params.set('project', activeProjectId)
-    } else {
-      params.delete('project')
-    }
-    if (activeTerminalId) {
-      params.set('terminal', activeTerminalId)
-    } else {
-      params.delete('terminal')
-    }
-    const query = params.toString()
-    const newUrl = query ? `${window.location.pathname}?${query}` : window.location.pathname
-    window.history.replaceState(null, '', newUrl)
-  }, [activeProjectId, activeTerminalId])
-
-  useEffect(() => {
-    if (!activeProject || !activeProject.terminals.length) {
-      setActiveTerminalId(null)
-      return
-    }
-    const hasActiveTerminal = activeProject.terminals.some((terminal) => terminal.id === activeTerminalId)
-    if (!hasActiveTerminal) {
-      setActiveTerminalId(activeProject.terminals[0].id)
-    }
-  }, [activeProject, activeTerminalId])
-
-  const triggerProjectResync = () => {
-    setProjectSyncNonce((prev) => prev + 1)
-  }
-
-  const handleAuthSubmit = async (event) => {
-    event.preventDefault()
-    const username = authForm.username.trim().toLowerCase()
-    const password = authForm.password
-    if (!username || !password) {
-      setAuthError('Username and password are required.')
-      return
-    }
-    setAuthBusy(true)
-    setAuthError('')
-    try {
-      const endpoint = authMode === 'register' ? '/auth/register' : '/auth/login'
-      const payload = await apiFetch(endpoint, {
-        method: 'POST',
-        body: { username, password },
-      })
-      if (payload.user) {
-        setCurrentUser(payload.user)
-        if (Array.isArray(payload.user.projects)) {
-          setProjects(normalizeProjects(payload.user.projects))
-        } else {
-          setProjects(getDefaultProjects())
-        }
-      }
-      if (payload.token) {
-        setAuthToken(payload.token)
-      }
-      setAuthForm({ username: '', password: '' })
-      setAuthError('')
-    } catch (error) {
-      setAuthError(error.message ?? 'Unable to authenticate.')
-    } finally {
-      setAuthBusy(false)
-    }
-  }
-
-  const handleLogout = () => {
-    setAuthToken('')
-    setCurrentUser(null)
-    setAuthForm({ username: '', password: '' })
-    setProjects(guestProjectsRef.current ?? getDefaultProjects())
-    setSyncError('')
-    setIsSyncingProjects(false)
-  }
-
-  const handleSelectProject = (projectId) => {
-    setActiveProjectId(projectId)
-    setShowTerminalForm(false)
-    setShowSettings(false)
-  }
-
-  const handleRemoveProject = (projectId) => {
-    setConfirmDialog({
-      isOpen: true,
-      message: 'Delete this project and all its terminals?',
-      onConfirm: () => {
-        setProjects((prev) => prev.filter((project) => project.id !== projectId))
-        if (activeProjectId === projectId) {
-          setActiveProjectId(null)
-          setActiveTerminalId(null)
-          setShowTerminalForm(false)
-        }
-        setConfirmDialog({ isOpen: false, message: '', onConfirm: null })
-      },
-    })
-  }
-
-  const handleProjectSubmit = (event) => {
-    event.preventDefault()
-    const name = projectForm.name.trim()
-    if (!name) {
-      return
-    }
-    const newProject = {
-      id: getId(),
-      name,
-      description: projectForm.description.trim(),
-      protocol: DEFAULT_PROTOCOL,
-      baseHost: DEFAULT_HOST,
-      basePort: DEFAULT_BASE_PORT,
-      portStrategy: DEFAULT_PORT_STRATEGY,
-      portStrategyLocked: false,
-      terminals: [],
-    }
-    setProjects((prev) => [...prev, newProject])
-    setProjectForm({ name: '', description: '' })
-    setActiveProjectId(newProject.id)
-    setActiveTerminalId(null)
-    setShowTerminalForm(false)
-  }
-
-  const handleTerminalSubmit = (event) => {
-    event.preventDefault()
-    if (!activeProject) {
-      return
-    }
-    const name = terminalForm.name.trim()
-    if (!name) {
-      return
-    }
-    const offset = findNextOffset(activeProject.terminals)
-    const terminal = {
-      id: getId(),
-      name,
-      offset,
-      notes: terminalForm.notes.trim(),
-    }
-    setProjects((prev) =>
-      prev.map((project) =>
-        project.id === activeProject.id
-          ? { ...project, terminals: [...project.terminals, terminal] }
-          : project,
-      ),
-    )
-    setTerminalForm({ name: '', notes: '' })
-    setShowTerminalForm(false)
-    setActiveTerminalId(terminal.id)
-  }
-
-  const handleRemoveTerminal = (terminalId) => {
-    if (!activeProject) {
-      return
-    }
-    setConfirmDialog({
-      isOpen: true,
-      message: 'Delete this terminal?',
-      onConfirm: () => {
-        const remainingTerminals = activeProject.terminals.filter((terminal) => terminal.id !== terminalId)
-        setProjects((prev) =>
-          prev.map((project) =>
-            project.id === activeProject.id
-              ? { ...project, terminals: remainingTerminals }
-              : project,
-          ),
-        )
-        if (activeTerminalId === terminalId) {
-          setActiveTerminalId(remainingTerminals[0]?.id ?? null)
-        }
-        setConfirmDialog({ isOpen: false, message: '', onConfirm: null })
-      },
-    })
-  }
-
-  const handleOpenProjectTab = () => {
-    if (typeof window === 'undefined' || !activeProjectId) {
-      return
-    }
-    const url = `${window.location.origin}${window.location.pathname}?project=${activeProjectId}`
-    window.open(url, '_blank', 'noopener,noreferrer')
-  }
-
-  const renderProjectSelector = () => {
-    if (!projects.length) {
-      return null
-    }
-    if (projectViewMode === PROJECT_VIEW_MODES.TABS) {
-      return (
-        <div className="project-tabs-inline">
-          {projects.map((project) => {
-            const isActive = project.id === activeProjectId
-            return (
-              <button
-                key={project.id}
-                type="button"
-                className={`project-tab ${isActive ? 'active' : ''}`}
-                onClick={() => handleSelectProject(project.id)}
-                title={project.description || project.name}
-              >
-                <span>{project.name}</span>
-                {projects.length > 1 && (
-                  <span
-                    className="remove-project"
-                    role="button"
-                    tabIndex={-1}
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      handleRemoveProject(project.id)
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' || event.key === ' ') {
-                        event.preventDefault()
-                        handleRemoveProject(project.id)
-                      }
-                    }}
-                    title="Delete project"
-                  >
-                    ✕
-                  </span>
-                )}
-              </button>
-            )
-          })}
-        </div>
-      )
-    }
-    return (
-      <div className="project-selector">
-        <select
-          value={activeProjectId || ''}
-          onChange={(e) => handleSelectProject(e.target.value)}
-          className="project-select"
-        >
-          {projects.map((project) => (
-            <option key={project.id} value={project.id}>
-              {project.name}
-              {project.terminals.length > 0 && ` (${project.terminals.length} terminals)`}
-            </option>
-          ))}
-        </select>
-      </div>
-    )
-  }
-
-  // Mobile-specific handlers
-  const handleMobileAddProject = ({ name, description }) => {
-    const newProject = {
-      id: getId(),
-      name,
-      description,
-      protocol: DEFAULT_PROTOCOL,
-      baseHost: DEFAULT_HOST,
-      basePort: DEFAULT_BASE_PORT,
-      portStrategy: DEFAULT_PORT_STRATEGY,
-      portStrategyLocked: false,
-      terminals: [],
-    }
-    setProjects((prev) => [...prev, newProject])
-    setActiveProjectId(newProject.id)
-    setActiveTerminalId(null)
-    setActiveSheet(null)
-  }
-
-  const handleMobileAddTerminal = ({ name, notes }) => {
-    if (!activeProject) return
-    const offset = findNextOffset(activeProject.terminals)
-    const terminal = {
-      id: getId(),
-      name,
-      offset,
-      notes,
-    }
-    setProjects((prev) =>
-      prev.map((project) =>
-        project.id === activeProject.id
-          ? { ...project, terminals: [...project.terminals, terminal] }
-          : project,
-      ),
-    )
-    setActiveTerminalId(terminal.id)
-    setActiveSheet(null)
-  }
-
-  const handleMobileSelectProject = (projectId) => {
-    setActiveProjectId(projectId)
-    setActiveSheet(null)
-  }
-
-  const handleMobileSelectTerminal = (terminalId) => {
-    setActiveTerminalId(terminalId)
-    setActiveSheet(null)
-  }
-
-  const handleMobileDeleteProject = (projectId) => {
-    setConfirmDialog({
-      isOpen: true,
-      message: 'Delete this project and all its terminals?',
-      onConfirm: () => {
-        setProjects((prev) => prev.filter((project) => project.id !== projectId))
-        if (activeProjectId === projectId) {
-          setActiveProjectId(null)
-          setActiveTerminalId(null)
-        }
-        setConfirmDialog({ isOpen: false, message: '', onConfirm: null })
-      },
-    })
-  }
-
-  const handleMobileDeleteTerminal = (terminalId) => {
-    if (!activeProject) return
-    setConfirmDialog({
-      isOpen: true,
-      message: 'Delete this terminal?',
-      onConfirm: () => {
-        const remainingTerminals = activeProject.terminals.filter((t) => t.id !== terminalId)
-        setProjects((prev) =>
-          prev.map((project) =>
-            project.id === activeProject.id
-              ? { ...project, terminals: remainingTerminals }
-              : project,
-          ),
-        )
-        if (activeTerminalId === terminalId) {
-          setActiveTerminalId(remainingTerminals[0]?.id ?? null)
-        }
-        setConfirmDialog({ isOpen: false, message: '', onConfirm: null })
-      },
-    })
-  }
-
-  // Render terminal view (shared between mobile and desktop)
+  // Render terminal view
   const renderTerminalView = () => {
-    if (!activeProject) {
+    if (workspacesLoading) {
       return (
         <div className="empty-state">
-          <p>Select a project to get started</p>
+          <p>Loading workspaces...</p>
         </div>
       )
     }
 
-    if (!activeTerminal) {
+    if (!activeWorkspace) {
       return (
         <div className="empty-state">
-          <p>Add a terminal to get started</p>
+          <p>Select a workspace to get started</p>
+          <p className="hint">Workspaces are managed via the GTK panel (wsp)</p>
+        </div>
+      )
+    }
+
+    if (!activeWorkspace.active) {
+      return (
+        <div className="empty-state">
+          <p>Session not active</p>
+          <p className="hint">Start the session in your x2go terminal first</p>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              refreshWorkspaces()
+              handleRefreshWindows()
+            }}
+          >
+            Refresh
+          </button>
+        </div>
+      )
+    }
+
+    if (!wsUrl) {
+      return (
+        <div className="empty-state">
+          <p>Unable to connect to terminal</p>
         </div>
       )
     }
@@ -1209,45 +413,45 @@ function App() {
       <section className="terminal-view-fullscreen">
         <div className="terminal-view-header">
           <div>
-            <h3>{activeTerminal.name}</h3>
-            {(activeTerminal.notes || activeProject.description) && (
-              <p>{activeTerminal.notes || activeProject.description}</p>
+            <h3>{activeWorkspace.name}</h3>
+            {activeWorkspace.description && (
+              <p>{activeWorkspace.description}</p>
             )}
           </div>
-          {activeConnection && (
-            <div className="terminal-header-controls">
-              <div className="terminal-endpoint">
-                <span>Endpoint</span>
-                <code>{activeConnection.endpointLabel}</code>
-              </div>
-              <label className="terminal-font-control">
-                Font
-                <select
-                  value={terminalFontSize}
-                  onChange={(e) => setTerminalFontSize(Number(e.target.value))}
-                >
-                  {FONT_SIZE_OPTIONS.map((size) => (
-                    <option key={size} value={size}>
-                      {size}px
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-          )}
-        </div>
-        {activeConnection ? (
-          <TerminalViewer
-            key={`${activeProject.id}-${activeTerminal.id}`}
-            wsUrl={activeConnection.wsUrl}
-            fontSize={terminalFontSize}
-            onBridgeReady={setTerminalBridge}
-          />
-        ) : (
-          <div className="terminal-warning">
-            <p>Unable to compute connection details.</p>
+          <div className="terminal-header-controls">
+            <label className="terminal-font-control">
+              Font
+              <select
+                value={terminalFontSize}
+                onChange={(e) => setTerminalFontSize(Number(e.target.value))}
+              >
+                {FONT_SIZE_OPTIONS.map((size) => (
+                  <option key={size} value={size}>
+                    {size}px
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
+        </div>
+
+        {/* Window tabs */}
+        {!isMobile && (
+          <WindowTabs
+            windows={windows}
+            activeWindowIndex={activeWindowIndex}
+            onSelectWindow={setActiveWindowIndex}
+            onRefresh={handleRefreshWindows}
+            loading={windowsLoading}
+          />
         )}
+
+        <TerminalViewer
+          key={`${activeWorkspaceId}-${activeWindowIndex}`}
+          wsUrl={wsUrl}
+          fontSize={terminalFontSize}
+          onBridgeReady={setTerminalBridge}
+        />
       </section>
     )
   }
@@ -1259,33 +463,34 @@ function App() {
         <MobileLayout
           activeSheet={activeSheet}
           onSheetChange={setActiveSheet}
-          projectName={activeProject?.name}
+          projectName={activeWorkspace?.name}
           isRecording={voiceRecording}
           isPending={voicePending}
-          planePendingCount={pendingTickets.length}
+          planePendingCount={0}
         >
           {renderTerminalView()}
         </MobileLayout>
 
-        <ProjectSheet
+        <WorkspaceSheet
           isOpen={activeSheet === 'projects'}
           onClose={() => setActiveSheet(null)}
-          projects={projects}
-          activeProjectId={activeProjectId}
-          onSelectProject={handleMobileSelectProject}
-          onDeleteProject={handleMobileDeleteProject}
-          onAddProject={handleMobileAddProject}
+          workspaces={workspaces}
+          activeWorkspaceId={activeWorkspaceId}
+          onSelectWorkspace={setActiveWorkspaceId}
+          loading={workspacesLoading}
+          error={workspacesError}
+          onRefresh={refreshWorkspaces}
         />
 
-        <TerminalSheet
+        <WindowSheet
           isOpen={activeSheet === 'terminals'}
           onClose={() => setActiveSheet(null)}
-          terminals={activeProject?.terminals || []}
-          activeTerminalId={activeTerminalId}
-          onSelectTerminal={handleMobileSelectTerminal}
-          onDeleteTerminal={handleMobileDeleteTerminal}
-          onAddTerminal={handleMobileAddTerminal}
-          projectName={activeProject?.name}
+          windows={windows}
+          activeWindowIndex={activeWindowIndex}
+          onSelectWindow={setActiveWindowIndex}
+          workspaceName={activeWorkspace?.name}
+          loading={windowsLoading}
+          onRefresh={handleRefreshWindows}
         />
 
         <VoiceSheet
@@ -1302,7 +507,7 @@ function App() {
           voiceRecording={voiceRecording}
           voicePending={voicePending}
           hasDeepgramKey={!!DEEPGRAM_API_KEY}
-          hasTerminal={!!activeTerminal}
+          hasTerminal={!!activeWorkspace?.active}
           onStartRecording={() => handleVoiceRecordingStart(true)}
           onStopRecording={handleVoiceRecordingStop}
           onFileUpload={handleVoiceFileSelection}
@@ -1315,38 +520,26 @@ function App() {
           }}
         />
 
-        <PlaneSheet
-          isOpen={activeSheet === 'plane'}
-          onClose={() => setActiveSheet(null)}
-          onApproveTicket={handleApproveTicket}
-          onUpdatePlane={handleUpdatePlane}
-        />
-
         <SettingsSheet
           isOpen={activeSheet === 'settings'}
           onClose={() => setActiveSheet(null)}
-          authStatus={authStatus}
-          currentUser={currentUser}
-          authMode={authMode}
-          authForm={authForm}
-          authError={authError}
-          authBusy={authBusy}
-          isSyncingProjects={isSyncingProjects}
-          syncError={syncError}
-          onAuthFormChange={(field, value) =>
-            setAuthForm((prev) => ({ ...prev, [field]: value }))
-          }
-          onAuthModeToggle={() => {
-            setAuthMode((prev) => (prev === 'register' ? 'login' : 'register'))
-            setAuthError('')
-          }}
-          onAuthSubmit={handleAuthSubmit}
-          onLogout={handleLogout}
-          onRetrySync={triggerProjectResync}
+          authStatus="loggedOut"
+          currentUser={null}
+          authMode="login"
+          authForm={{ username: '', password: '' }}
+          authError=""
+          authBusy={false}
+          isSyncingProjects={false}
+          syncError=""
+          onAuthFormChange={() => {}}
+          onAuthModeToggle={() => {}}
+          onAuthSubmit={(e) => e.preventDefault()}
+          onLogout={() => {}}
+          onRetrySync={() => {}}
           terminalFontSize={terminalFontSize}
           onFontSizeChange={setTerminalFontSize}
-          projectViewMode={projectViewMode}
-          onProjectViewModeChange={setProjectViewMode}
+          projectViewMode="dropdown"
+          onProjectViewModeChange={() => {}}
         />
 
         <ConfirmDialog
@@ -1362,430 +555,76 @@ function App() {
   // Desktop layout
   return (
     <div className="app-shell">
-      <section className="auth-panel">
-        {authStatus === 'checking' ? (
-          <p className="auth-message">Validating session…</p>
-        ) : currentUser ? (
-          <div className="auth-status-row">
-            <div>
-              <span className="auth-label">Signed in as</span>
-              <strong>{currentUser.username}</strong>
-            </div>
-            <div className="auth-status-actions">
-              {isSyncingProjects ? (
-                <span className="sync-indicator syncing">Syncing…</span>
-              ) : syncError ? (
-                <button type="button" className="sync-indicator error" onClick={triggerProjectResync}>
-                  Sync failed — retry
-                </button>
-              ) : (
-                <span className="sync-indicator ok">Projects synced</span>
-              )}
-              <button type="button" className="secondary" onClick={handleLogout}>
-                Logout
-              </button>
-            </div>
-          </div>
-        ) : (
-          <form className="auth-form" onSubmit={handleAuthSubmit}>
-            <div className="auth-fields">
-              <input
-                type="text"
-                placeholder="Username"
-                autoComplete="username"
-                value={authForm.username}
-                onChange={(e) => setAuthForm((prev) => ({ ...prev, username: e.target.value }))}
-                disabled={authBusy}
-                required
-              />
-              <input
-                type="password"
-                placeholder="Password"
-                autoComplete={authMode === 'register' ? 'new-password' : 'current-password'}
-                value={authForm.password}
-                onChange={(e) => setAuthForm((prev) => ({ ...prev, password: e.target.value }))}
-                disabled={authBusy}
-                required
-              />
-            </div>
-            <div className="auth-actions">
-              <button type="submit" className="primary" disabled={authBusy}>
-                {authMode === 'register' ? 'Create account' : 'Sign in'}
-              </button>
-              <button
-                type="button"
-                className="link-btn"
-                onClick={() => {
-                  setAuthMode((prev) => (prev === 'register' ? 'login' : 'register'))
-                  setAuthError('')
-                }}
-                disabled={authBusy}
-              >
-                {authMode === 'register' ? 'Have an account? Sign in' : 'Need an account? Register'}
-              </button>
-            </div>
-            {authError && <p className="auth-error">{authError}</p>}
-          </form>
-        )}
-      </section>
-      <header className="app-header-compact">
+      {/* Header with workspaces */}
+      <header className="app-header">
         <div className="header-left">
-          <h1>AI Workflow</h1>
-          {renderProjectSelector()}
-        </div>
-        <div className="header-actions">
-          {projects.length > 0 && (
-            <button
-              type="button"
-              className={`icon-btn project-view-toggle ${
-                projectViewMode === PROJECT_VIEW_MODES.TABS ? 'active' : ''
-              }`}
-              onClick={() =>
-                setProjectViewMode((prev) =>
-                  prev === PROJECT_VIEW_MODES.TABS
-                    ? PROJECT_VIEW_MODES.DROPDOWN
-                    : PROJECT_VIEW_MODES.TABS,
-                )
-              }
-              title={
-                projectViewMode === PROJECT_VIEW_MODES.TABS
-                  ? 'Switch to dropdown view'
-                  : 'Switch to tabbed view'
-              }
-            >
-              {projectViewMode === PROJECT_VIEW_MODES.TABS ? '▤' : '☰'}
-            </button>
+          <h1 className="app-title">Terminal Dashboard</h1>
+          {workspacesError && (
+            <span className="header-error">{workspacesError}</span>
           )}
-          <button
-            type="button"
-            className={`icon-btn mic-toggle ${voiceRecording ? 'recording' : ''} ${voicePending ? 'pending' : ''}`}
-            onClick={handleMicToggle}
-            disabled={!isSecureContext || voicePending}
-            title={voiceRecording ? 'Stop & send to terminal' : 'Tap to record'}
-          >
-            {voicePending ? '⏳' : voiceRecording ? '⏹️' : '🎙️'}
-          </button>
-          <button
-            type="button"
-            className={`icon-btn ${showVoicePanel ? 'active' : ''}`}
-            onClick={() => setShowVoicePanel((prev) => !prev)}
-            title="Voice settings"
-          >
-            {showVoicePanel ? '▲' : '▼'}
-          </button>
-          <button
-            type="button"
-            className={`icon-btn ${showPlanePanel ? 'active' : ''}`}
-            onClick={() => setShowPlanePanel((prev) => !prev)}
-            title="Plane Automation"
-          >
-            ⚡
-            {pendingTickets.length > 0 && (
-              <span className="badge">{pendingTickets.length}</span>
+        </div>
+
+        <div className="header-center">
+          <div className="workspace-cards">
+            {workspaces.map((workspace) => (
+              <WorkspaceCard
+                key={workspace.id}
+                workspace={workspace}
+                isSelected={workspace.id === activeWorkspaceId}
+                onSelect={(ws) => setActiveWorkspaceId(ws.id)}
+              />
+            ))}
+            {workspaces.length === 0 && !workspacesLoading && (
+              <span className="no-workspaces">
+                No workspaces configured. Use wsp to add workspaces.
+              </span>
             )}
+          </div>
+        </div>
+
+        <div className="header-right">
+          <button
+            type="button"
+            className={`mic-toggle ${voiceRecording ? 'recording' : ''} ${voicePending ? 'pending' : ''}`}
+            onClick={handleMicToggle}
+            disabled={voicePending || !isSecureContext}
+            title={voiceRecording ? 'Stop recording' : 'Start voice recording'}
+          >
+            {voiceRecording ? '⏹' : '🎤'}
           </button>
           <button
             type="button"
-            className="icon-btn"
-            onClick={() => setShowSettings(!showSettings)}
-            title="Settings"
+            className="secondary refresh-btn"
+            onClick={refreshWorkspaces}
+            title="Refresh workspaces"
           >
-            ⚙️
-          </button>
-          <button
-            type="button"
-            className="icon-btn"
-            onClick={handleOpenProjectTab}
-            disabled={!activeProjectId}
-            title="Open in new tab"
-          >
-            🗗
+            ↻
           </button>
         </div>
       </header>
 
-      {showVoicePanel && (
-        <section className="voice-panel">
-          <div className="voice-panel-header">
-            <div className="voice-title">
-              <h2>Voice Settings</h2>
-              <span className="voice-status">{voiceStatus}</span>
-            </div>
-            <button className="icon-btn" onClick={() => setShowVoicePanel(false)} title="Close">
-              ✕
-            </button>
-          </div>
-          {!isSecureContext && (
-            <p className="voice-warning">
-              Microphone recording requires HTTPS (or http://localhost). You can still upload audio files below.
-            </p>
-          )}
-          <div className="voice-row">
-            <label className="voice-service">
-              <span>Service</span>
-              <select value={voiceService} onChange={(e) => setVoiceService(e.target.value)}>
-                <option value={VOICE_SERVICES.DEEPGRAM}>Deepgram (cloud)</option>
-                <option value={VOICE_SERVICES.LOCAL}>Local Whisper</option>
-              </select>
-            </label>
-            <label className="voice-language">
-              <span>Language</span>
-              <select value={voiceLanguage} onChange={(e) => setVoiceLanguage(e.target.value)}>
-                <option value="pt-BR">Português (BR)</option>
-                <option value="pt-PT">Português (PT)</option>
-                <option value="en">English</option>
-                <option value="es">Español</option>
-                <option value="fr">Français</option>
-                <option value="de">Deutsch</option>
-              </select>
-            </label>
-            <label className="voice-upload">
-              <input type="file" accept="audio/*" onChange={handleVoiceFileInputChange} />
-              <span>Upload audio</span>
-            </label>
-          </div>
-          {voiceService === VOICE_SERVICES.DEEPGRAM && !DEEPGRAM_API_KEY && (
-            <p className="voice-warning">
-              Deepgram API key not configured. Add VITE_DEEPGRAM_API_KEY to .env file.
-            </p>
-          )}
-          <textarea
-            className="voice-transcript"
-            placeholder="Tap 🎙️ to record → auto-sends to terminal. Or upload audio file above."
-            value={voiceTranscript}
-            readOnly
-            rows={2}
-          />
-          {voiceError && <p className="voice-error">{voiceError}</p>}
-          <div className="voice-actions">
-            <button type="button" className="secondary" onClick={handleCopyTranscript} disabled={!voiceTranscript}>
-              Copy
-            </button>
-            <button
-              type="button"
-              className="primary"
-              onClick={handleSendTranscriptToTerminal}
-              disabled={!voiceTranscript || !activeTerminal || voicePending}
-            >
-              Send to terminal
-            </button>
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => {
-                setVoiceTranscript('')
-                setVoiceError('')
-                setVoiceStatus('Idle')
-              }}
-              disabled={!voiceTranscript && !voiceError}
-            >
-              Clear
-            </button>
-          </div>
-        </section>
-      )}
-
-      {showPlanePanel && (
-        <div className="settings-panel">
-          <div className="settings-content">
-            <div className="settings-header">
-              <h2>⚡ Plane Automation</h2>
-              <button className="icon-btn" onClick={() => setShowPlanePanel(false)}>✕</button>
-            </div>
-            <PlaneAutomationProject
-              onApproveTicket={handleApproveTicket}
-              onUpdatePlane={handleUpdatePlane}
-            />
-          </div>
-        </div>
-      )}
-
-      {showSettings && (
-        <div className="settings-panel">
-          <div className="settings-content">
-            <div className="settings-header">
-              <h2>Projects</h2>
-              <button className="icon-btn" onClick={() => setShowSettings(false)}>✕</button>
-            </div>
-
-            <div className="project-list">
-              {projects.map((project) => {
-                const isActive = project.id === activeProjectId
-                return (
-                  <div
-                    key={project.id}
-                    className={`project-item ${isActive ? 'active' : ''}`}
-                    onClick={() => handleSelectProject(project.id)}
-                  >
-                    <div className="project-item-content">
-                      <strong>{project.name}</strong>
-                      {project.description && <small>{project.description}</small>}
-                    </div>
-                    {projects.length > 1 && (
-                      <button
-                        className="remove-btn"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          handleRemoveProject(project.id)
-                        }}
-                        title="Delete project"
-                      >
-                        ✕
-                      </button>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-
-            <form onSubmit={handleProjectSubmit} className="settings-form">
-              <h3>Add Project</h3>
-              <input
-                type="text"
-                placeholder="Project name"
-                value={projectForm.name}
-                onChange={(e) => setProjectForm((prev) => ({ ...prev, name: e.target.value }))}
-                required
-              />
-              <input
-                type="text"
-                placeholder="Description (optional)"
-                value={projectForm.description}
-                onChange={(e) => setProjectForm((prev) => ({ ...prev, description: e.target.value }))}
-              />
-              <button type="submit" className="primary">Create Project</button>
-            </form>
-          </div>
-        </div>
-      )}
-
-      <main className="main-panel-compact">
-        {activeProject ? (
-          <>
-            <section className="terminal-tabs-compact">
-              {activeProject.terminals.map((terminal) => {
-                const isActive = terminal.id === activeTerminalId
-                return (
-                  <button
-                    key={terminal.id}
-                    className={`terminal-tab ${isActive ? 'active' : ''}`}
-                    onClick={() => setActiveTerminalId(terminal.id)}
-                    title={terminal.notes || terminal.name}
-                  >
-                    {terminal.name}
-                    <span
-                      className="remove-icon"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        handleRemoveTerminal(terminal.id)
-                      }}
-                      title="Remove terminal"
-                    >
-                      ✕
-                    </span>
-                  </button>
-                )
-              })}
-              <button
-                type="button"
-                className="terminal-tab add"
-                onClick={() => setShowTerminalForm(!showTerminalForm)}
-                title="Add terminal"
-              >
-                +
-              </button>
-            </section>
-
-            {showTerminalForm && (
-              <section className="terminal-form-compact">
-                <form onSubmit={handleTerminalSubmit}>
-                  <input
-                    type="text"
-                    placeholder="Terminal name"
-                    value={terminalForm.name}
-                    onChange={(e) => setTerminalForm((prev) => ({ ...prev, name: e.target.value }))}
-                    required
-                    autoFocus
-                  />
-                  <input
-                    type="text"
-                    placeholder="Notes (optional)"
-                    value={terminalForm.notes}
-                    onChange={(e) => setTerminalForm((prev) => ({ ...prev, notes: e.target.value }))}
-                  />
-                  <div className="form-actions-inline">
-                    <button type="submit" className="primary">Add</button>
-                    <button
-                      type="button"
-                      className="secondary"
-                      onClick={() => {
-                        setShowTerminalForm(false)
-                        setTerminalForm({ name: '', notes: '' })
-                      }}
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </form>
-              </section>
-            )}
-
-            {activeTerminal ? (
-              <section className="terminal-view-fullscreen">
-                <div className="terminal-view-header">
-                  <div>
-                    <h3>{activeTerminal.name}</h3>
-                    {(activeTerminal.notes || activeProject.description) && (
-                      <p>{activeTerminal.notes || activeProject.description}</p>
-                    )}
-                  </div>
-                  {activeConnection && (
-                    <div className="terminal-header-controls">
-                      <div className="terminal-endpoint">
-                        <span>Endpoint</span>
-                        <code>{activeConnection.endpointLabel}</code>
-                      </div>
-                      <label className="terminal-font-control">
-                        Font
-                        <select
-                          value={terminalFontSize}
-                          onChange={(e) => setTerminalFontSize(Number(e.target.value))}
-                        >
-                          {FONT_SIZE_OPTIONS.map((size) => (
-                            <option key={size} value={size}>
-                              {size}px
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    </div>
-                  )}
-                </div>
-                {activeConnection ? (
-                  <TerminalViewer
-                    key={`${activeProject.id}-${activeTerminal.id}`}
-                    wsUrl={activeConnection.wsUrl}
-                    fontSize={terminalFontSize}
-                    onBridgeReady={setTerminalBridge}
-                  />
-                ) : (
-                  <div className="terminal-warning">
-                    <p>Unable to compute connection details.</p>
-                  </div>
-                )}
-              </section>
-            ) : (
-              <div className="empty-state">
-                <p>Click + to add a terminal</p>
-              </div>
-            )}
-          </>
-        ) : (
-          <div className="empty-state">
-            <p>Open settings (⚙️) to create a project</p>
-          </div>
-        )}
+      {/* Main content */}
+      <main className="app-main">
+        {renderTerminalView()}
       </main>
+
+      {/* Voice status bar */}
+      {(voiceTranscript || voiceError || voiceStatus !== 'Idle') && (
+        <div className="voice-status-bar">
+          {voiceError ? (
+            <span className="voice-error">{voiceError}</span>
+          ) : voiceTranscript ? (
+            <div className="voice-transcript-row">
+              <span className="voice-transcript">{voiceTranscript}</span>
+              <button type="button" onClick={handleCopyTranscript}>Copy</button>
+              <button type="button" onClick={handleSendTranscriptToTerminal}>Send</button>
+              <button type="button" onClick={() => setVoiceTranscript('')}>Clear</button>
+            </div>
+          ) : (
+            <span className="voice-status">{voiceStatus}</span>
+          )}
+        </div>
+      )}
 
       <ConfirmDialog
         isOpen={confirmDialog.isOpen}

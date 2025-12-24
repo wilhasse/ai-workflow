@@ -2071,3 +2071,551 @@ button.danger:hover:not(:disabled) {
     display: none !important;
   }
 }
+
+/* ============================================================================
+   WORKSPACE INTEGRATION - GTK Panel Style
+   ============================================================================ */
+
+/* Header Layout - Three Columns */
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  flex-shrink: 0;
+}
+
+.header-center {
+  flex: 1;
+  overflow: hidden;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex-shrink: 0;
+}
+
+/* Workspace Cards - Horizontal Scrollable */
+.workspace-cards {
+  display: flex;
+  gap: var(--space-sm);
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(245, 158, 11, 0.3) transparent;
+  padding: var(--space-xs) 0;
+  margin: 0 calc(-1 * var(--space-sm));
+  padding-left: var(--space-sm);
+  padding-right: var(--space-sm);
+}
+
+.workspace-cards::-webkit-scrollbar {
+  height: 4px;
+}
+
+.workspace-cards::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.workspace-cards::-webkit-scrollbar-thumb {
+  background: rgba(245, 158, 11, 0.3);
+  border-radius: 2px;
+}
+
+/* Workspace Card - GTK Panel Style Button */
+.workspace-card {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: 0.5rem 0.875rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-medium);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  font-family: 'Outfit', sans-serif;
+  font-weight: 500;
+  font-size: 0.875rem;
+  white-space: nowrap;
+  transition: all var(--transition-fast);
+  border-left: 3px solid var(--workspace-color, var(--color-accent-primary));
+}
+
+.workspace-card:hover {
+  background: var(--color-bg-elevated);
+  border-color: rgba(245, 158, 11, 0.4);
+  transform: translateY(-1px);
+}
+
+.workspace-card.selected {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.15), rgba(245, 158, 11, 0.05));
+  border-color: var(--color-accent-primary);
+  box-shadow: 0 0 12px var(--color-accent-glow);
+}
+
+.workspace-status {
+  font-size: 0.75rem;
+  line-height: 1;
+}
+
+.workspace-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  text-align: left;
+}
+
+.workspace-content strong {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.workspace-content small {
+  font-size: 0.7rem;
+  color: var(--color-text-tertiary);
+  font-weight: 400;
+}
+
+/* Window Tabs - Below Header */
+.window-tabs {
+  display: flex;
+  gap: var(--space-xs);
+  padding: 0.5rem var(--space-xl);
+  background: rgba(19, 24, 39, 0.6);
+  border-bottom: 1px solid var(--color-border-subtle);
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(245, 158, 11, 0.2) transparent;
+}
+
+.window-tabs::-webkit-scrollbar {
+  height: 3px;
+}
+
+.window-tabs::-webkit-scrollbar-thumb {
+  background: rgba(245, 158, 11, 0.2);
+  border-radius: 2px;
+}
+
+.window-tabs-loading,
+.window-tabs-empty {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: 0.5rem var(--space-xl);
+  background: rgba(19, 24, 39, 0.6);
+  border-bottom: 1px solid var(--color-border-subtle);
+  color: var(--color-text-tertiary);
+  font-size: 0.875rem;
+}
+
+.window-tabs-empty .refresh-btn {
+  padding: 0.35rem 0.75rem;
+  font-size: 0.8rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-medium);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.window-tabs-empty .refresh-btn:hover {
+  background: var(--color-bg-elevated);
+  border-color: var(--color-accent-primary);
+  color: var(--color-accent-primary);
+}
+
+/* Window Tab - Individual Tab */
+.window-tab {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.75rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-family: 'Outfit', sans-serif;
+  font-weight: 500;
+  font-size: 0.8rem;
+  white-space: nowrap;
+  transition: all var(--transition-fast);
+}
+
+.window-tab:hover {
+  background: rgba(245, 158, 11, 0.08);
+  color: var(--color-text-primary);
+}
+
+.window-tab.active {
+  background: var(--color-accent-primary);
+  color: var(--color-bg-primary);
+  font-weight: 600;
+  box-shadow: 0 0 8px var(--color-accent-glow);
+}
+
+.window-tab.refresh-tab {
+  padding: 0.4rem 0.5rem;
+  font-size: 1rem;
+  color: var(--color-text-tertiary);
+}
+
+.window-tab.refresh-tab:hover {
+  color: var(--color-accent-primary);
+}
+
+.window-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.2);
+  font-size: 0.7rem;
+  font-weight: 600;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.window-tab.active .window-index {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.window-name {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Voice Transcript Status Bar - Mobile */
+.voice-transcript-bar {
+  padding: 0.5rem 1rem;
+  background: rgba(245, 158, 11, 0.08);
+  border-bottom: 1px solid rgba(245, 158, 11, 0.15);
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.voice-transcript-bar strong {
+  color: var(--color-accent-primary);
+  font-weight: 600;
+}
+
+.voice-transcript-bar p {
+  margin: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ============================================================================
+   MOBILE SHEET STYLES - Workspaces & Windows
+   ============================================================================ */
+
+/* Sheet Subtitle */
+.sheet-subtitle {
+  padding: 0.5rem 0 0.75rem;
+  color: var(--color-text-tertiary);
+  font-size: 0.85rem;
+}
+
+.sheet-subtitle span {
+  padding: 0.25rem 0.625rem;
+  background: rgba(245, 158, 11, 0.1);
+  border-radius: var(--radius-pill);
+  color: var(--color-accent-primary);
+  font-weight: 500;
+}
+
+/* Sheet Loading State */
+.sheet-loading {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 2rem;
+  color: var(--color-text-tertiary);
+}
+
+/* Sheet Error State */
+.sheet-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1.5rem;
+  text-align: center;
+  color: var(--color-error);
+}
+
+.sheet-error button {
+  min-height: 44px;
+}
+
+/* Sheet Hint Text */
+.sheet-hint {
+  font-size: 0.8rem;
+  color: var(--color-text-tertiary);
+  margin-top: 0.25rem;
+}
+
+/* Sheet Footer */
+.sheet-footer {
+  padding: 1rem 0 0;
+  border-top: 1px solid var(--color-border-subtle);
+  margin-top: 1rem;
+  display: flex;
+  gap: 0.75rem;
+}
+
+.sheet-footer button {
+  flex: 1;
+  min-height: 44px;
+}
+
+/* Workspace List in Sheet */
+.workspace-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.workspace-list .workspace-card {
+  width: 100%;
+  padding: 0.875rem 1rem;
+  border-radius: var(--radius-lg);
+}
+
+.workspace-list .workspace-card .workspace-content strong {
+  font-size: 0.95rem;
+}
+
+/* Window List in Sheet */
+.window-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.window-list-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-medium);
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  font-family: 'Outfit', sans-serif;
+  font-weight: 500;
+  font-size: 0.9rem;
+  transition: all var(--transition-fast);
+  min-height: 48px;
+  width: 100%;
+  text-align: left;
+}
+
+.window-list-item:hover {
+  background: var(--color-bg-tertiary);
+  border-color: var(--color-accent-primary);
+}
+
+.window-list-item.active {
+  background: rgba(245, 158, 11, 0.1);
+  border-color: var(--color-accent-primary);
+}
+
+.window-item-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.75rem;
+  height: 1.75rem;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-tertiary);
+  font-size: 0.8rem;
+  font-weight: 600;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--color-accent-primary);
+}
+
+.window-list-item.active .window-item-index {
+  background: var(--color-accent-primary);
+  color: var(--color-bg-primary);
+}
+
+.window-item-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.window-item-active {
+  color: var(--color-success);
+  font-weight: 600;
+}
+
+/* ============================================================================
+   DESKTOP WORKSPACE INTEGRATION - Additional Styles
+   ============================================================================ */
+
+/* App Title */
+.app-title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--color-text-primary);
+}
+
+/* Header Error */
+.header-error {
+  color: var(--color-error);
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+/* No Workspaces State */
+.no-workspaces {
+  color: var(--color-text-tertiary);
+  font-size: 0.875rem;
+  font-style: italic;
+  padding: var(--space-sm) var(--space-md);
+}
+
+/* Main Content Area */
+.app-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0 var(--space-xl) var(--space-lg);
+}
+
+/* Terminal Font Control */
+.terminal-font-control {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: 0.8rem;
+  color: var(--color-text-tertiary);
+  font-weight: 500;
+}
+
+.terminal-font-control select {
+  padding: 0.35rem 0.5rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-medium);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  font-size: 0.8rem;
+  font-family: 'JetBrains Mono', monospace;
+  cursor: pointer;
+}
+
+.terminal-font-control select:focus {
+  outline: 2px solid var(--color-accent-primary);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+
+.terminal-header-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+/* Hint Text in Empty States */
+.empty-state .hint {
+  color: var(--color-text-tertiary);
+  font-size: 0.875rem;
+  margin-top: var(--space-xs);
+}
+
+/* Voice Status Bar - Desktop */
+.voice-status-bar {
+  padding: var(--space-sm) var(--space-xl);
+  background: rgba(245, 158, 11, 0.08);
+  border-top: 1px solid rgba(245, 158, 11, 0.15);
+  font-size: 0.875rem;
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.voice-status-bar .voice-error {
+  color: var(--color-error);
+  font-weight: 500;
+}
+
+.voice-status-bar .voice-status {
+  color: var(--color-accent-primary);
+  font-weight: 500;
+}
+
+.voice-transcript-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex: 1;
+}
+
+.voice-transcript-row .voice-transcript {
+  flex: 1;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.voice-transcript-row button {
+  padding: 0.35rem 0.75rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-medium);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 500;
+  transition: all var(--transition-fast);
+}
+
+.voice-transcript-row button:hover {
+  background: var(--color-bg-elevated);
+  border-color: var(--color-accent-primary);
+  color: var(--color-accent-primary);
+}
+
+/* Refresh Button in Header */
+.header-right .refresh-btn {
+  padding: 0.4rem 0.625rem;
+  font-size: 1rem;
+}
+
+/* Mic Toggle Button */
+.mic-toggle {
+  padding: 0.4rem 0.625rem;
+  font-size: 1rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-medium);
+  background: var(--color-bg-tertiary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.mic-toggle:hover:not(:disabled) {
+  background: var(--color-bg-elevated);
+  border-color: var(--color-accent-primary);
+}
+
+.mic-toggle:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

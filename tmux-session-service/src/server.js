@@ -18,6 +18,7 @@ const config = {
   tmuxBin: process.env.TMUX_BIN ?? 'tmux',
   defaultShell: process.env.SHELL_CMD ?? process.env.SHELL ?? '/bin/bash',
   dataDir: process.env.DATA_DIR ?? path.join(projectRoot, 'data'),
+  workspacesConfig: process.env.WORKSPACES_CONFIG ?? '/home/cslog/ai-workflow/workspace-switcher/workspaces.json',
 }
 const storeFile = path.join(config.dataDir, 'sessions.json')
 const userStoreFile = path.join(config.dataDir, 'users.json')
@@ -335,6 +336,36 @@ const tmuxKillSession = async (sessionId) => {
   return true
 }
 
+const tmuxListWindows = async (sessionId) => {
+  const response = await runTmux([
+    'list-windows',
+    '-t', sessionId,
+    '-F', '#{window_index}|#{window_name}|#{window_active}',
+  ])
+  if (!response.ok) {
+    if (response.error?.code === 1) {
+      return []
+    }
+    throw response.error
+  }
+  return response.stdout
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      const [index, name, active] = line.split('|')
+      return {
+        index: Number.parseInt(index, 10),
+        name: name || `window-${index}`,
+        active: active === '1',
+      }
+    })
+}
+
+const tmuxSelectWindow = async (sessionId, windowIndex) => {
+  const response = await runTmux(['select-window', '-t', `${sessionId}:${windowIndex}`])
+  return response.ok
+}
+
 const ensureMetadata = async (sessionId, { projectId = null, command = null } = {}) => {
   const now = new Date().toISOString()
   const previous = sessionStore.get(sessionId)
@@ -564,6 +595,49 @@ const handleSaveProjects = async (req, res) => {
   }
 }
 
+const handleGetWorkspaces = async (res) => {
+  try {
+    const raw = await fs.readFile(config.workspacesConfig, 'utf8')
+    const workspacesData = JSON.parse(raw)
+
+    // Enrich with session status
+    const activeSessions = await tmuxListSessions()
+    const activeSet = new Set(activeSessions)
+
+    const workspaces = (workspacesData.workspaces || []).map((ws) => ({
+      ...ws,
+      active: activeSet.has(ws.id),
+    }))
+
+    respond(res, 200, { workspaces, settings: workspacesData.settings || {} })
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      respond(res, 200, { workspaces: [], settings: {} })
+    } else {
+      respond(res, 500, { error: error.message })
+    }
+  }
+}
+
+const handleListWindows = async (res, sessionId) => {
+  const sanitizedId = sanitizeId(sessionId)
+  if (!sanitizedId) {
+    respond(res, 400, { error: 'Invalid session id' })
+    return
+  }
+  try {
+    const exists = await tmuxSessionExists(sanitizedId)
+    if (!exists) {
+      respond(res, 404, { error: 'Session not found', windows: [] })
+      return
+    }
+    const windows = await tmuxListWindows(sanitizedId)
+    respond(res, 200, { sessionId: sanitizedId, windows })
+  } catch (error) {
+    respond(res, 500, { error: error.message })
+  }
+}
+
 const notFound = (res) => respond(res, 404, { error: 'Not found' })
 
 const server = http.createServer(async (req, res) => {
@@ -605,6 +679,10 @@ const server = http.createServer(async (req, res) => {
     await handleHealth(res)
     return
   }
+  if (method === 'GET' && pathName === '/workspaces') {
+    await handleGetWorkspaces(res)
+    return
+  }
   if (method === 'GET' && pathName === '/sessions') {
     await handleListSessions(res)
     return
@@ -620,6 +698,11 @@ const server = http.createServer(async (req, res) => {
   }
   if (sessionMatch && method === 'DELETE') {
     await handleDeleteSession(res, sessionMatch[1])
+    return
+  }
+  const windowsMatch = pathName.match(/^\/sessions\/([^/]+)\/windows$/)
+  if (windowsMatch && method === 'GET') {
+    await handleListWindows(res, windowsMatch[1])
     return
   }
   const keepAliveMatch = pathName.match(/^\/sessions\/([^/]+)\/keepalive$/)
@@ -641,6 +724,9 @@ const sendWsMessage = (ws, payload) => {
 const handleTerminalSocket = async (ws, sessionIdRaw, searchParams) => {
   const sanitizedSessionId = sanitizeId(sessionIdRaw)
   const sanitizedProjectId = sanitizeId(searchParams.get('projectId'))
+  const windowIndexRaw = searchParams.get('windowIndex')
+  const windowIndex = windowIndexRaw !== null ? Number.parseInt(windowIndexRaw, 10) : null
+
   if (!sanitizedSessionId) {
     sendWsMessage(ws, { type: 'error', message: 'Invalid session id' })
     ws.close(1008, 'Invalid session id')
@@ -654,6 +740,16 @@ const handleTerminalSocket = async (ws, sessionIdRaw, searchParams) => {
     sendWsMessage(ws, { type: 'error', message: 'Unable to prepare tmux session' })
     ws.close(1011, 'Session unavailable')
     return
+  }
+
+  // Select specific window if requested
+  if (windowIndex !== null && Number.isFinite(windowIndex)) {
+    try {
+      await tmuxSelectWindow(sanitizedSessionId, windowIndex)
+    } catch (error) {
+      console.warn('Failed to select window', error.message)
+      // Continue anyway - will attach to current window
+    }
   }
 
   let ptyProcess
