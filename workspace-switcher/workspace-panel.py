@@ -20,11 +20,12 @@ REFRESH_INTERVAL = 3000  # ms
 class WorkspaceButton(Gtk.Button):
     """A styled button representing a workspace/tmux session"""
 
-    def __init__(self, workspace, session_info=None, on_remove=None):
+    def __init__(self, workspace, session_info=None, on_remove=None, on_rename=None):
         super().__init__()
         self.workspace = workspace
         self.session_info = session_info
         self.on_remove_callback = on_remove
+        self.on_rename_callback = on_rename
 
         # Main container
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
@@ -85,6 +86,14 @@ class WorkspaceButton(Gtk.Button):
         if event.button == 3:  # Right click
             menu = Gtk.Menu()
 
+            # Rename item
+            rename_item = Gtk.MenuItem(label="Rename...")
+            rename_item.connect('activate', self.on_rename_clicked)
+            menu.append(rename_item)
+
+            # Separator
+            menu.append(Gtk.SeparatorMenuItem())
+
             # Remove item
             remove_item = Gtk.MenuItem(label=f"Remove '{self.workspace['name']}'")
             remove_item.connect('activate', self.on_remove_clicked)
@@ -100,6 +109,11 @@ class WorkspaceButton(Gtk.Button):
             menu.popup_at_pointer(event)
             return True
         return False
+
+    def on_rename_clicked(self, menu_item):
+        """Rename this workspace"""
+        if self.on_rename_callback:
+            self.on_rename_callback(self.workspace['id'], self.workspace['name'])
 
     def on_remove_clicked(self, menu_item):
         """Remove this workspace from config"""
@@ -406,7 +420,7 @@ class WorkspaceSwitcher(Gtk.Window):
             session_info = sessions.get(ws['id'])
             if session_info:
                 active_count += 1
-            btn = WorkspaceButton(ws, session_info, on_remove=self.remove_workspace)
+            btn = WorkspaceButton(ws, session_info, on_remove=self.remove_workspace, on_rename=self.rename_workspace)
             self.workspace_box.pack_start(btn, False, False, 0)
 
         # Update footer
@@ -447,6 +461,47 @@ class WorkspaceSwitcher(Gtk.Window):
         workspaces = [ws for ws in workspaces if ws['id'] != workspace_id]
         self.save_config(workspaces)
         self.refresh_workspaces()
+
+    def rename_workspace(self, workspace_id, current_name):
+        """Rename a workspace (display name only, not the ID)"""
+        dialog = Gtk.Dialog(
+            title="Rename Workspace",
+            transient_for=self,
+            flags=0
+        )
+        dialog.add_buttons(
+            Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+            Gtk.STOCK_OK, Gtk.ResponseType.OK
+        )
+        dialog.set_default_size(250, 100)
+
+        box = dialog.get_content_area()
+        box.set_margin_start(10)
+        box.set_margin_end(10)
+        box.set_margin_top(10)
+        box.set_margin_bottom(10)
+
+        entry = Gtk.Entry()
+        entry.set_text(current_name)
+        entry.select_region(0, -1)
+        entry.connect('activate', lambda e: dialog.response(Gtk.ResponseType.OK))
+        box.pack_start(entry, True, True, 0)
+
+        dialog.show_all()
+        response = dialog.run()
+
+        if response == Gtk.ResponseType.OK:
+            new_name = entry.get_text().strip()
+            if new_name and new_name != current_name:
+                workspaces = self.load_config()
+                for ws in workspaces:
+                    if ws['id'] == workspace_id:
+                        ws['name'] = new_name
+                        break
+                self.save_config(workspaces)
+                self.refresh_workspaces()
+
+        dialog.destroy()
 
     def get_tmux_sessions(self):
         """Get info about running tmux sessions"""
