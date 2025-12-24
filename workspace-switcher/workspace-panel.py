@@ -93,12 +93,17 @@ class WorkspaceButton(Gtk.Button):
         self.get_style_context().add_provider(provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
     def on_clicked(self, button):
-        """Handle button click - attach or create session"""
+        """Handle button click - focus existing window or create new one"""
         ws = self.workspace
         session_name = ws['id']
         work_dir = ws['path']
+        window_title = f'{ws["name"]} - Workspace'
 
-        # Check if session exists
+        # First, try to find and focus an existing terminal window for this workspace
+        if self._focus_existing_window(window_title):
+            return  # Window found and focused, done!
+
+        # No existing window, check if tmux session exists
         result = subprocess.run(['tmux', 'has-session', '-t', session_name],
                                 capture_output=True)
         session_exists = result.returncode == 0
@@ -116,9 +121,30 @@ class WorkspaceButton(Gtk.Button):
         # Launch terminal with tmux command
         subprocess.Popen([
             terminal,
-            '--title', f'{ws["name"]} - Workspace',
+            '--title', window_title,
             '-e', f'bash -c "{cmd}; exec bash"'
         ])
+
+    def _focus_existing_window(self, title):
+        """Try to find and focus a window with the given title. Returns True if found."""
+        try:
+            # List all windows with wmctrl
+            result = subprocess.run(['wmctrl', '-l'], capture_output=True, text=True)
+            if result.returncode != 0:
+                return False
+
+            # Search for window with matching title
+            for line in result.stdout.strip().split('\n'):
+                if title in line:
+                    # Extract window ID (first column)
+                    window_id = line.split()[0]
+                    # Activate (focus) the window
+                    subprocess.run(['wmctrl', '-i', '-a', window_id])
+                    return True
+            return False
+        except FileNotFoundError:
+            # wmctrl not installed
+            return False
 
     def _get_terminal(self):
         """Get configured terminal emulator"""
@@ -318,9 +344,9 @@ class WorkspaceSwitcher(Gtk.Window):
         self.connect('delete-event', self.on_close)
 
     def on_close(self, widget, event):
-        """Handle window close - minimize instead of exit"""
-        self.iconify()
-        return True  # Prevent actual close
+        """Handle window close - actually close the application"""
+        Gtk.main_quit()
+        return False  # Allow close
 
     def auto_refresh(self):
         """Periodically refresh session status"""
