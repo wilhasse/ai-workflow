@@ -200,7 +200,7 @@ function TerminalViewer({ wsUrl, fontSize, onBridgeReady, showShortcutBar = true
     const bridge = {
       sendInput: (payload) => {
         if (!payload || typeof payload !== 'string') {
-          return
+          return false
         }
         const target = socketRef.current
         if (target && target.readyState === window.WebSocket.OPEN) {
@@ -210,7 +210,13 @@ function TerminalViewer({ wsUrl, fontSize, onBridgeReady, showShortcutBar = true
               payload,
             }),
           )
+          return true
         }
+        return false
+      },
+      isConnected: () => {
+        const target = socketRef.current
+        return !!target && target.readyState === window.WebSocket.OPEN
       },
     }
     onBridgeReady(bridge)

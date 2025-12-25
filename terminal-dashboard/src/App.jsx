@@ -84,7 +84,10 @@ function App() {
     const stored = window.localStorage.getItem(FONT_SIZE_STORAGE_KEY)
     return stored ? Number(stored) : DEFAULT_FONT_SIZE
   })
-  const [terminalBridge, setTerminalBridge] = useState(null)
+  const terminalBridgeRef = useRef(null)
+  const handleTerminalBridgeReady = useCallback((bridge) => {
+    terminalBridgeRef.current = bridge
+  }, [])
 
   // Voice transcription state
   const [voiceService, setVoiceService] = useState(() => {
@@ -178,6 +181,66 @@ function App() {
   }, [voiceLanguage])
 
   // Voice transcription functions
+  const waitForTerminalConnection = async (timeoutMs = 1500) => {
+    const start = Date.now()
+    while (Date.now() - start < timeoutMs) {
+      const bridge = terminalBridgeRef.current
+      if (bridge?.isConnected?.()) {
+        return true
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    return false
+  }
+
+  const trySendTranscriptToTerminal = async (text, { waitForReady = false } = {}) => {
+    const trimmed = text.trim()
+    if (!trimmed) return false
+    const payload = `${trimmed}\n`
+    const bridge = terminalBridgeRef.current
+    if (bridge?.sendInput?.(payload)) {
+      return true
+    }
+    if (!waitForReady) {
+      return false
+    }
+    const ready = await waitForTerminalConnection()
+    if (!ready) {
+      return false
+    }
+    return terminalBridgeRef.current?.sendInput?.(payload) ?? false
+  }
+
+  const tryCopyTranscriptToClipboard = async (text, { silent = false } = {}) => {
+    const trimmed = text.trim()
+    if (!trimmed) {
+      if (!silent) {
+        setVoiceError('No transcript to copy.')
+      }
+      return false
+    }
+    if (typeof navigator === 'undefined' || !navigator.clipboard) {
+      if (!silent) {
+        setVoiceError('Clipboard access is unavailable in this browser.')
+      }
+      return false
+    }
+    try {
+      await navigator.clipboard.writeText(trimmed)
+      if (!silent) {
+        setVoiceStatus('Copied to clipboard')
+        setVoiceError('')
+      }
+      return true
+    } catch (error) {
+      console.error(error)
+      if (!silent) {
+        setVoiceError('Failed to copy transcript.')
+      }
+      return false
+    }
+  }
+
   const cleanupVoiceResources = () => {
     if (voiceRecorderRef.current) {
       try {
@@ -238,12 +301,25 @@ function App() {
       }
 
       setVoiceTranscript(transcriptText)
-      setVoiceStatus('Ready')
+      const trimmed = transcriptText.trim()
+      let didSend = false
+      if (autoSend && trimmed) {
+        didSend = await trySendTranscriptToTerminal(trimmed, { waitForReady: true })
+      }
+      const didCopy = trimmed ? await tryCopyTranscriptToClipboard(trimmed, { silent: true }) : false
 
-      if (autoSend && transcriptText.trim() && terminalBridge) {
-        terminalBridge.sendInput(`${transcriptText.trim()}\n`)
-        setVoiceTranscript('')
+      if (didSend && didCopy) {
+        setVoiceStatus('Sent to terminal + copied')
+      } else if (didSend) {
         setVoiceStatus('Sent to terminal')
+      } else if (didCopy) {
+        setVoiceStatus('Copied to clipboard')
+      } else {
+        setVoiceStatus('Ready')
+      }
+
+      if (didSend) {
+        setVoiceTranscript('')
       }
     } catch (error) {
       console.error(error)
@@ -314,35 +390,24 @@ function App() {
   }
 
   const handleCopyTranscript = async () => {
-    if (!voiceTranscript.trim()) {
-      setVoiceError('No transcript to copy.')
-      return
-    }
-    if (typeof navigator === 'undefined' || !navigator.clipboard) {
-      setVoiceError('Clipboard access is unavailable in this browser.')
-      return
-    }
-    try {
-      await navigator.clipboard.writeText(voiceTranscript)
-      setVoiceStatus('Copied to clipboard')
-      setVoiceError('')
-    } catch (error) {
-      console.error(error)
-      setVoiceError('Failed to copy transcript.')
-    }
+    await tryCopyTranscriptToClipboard(voiceTranscript)
   }
 
-  const handleSendTranscriptToTerminal = () => {
+  const handleSendTranscriptToTerminal = async () => {
     const text = voiceTranscript.trim()
     if (!text) {
       setVoiceError('No transcript available.')
       return
     }
-    if (!terminalBridge) {
+    if (!terminalBridgeRef.current) {
       setVoiceError('Select a workspace and window first.')
       return
     }
-    terminalBridge.sendInput(`${text}\n`)
+    const didSend = await trySendTranscriptToTerminal(text, { waitForReady: true })
+    if (!didSend) {
+      setVoiceError('Terminal connection is not ready.')
+      return
+    }
     setVoiceStatus('Sent to terminal')
     setVoiceTranscript('')
     setVoiceError('')
@@ -450,7 +515,7 @@ function App() {
           key={`${activeWorkspaceId}-${activeWindowIndex}`}
           wsUrl={wsUrl}
           fontSize={terminalFontSize}
-          onBridgeReady={setTerminalBridge}
+          onBridgeReady={handleTerminalBridgeReady}
         />
       </section>
     )
