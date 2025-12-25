@@ -2499,6 +2499,107 @@ button.danger:hover:not(:disabled) {
   padding: 0 var(--space-xl) var(--space-lg);
 }
 
+/* Workspace Overview Mode */
+.workspace-overview {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+}
+
+.workspace-overview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-lg);
+  padding: var(--space-md) var(--space-lg);
+  border-radius: var(--radius-lg);
+  background: rgba(19, 24, 39, 0.85);
+  border: 1px solid var(--color-border-medium);
+  box-shadow: var(--shadow-sm);
+}
+
+.workspace-overview-header h2 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.workspace-overview-header p {
+  margin: 0.2rem 0 0;
+  font-size: 0.8rem;
+  color: var(--color-text-tertiary);
+}
+
+.workspace-overview-meta {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.3rem 0.75rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-weight: 600;
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--color-accent-primary);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+
+.workspace-overview-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--space-lg);
+}
+
+.workspace-overview-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-medium);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+.workspace-overview-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-md);
+  border-bottom: 1px solid var(--color-border-subtle);
+  border-left: 3px solid var(--workspace-color, var(--color-accent-primary));
+  background: rgba(10, 14, 26, 0.75);
+}
+
+.workspace-overview-card-header h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.workspace-overview-card-header p {
+  margin: 0.2rem 0 0;
+  font-size: 0.75rem;
+  color: var(--color-text-tertiary);
+}
+
+.workspace-overview-card-status {
+  color: var(--color-success);
+  font-size: 0.85rem;
+  line-height: 1.2;
+}
+
+.workspace-overview-card .terminal-frame {
+  flex: 1;
+  border-radius: 0;
+  border: none;
+}
+
 /* Terminal Font Control */
 .terminal-font-control {
   display: flex;
@@ -2597,6 +2698,21 @@ button.danger:hover:not(:disabled) {
 .header-right .refresh-btn {
   padding: 0.4rem 0.625rem;
   font-size: 1rem;
+}
+
+/* Overview Toggle Button */
+.overview-toggle {
+  padding: 0.4rem 0.75rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.overview-toggle.active {
+  background: rgba(245, 158, 11, 0.2);
+  border-color: var(--color-accent-primary);
+  color: var(--color-accent-primary);
+  box-shadow: var(--shadow-sm);
 }
 
 /* Mic Toggle Button */

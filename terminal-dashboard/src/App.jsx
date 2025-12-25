@@ -14,7 +14,7 @@ import WorkspaceCard from './components/workspace/WorkspaceCard'
 import WindowTabs from './components/workspace/WindowTabs'
 
 // Hooks
-import { useIsMobile } from './hooks/useMediaQuery'
+import { useIsMobile, useMediaQuery } from './hooks/useMediaQuery'
 import { useWorkspaces } from './hooks/useWorkspaces'
 
 // Storage keys
@@ -25,6 +25,7 @@ const VOICE_LANGUAGE_STORAGE_KEY = 'terminal-dashboard-voice-language'
 // Constants
 const FONT_SIZE_OPTIONS = [12, 14, 16, 18, 20, 22]
 const DEFAULT_FONT_SIZE = 16
+const OVERVIEW_MIN_FONT_SIZE = 12
 const VOICE_SERVICES = {
   LOCAL: 'local',
   DEEPGRAM: 'deepgram',
@@ -62,6 +63,8 @@ const buildWorkspaceSocketUrl = (workspaceId, windowIndex = null) => {
 
 function App() {
   const isMobile = useIsMobile()
+  const isLargeScreen = useMediaQuery('(min-width: 1280px)')
+  const canUseOverview = !isMobile && isLargeScreen
 
   // Workspaces from API (read-only)
   const {
@@ -88,6 +91,7 @@ function App() {
   const handleTerminalBridgeReady = useCallback((bridge) => {
     terminalBridgeRef.current = bridge
   }, [])
+  const [overviewMode, setOverviewMode] = useState(false)
 
   // Voice transcription state
   const [voiceService, setVoiceService] = useState(() => {
@@ -114,6 +118,15 @@ function App() {
     message: '',
     onConfirm: null,
   })
+
+  const activeWorkspaces = useMemo(
+    () => workspaces.filter((workspace) => workspace.active),
+    [workspaces],
+  )
+  const overviewFontSize = useMemo(
+    () => Math.max(OVERVIEW_MIN_FONT_SIZE, terminalFontSize - 2),
+    [terminalFontSize],
+  )
 
   // Check if we're in a secure context (for microphone access)
   const isSecureContext = typeof window !== 'undefined' &&
@@ -153,6 +166,12 @@ function App() {
       cancelled = true
     }
   }, [activeWorkspaceId, fetchWindows])
+
+  useEffect(() => {
+    if (!canUseOverview && overviewMode) {
+      setOverviewMode(false)
+    }
+  }, [canUseOverview, overviewMode])
 
   // Refresh windows
   const handleRefreshWindows = useCallback(async () => {
@@ -430,6 +449,78 @@ function App() {
 
   // Render terminal view
   const renderTerminalView = () => {
+    if (overviewMode && canUseOverview) {
+      if (workspacesLoading) {
+        return (
+          <div className="empty-state">
+            <p>Loading workspaces...</p>
+          </div>
+        )
+      }
+
+      if (workspacesError) {
+        return (
+          <div className="empty-state">
+            <p>Unable to load workspaces</p>
+            <p className="hint">{workspacesError}</p>
+          </div>
+        )
+      }
+
+      if (activeWorkspaces.length === 0) {
+        return (
+          <div className="empty-state">
+            <p>No active workspaces</p>
+            <p className="hint">Start sessions in your x2go terminal first</p>
+          </div>
+        )
+      }
+
+      return (
+        <section className="workspace-overview">
+          <div className="workspace-overview-header">
+            <div>
+              <h2>Active workspaces</h2>
+              <p>Live terminals from running agents</p>
+            </div>
+            <div className="workspace-overview-meta">
+              {activeWorkspaces.length} active
+            </div>
+          </div>
+          <div className="workspace-overview-grid">
+            {activeWorkspaces.map((workspace) => (
+              <article
+                key={`overview-${workspace.id}`}
+                className="workspace-overview-card"
+                style={{ '--workspace-color': workspace.color || '#6366f1' }}
+              >
+                <header className="workspace-overview-card-header">
+                  <div>
+                    <h3>{workspace.name}</h3>
+                    {workspace.description && (
+                      <p>{workspace.description}</p>
+                    )}
+                  </div>
+                  <span className="workspace-overview-card-status">●</span>
+                </header>
+                <TerminalViewer
+                  wsUrl={buildWorkspaceSocketUrl(
+                    workspace.id,
+                    workspace.id === activeWorkspaceId ? activeWindowIndex : null,
+                  )}
+                  fontSize={overviewFontSize}
+                  showShortcutBar={false}
+                  onBridgeReady={
+                    workspace.id === activeWorkspaceId ? handleTerminalBridgeReady : undefined
+                  }
+                />
+              </article>
+            ))}
+          </div>
+        </section>
+      )
+    }
+
     if (workspacesLoading) {
       return (
         <div className="empty-state">
@@ -648,6 +739,16 @@ function App() {
         </div>
 
         <div className="header-right">
+          {canUseOverview && (
+            <button
+              type="button"
+              className={`secondary overview-toggle ${overviewMode ? 'active' : ''}`}
+              onClick={() => setOverviewMode((prev) => !prev)}
+              title={overviewMode ? 'Switch to single workspace view' : 'Show all active workspaces'}
+            >
+              {overviewMode ? 'Single' : 'Grid'}
+            </button>
+          )}
           <button
             type="button"
             className={`mic-toggle ${voiceRecording ? 'recording' : ''} ${voicePending ? 'pending' : ''}`}
