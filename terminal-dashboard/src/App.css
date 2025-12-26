@@ -2546,11 +2546,40 @@ button.danger:hover:not(:disabled) {
   border: 1px solid rgba(245, 158, 11, 0.35);
 }
 
+.workspace-overview-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.workspace-overview-columns-control {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-tertiary);
+}
+
+.workspace-overview-columns-control .icon-btn {
+  padding: 0.25rem 0.55rem;
+  font-size: 0.85rem;
+}
+
+.workspace-overview-columns-value {
+  min-width: 1.5rem;
+  text-align: center;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
 .workspace-overview-grid {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: repeat(var(--overview-columns, 3), minmax(0, 1fr));
   gap: var(--space-lg);
 }
 

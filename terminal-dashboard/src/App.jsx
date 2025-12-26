@@ -21,11 +21,15 @@ import { useWorkspaces } from './hooks/useWorkspaces'
 const FONT_SIZE_STORAGE_KEY = 'terminal-dashboard-font-size'
 const VOICE_SERVICE_STORAGE_KEY = 'terminal-dashboard-voice-service'
 const VOICE_LANGUAGE_STORAGE_KEY = 'terminal-dashboard-voice-language'
+const OVERVIEW_COLUMNS_STORAGE_KEY = 'terminal-dashboard-overview-columns'
 
 // Constants
 const FONT_SIZE_OPTIONS = [12, 14, 16, 18, 20, 22]
 const DEFAULT_FONT_SIZE = 16
 const OVERVIEW_MIN_FONT_SIZE = 12
+const DEFAULT_OVERVIEW_COLUMNS = 3
+const MIN_OVERVIEW_COLUMNS = 1
+const MAX_OVERVIEW_COLUMNS = 6
 const VOICE_SERVICES = {
   LOCAL: 'local',
   DEEPGRAM: 'deepgram',
@@ -92,6 +96,14 @@ function App() {
     terminalBridgeRef.current = bridge
   }, [])
   const [overviewMode, setOverviewMode] = useState(false)
+  const [overviewColumns, setOverviewColumns] = useState(() => {
+    if (typeof window === 'undefined') return DEFAULT_OVERVIEW_COLUMNS
+    const stored = Number(window.localStorage.getItem(OVERVIEW_COLUMNS_STORAGE_KEY))
+    if (Number.isFinite(stored)) {
+      return Math.min(MAX_OVERVIEW_COLUMNS, Math.max(MIN_OVERVIEW_COLUMNS, stored))
+    }
+    return DEFAULT_OVERVIEW_COLUMNS
+  })
 
   // Voice transcription state
   const [voiceService, setVoiceService] = useState(() => {
@@ -123,10 +135,10 @@ function App() {
     () => workspaces.filter((workspace) => workspace.active),
     [workspaces],
   )
-  const overviewFontSize = useMemo(
-    () => Math.max(OVERVIEW_MIN_FONT_SIZE, terminalFontSize - 2),
-    [terminalFontSize],
-  )
+  const overviewFontSize = useMemo(() => {
+    const reduction = Math.min(4, Math.max(2, overviewColumns - 2))
+    return Math.max(OVERVIEW_MIN_FONT_SIZE, terminalFontSize - reduction)
+  }, [overviewColumns, terminalFontSize])
 
   // Check if we're in a secure context (for microphone access)
   const isSecureContext = typeof window !== 'undefined' &&
@@ -198,6 +210,11 @@ function App() {
     if (typeof window === 'undefined') return
     window.localStorage.setItem(VOICE_LANGUAGE_STORAGE_KEY, voiceLanguage)
   }, [voiceLanguage])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(OVERVIEW_COLUMNS_STORAGE_KEY, String(overviewColumns))
+  }, [overviewColumns])
 
   // Voice transcription functions
   const waitForTerminalConnection = async (timeoutMs = 1500) => {
@@ -483,11 +500,48 @@ function App() {
               <h2>Active workspaces</h2>
               <p>Live terminals from running agents</p>
             </div>
-            <div className="workspace-overview-meta">
-              {activeWorkspaces.length} active
+            <div className="workspace-overview-controls">
+              <div className="workspace-overview-meta">
+                {activeWorkspaces.length} active
+              </div>
+              <div className="workspace-overview-columns-control">
+                <span>Columns</span>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  onClick={() =>
+                    setOverviewColumns((prev) =>
+                      Math.max(MIN_OVERVIEW_COLUMNS, prev - 1)
+                    )
+                  }
+                  disabled={overviewColumns <= MIN_OVERVIEW_COLUMNS}
+                  title="Fewer columns"
+                >
+                  −
+                </button>
+                <span className="workspace-overview-columns-value">
+                  {overviewColumns}
+                </span>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  onClick={() =>
+                    setOverviewColumns((prev) =>
+                      Math.min(MAX_OVERVIEW_COLUMNS, prev + 1)
+                    )
+                  }
+                  disabled={overviewColumns >= MAX_OVERVIEW_COLUMNS}
+                  title="More columns"
+                >
+                  +
+                </button>
+              </div>
             </div>
           </div>
-          <div className="workspace-overview-grid">
+          <div
+            className="workspace-overview-grid"
+            style={{ '--overview-columns': overviewColumns }}
+          >
             {activeWorkspaces.map((workspace) => (
               <article
                 key={`overview-${workspace.id}`}
