@@ -55,12 +55,20 @@ const API_BASE = detectApiBase()
 /**
  * Build WebSocket URL for workspace terminal connection
  */
-const buildWorkspaceSocketUrl = (workspaceId, windowIndex = null) => {
+const buildWorkspaceSocketUrl = (workspaceId, windowIndex = null, options = {}) => {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const port = window.location.port ? `:${window.location.port}` : ''
-  let url = `${protocol}//${window.location.hostname}${port}/ws/sessions/${workspaceId}`
+  const params = new URLSearchParams()
   if (windowIndex !== null && Number.isFinite(windowIndex)) {
-    url += `?windowIndex=${windowIndex}`
+    params.set('windowIndex', String(windowIndex))
+  }
+  if (options.monitor) {
+    params.set('monitor', '1')
+  }
+  const query = params.toString()
+  let url = `${protocol}//${window.location.hostname}${port}/ws/sessions/${workspaceId}`
+  if (query) {
+    url += `?${query}`
   }
   return url
 }
@@ -131,6 +139,11 @@ function App() {
     onConfirm: null,
   })
 
+  const activityTimersRef = useRef(new Map())
+  const activityTimestampsRef = useRef(new Map())
+  const [workspaceActivity, setWorkspaceActivity] = useState({})
+
+  const overviewReadOnly = overviewMode && canUseOverview
   const activeWorkspaces = useMemo(
     () => workspaces.filter((workspace) => workspace.active),
     [workspaces],
@@ -185,6 +198,39 @@ function App() {
     }
   }, [canUseOverview, overviewMode])
 
+  useEffect(() => {
+    return () => {
+      activityTimersRef.current.forEach((timeoutId) => clearTimeout(timeoutId))
+      activityTimersRef.current.clear()
+      activityTimestampsRef.current.clear()
+    }
+  }, [])
+
+  const markWorkspaceActivity = useCallback((workspaceId) => {
+    if (!workspaceId) return
+    const now = Date.now()
+    activityTimestampsRef.current.set(workspaceId, now)
+    setWorkspaceActivity((prev) => {
+      if (prev[workspaceId]) {
+        return prev
+      }
+      return { ...prev, [workspaceId]: true }
+    })
+    const existing = activityTimersRef.current.get(workspaceId)
+    if (existing) {
+      clearTimeout(existing)
+    }
+    const timeoutId = setTimeout(() => {
+      const last = activityTimestampsRef.current.get(workspaceId)
+      if (last === now) {
+        setWorkspaceActivity((prev) => ({ ...prev, [workspaceId]: false }))
+      }
+    }, 1200)
+    activityTimersRef.current.set(workspaceId, timeoutId)
+  }, [])
+
+  const activeWorkspaceIsBusy = !!(activeWorkspaceId && workspaceActivity[activeWorkspaceId])
+
   // Refresh windows
   const handleRefreshWindows = useCallback(async () => {
     if (!activeWorkspaceId) return
@@ -232,6 +278,9 @@ function App() {
   const trySendTranscriptToTerminal = async (text, { waitForReady = false } = {}) => {
     const trimmed = text.trim()
     if (!trimmed) return false
+    if (overviewReadOnly) {
+      return false
+    }
     const payload = `${trimmed}\n`
     const bridge = terminalBridgeRef.current
     if (bridge?.sendInput?.(payload)) {
@@ -435,6 +484,10 @@ function App() {
       setVoiceError('No transcript available.')
       return
     }
+    if (overviewReadOnly) {
+      setVoiceError('Switch to single view to send input.')
+      return
+    }
     if (!terminalBridgeRef.current) {
       setVoiceError('Select a workspace and window first.')
       return
@@ -454,7 +507,7 @@ function App() {
     if (voiceRecording) {
       handleVoiceRecordingStop()
     } else {
-      handleVoiceRecordingStart(true)
+      handleVoiceRecordingStart(!overviewReadOnly)
     }
   }
 
@@ -555,18 +608,24 @@ function App() {
                       <p>{workspace.description}</p>
                     )}
                   </div>
-                  <span className="workspace-overview-card-status">●</span>
+                  <span
+                    className={`workspace-overview-card-status ${
+                      workspaceActivity[workspace.id] ? 'activity-pulse' : ''
+                    }`}
+                  >
+                    ●
+                  </span>
                 </header>
                 <TerminalViewer
                   wsUrl={buildWorkspaceSocketUrl(
                     workspace.id,
                     workspace.id === activeWorkspaceId ? activeWindowIndex : null,
+                    { monitor: true },
                   )}
                   fontSize={overviewFontSize}
+                  monitorMode
                   showShortcutBar={false}
-                  onBridgeReady={
-                    workspace.id === activeWorkspaceId ? handleTerminalBridgeReady : undefined
-                  }
+                  onActivity={() => markWorkspaceActivity(workspace.id)}
                 />
               </article>
             ))}
@@ -623,7 +682,14 @@ function App() {
       <section className="terminal-view-fullscreen">
         <div className="terminal-view-header">
           <div>
-            <h3>{activeWorkspace.name}</h3>
+            <div className="terminal-title-row">
+              <h3>{activeWorkspace.name}</h3>
+              <span
+                className={`terminal-activity-indicator ${
+                  activeWorkspaceIsBusy ? 'activity-pulse' : ''
+                }`}
+              />
+            </div>
             {activeWorkspace.description && (
               <p>{activeWorkspace.description}</p>
             )}
@@ -661,6 +727,7 @@ function App() {
           wsUrl={wsUrl}
           fontSize={terminalFontSize}
           onBridgeReady={handleTerminalBridgeReady}
+          onActivity={() => markWorkspaceActivity(activeWorkspaceId)}
         />
       </section>
     )
@@ -718,7 +785,7 @@ function App() {
           voicePending={voicePending}
           hasDeepgramKey={!!DEEPGRAM_API_KEY}
           hasTerminal={!!activeWorkspace?.active}
-          onStartRecording={() => handleVoiceRecordingStart(true)}
+          onStartRecording={() => handleVoiceRecordingStart(!overviewReadOnly)}
           onStopRecording={handleVoiceRecordingStop}
           onFileUpload={handleVoiceFileSelection}
           onCopyTranscript={handleCopyTranscript}
@@ -807,8 +874,14 @@ function App() {
             type="button"
             className={`mic-toggle ${voiceRecording ? 'recording' : ''} ${voicePending ? 'pending' : ''}`}
             onClick={handleMicToggle}
-            disabled={voicePending || !isSecureContext}
-            title={voiceRecording ? 'Stop recording' : 'Start voice recording'}
+            disabled={voicePending || !isSecureContext || overviewReadOnly}
+            title={
+              overviewReadOnly
+                ? 'Switch to single view to send voice input'
+                : voiceRecording
+                  ? 'Stop recording'
+                  : 'Start voice recording'
+            }
           >
             {voiceRecording ? '⏹' : '🎤'}
           </button>

@@ -41,7 +41,14 @@ const saveShortcuts = (shortcuts) => {
   }
 }
 
-function TerminalViewer({ wsUrl, fontSize, onBridgeReady, showShortcutBar = true }) {
+function TerminalViewer({
+  wsUrl,
+  fontSize,
+  onBridgeReady,
+  showShortcutBar = true,
+  monitorMode = false,
+  onActivity,
+}) {
   const containerRef = useRef(null)
   const termRef = useRef(null)
   const fitAddonRef = useRef(null)
@@ -54,10 +61,53 @@ function TerminalViewer({ wsUrl, fontSize, onBridgeReady, showShortcutBar = true
   const [shortcuts, setShortcuts] = useState(() => loadShortcuts())
   const [showShortcutConfig, setShowShortcutConfig] = useState(false)
   const [editingShortcut, setEditingShortcut] = useState(null)
+  const [monitorScale, setMonitorScale] = useState(1)
+  const lastActivityRef = useRef(0)
+  const onActivityRef = useRef(onActivity)
 
   useEffect(() => {
     fontSizeRef.current = fontSize
   }, [fontSize])
+
+  useEffect(() => {
+    onActivityRef.current = onActivity
+  }, [onActivity])
+
+  const updateMonitorScale = useCallback(() => {
+    if (!monitorMode) {
+      return
+    }
+    const container = containerRef.current
+    const term = termRef.current
+    if (!container || !term) {
+      return
+    }
+    const dimensions = term?._core?._renderService?.dimensions
+    let width = 0
+    let height = 0
+    if (dimensions?.actualCellWidth && dimensions?.actualCellHeight) {
+      width = term.cols * dimensions.actualCellWidth
+      height = term.rows * dimensions.actualCellHeight
+    } else {
+      const screen = term.element?.querySelector('.xterm-screen')
+      if (screen) {
+        const rect = screen.getBoundingClientRect()
+        width = rect.width
+        height = rect.height
+      }
+    }
+    if (!width || !height) {
+      return
+    }
+    const scale = Math.min(
+      container.clientWidth / width,
+      container.clientHeight / height,
+      1,
+    )
+    if (Number.isFinite(scale)) {
+      setMonitorScale(scale)
+    }
+  }, [monitorMode])
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -92,8 +142,10 @@ function TerminalViewer({ wsUrl, fontSize, onBridgeReady, showShortcutBar = true
     term.loadAddon(fitAddon)
     term.loadAddon(webLinksAddon)
     term.open(container)
-    fitAddon.fit()
-    term.focus()
+    if (!monitorMode) {
+      fitAddon.fit()
+      term.focus()
+    }
     termRef.current = term
     fitAddonRef.current = fitAddon
 
@@ -115,13 +167,18 @@ function TerminalViewer({ wsUrl, fontSize, onBridgeReady, showShortcutBar = true
     }
 
     const pushResize = () => {
+      if (monitorMode) {
+        return
+      }
       fitAddon.fit()
       sendMessage({ type: 'resize', cols: term.cols, rows: term.rows })
     }
 
     socket.addEventListener('open', () => {
       setConnectionState({ status: 'connected', message: 'Connected' })
-      pushResize()
+      if (!monitorMode) {
+        pushResize()
+      }
     })
 
     socket.addEventListener('close', () => {
@@ -142,11 +199,24 @@ function TerminalViewer({ wsUrl, fontSize, onBridgeReady, showShortcutBar = true
         return
       }
       if (payload.type === 'data' && typeof payload.payload === 'string') {
+        if (typeof onActivityRef.current === 'function') {
+          const now = Date.now()
+          if (now - lastActivityRef.current > 250) {
+            lastActivityRef.current = now
+            onActivityRef.current()
+          }
+        }
         term.write(payload.payload)
         return
       }
       if (payload.type === 'ready') {
         setConnectionState({ status: 'connected', message: 'Session ready' })
+        if (monitorMode && Number.isFinite(payload.cols) && Number.isFinite(payload.rows)) {
+          term.resize(payload.cols, payload.rows)
+        }
+        if (monitorMode) {
+          updateMonitorScale()
+        }
         return
       }
       if (payload.type === 'exit') {
@@ -160,19 +230,31 @@ function TerminalViewer({ wsUrl, fontSize, onBridgeReady, showShortcutBar = true
       }
     })
 
-    const dataDisposable = term.onData((chunk) => {
-      sendMessage({ type: 'input', payload: chunk })
-    })
+    const dataDisposable = monitorMode
+      ? { dispose: () => {} }
+      : term.onData((chunk) => {
+          sendMessage({ type: 'input', payload: chunk })
+        })
 
     let cleanupResize = () => {}
     if (typeof window !== 'undefined' && 'ResizeObserver' in window) {
       const observer = new window.ResizeObserver(() => {
-        pushResize()
+        if (monitorMode) {
+          updateMonitorScale()
+        } else {
+          pushResize()
+        }
       })
       observer.observe(container)
       cleanupResize = () => observer.disconnect()
     } else {
-      const handleResize = () => pushResize()
+      const handleResize = () => {
+        if (monitorMode) {
+          updateMonitorScale()
+        } else {
+          pushResize()
+        }
+      }
       window.addEventListener('resize', handleResize)
       cleanupResize = () => window.removeEventListener('resize', handleResize)
     }
@@ -191,7 +273,7 @@ function TerminalViewer({ wsUrl, fontSize, onBridgeReady, showShortcutBar = true
       termRef.current = null
       fitAddonRef.current = null
     }
-  }, [wsUrl])
+  }, [wsUrl, monitorMode, updateMonitorScale])
 
   useEffect(() => {
     if (typeof onBridgeReady !== 'function') {
@@ -199,6 +281,9 @@ function TerminalViewer({ wsUrl, fontSize, onBridgeReady, showShortcutBar = true
     }
     const bridge = {
       sendInput: (payload) => {
+        if (monitorMode) {
+          return false
+        }
         if (!payload || typeof payload !== 'string') {
           return false
         }
@@ -223,7 +308,7 @@ function TerminalViewer({ wsUrl, fontSize, onBridgeReady, showShortcutBar = true
     return () => {
       onBridgeReady(null)
     }
-  }, [onBridgeReady, wsUrl])
+  }, [monitorMode, onBridgeReady, wsUrl])
 
   useEffect(() => {
     const term = termRef.current
@@ -239,16 +324,23 @@ function TerminalViewer({ wsUrl, fontSize, onBridgeReady, showShortcutBar = true
     if (typeof term.refresh === 'function') {
       term.refresh(0, term.rows - 1)
     }
+    if (monitorMode) {
+      updateMonitorScale()
+      return
+    }
     fitAddonRef.current?.fit()
-  }, [fontSize])
+  }, [fontSize, monitorMode, updateMonitorScale])
 
   const sendShortcut = useCallback((keys) => {
+    if (monitorMode) {
+      return
+    }
     const socket = socketRef.current
     if (socket && socket.readyState === window.WebSocket.OPEN) {
       socket.send(JSON.stringify({ type: 'input', payload: keys }))
     }
     termRef.current?.focus()
-  }, [])
+  }, [monitorMode])
 
   const handleAddShortcut = useCallback((newShortcut) => {
     setShortcuts((prev) => {
@@ -425,7 +517,15 @@ function TerminalViewer({ wsUrl, fontSize, onBridgeReady, showShortcutBar = true
         </div>
       )}
 
-      <div ref={containerRef} className="terminal-surface" />
+      <div
+        ref={containerRef}
+        className={`terminal-surface${monitorMode ? ' terminal-surface-monitor' : ''}`}
+        style={
+          monitorMode
+            ? { transform: `scale(${monitorScale})`, transformOrigin: 'top left' }
+            : undefined
+        }
+      />
       <div className={`terminal-status terminal-status-${connectionState.status}`}>
         <span className="terminal-status-dot" />
         {connectionState.message}

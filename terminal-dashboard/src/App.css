@@ -579,6 +579,11 @@ button.danger:hover:not(:disabled) {
   background: #030712;
 }
 
+.terminal-surface-monitor {
+  transform-origin: top left;
+  will-change: transform;
+}
+
 .terminal-surface::before {
   content: '';
   position: absolute;
@@ -1252,6 +1257,46 @@ button.danger:hover:not(:disabled) {
 
 .terminal-view-fullscreen .terminal-view-header {
   padding: 1rem 1.5rem 0.5rem;
+}
+
+.terminal-title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.terminal-activity-indicator {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: rgba(148, 163, 184, 0.35);
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.25);
+  flex-shrink: 0;
+}
+
+.activity-pulse {
+  animation: activityPulse 1.1s ease-in-out infinite;
+}
+
+.terminal-activity-indicator.activity-pulse {
+  background: var(--color-terminal-green);
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.5);
+}
+
+.workspace-overview-card-status.activity-pulse {
+  color: var(--color-terminal-green);
+  text-shadow: 0 0 10px rgba(34, 197, 94, 0.6);
+}
+
+@keyframes activityPulse {
+  0%, 100% {
+    opacity: 0.5;
+    transform: scale(0.9);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.1);
+  }
 }
 
 .terminal-view-fullscreen .terminal-frame {

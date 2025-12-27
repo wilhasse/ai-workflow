@@ -367,6 +367,30 @@ const tmuxSelectWindow = async (sessionId, windowIndex) => {
   return response.ok
 }
 
+const tmuxGetWindowSize = async (sessionId, windowIndex = null) => {
+  const target =
+    windowIndex !== null && Number.isFinite(windowIndex)
+      ? `${sessionId}:${windowIndex}`
+      : sessionId
+  const response = await runTmux([
+    'display-message',
+    '-p',
+    '-t',
+    target,
+    '#{window_width}|#{window_height}',
+  ])
+  if (!response.ok) {
+    return null
+  }
+  const [colsRaw, rowsRaw] = response.stdout.trim().split('|')
+  const cols = Number.parseInt(colsRaw, 10)
+  const rows = Number.parseInt(rowsRaw, 10)
+  if (!Number.isFinite(cols) || !Number.isFinite(rows)) {
+    return null
+  }
+  return { cols, rows }
+}
+
 const ensureMetadata = async (sessionId, { projectId = null, command = null } = {}) => {
   const now = new Date().toISOString()
   const previous = sessionStore.get(sessionId)
@@ -727,6 +751,8 @@ const handleTerminalSocket = async (ws, sessionIdRaw, searchParams) => {
   const sanitizedProjectId = sanitizeId(searchParams.get('projectId'))
   const windowIndexRaw = searchParams.get('windowIndex')
   const windowIndex = windowIndexRaw !== null ? Number.parseInt(windowIndexRaw, 10) : null
+  const monitorFlag = (searchParams.get('monitor') ?? '').toLowerCase()
+  const monitorMode = monitorFlag === '1' || monitorFlag === 'true'
 
   if (!sanitizedSessionId) {
     sendWsMessage(ws, { type: 'error', message: 'Invalid session id' })
@@ -753,6 +779,18 @@ const handleTerminalSocket = async (ws, sessionIdRaw, searchParams) => {
     }
   }
 
+  let initialSize = null
+  if (monitorMode) {
+    try {
+      initialSize = await tmuxGetWindowSize(sanitizedSessionId, windowIndex)
+    } catch (error) {
+      console.warn('Failed to read tmux window size', error.message)
+    }
+  }
+
+  const ptyCols = initialSize?.cols ?? 80
+  const ptyRows = initialSize?.rows ?? 24
+
   let ptyProcess
   try {
     ptyProcess = pty.spawn(
@@ -760,8 +798,8 @@ const handleTerminalSocket = async (ws, sessionIdRaw, searchParams) => {
       ['attach-session', '-t', sanitizedSessionId],
       {
         name: 'xterm-256color',
-        cols: 80,
-        rows: 24,
+        cols: ptyCols,
+        rows: ptyRows,
         cwd: process.env.HOME ?? process.cwd(),
         env: {
           ...process.env,
@@ -805,10 +843,16 @@ const handleTerminalSocket = async (ws, sessionIdRaw, searchParams) => {
       return
     }
     if (incoming.type === 'input' && typeof incoming.payload === 'string') {
+      if (monitorMode) {
+        return
+      }
       ptyProcess?.write(incoming.payload)
       return
     }
     if (incoming.type === 'resize') {
+      if (monitorMode) {
+        return
+      }
       const cols = Number.parseInt(incoming.cols, 10)
       const rows = Number.parseInt(incoming.rows, 10)
       if (Number.isFinite(cols) && Number.isFinite(rows) && cols > 0 && rows > 0) {
@@ -836,7 +880,13 @@ const handleTerminalSocket = async (ws, sessionIdRaw, searchParams) => {
 
   ws.on('close', () => clearInterval(pingInterval))
 
-  sendWsMessage(ws, { type: 'ready', sessionId: sanitizedSessionId })
+  sendWsMessage(ws, {
+    type: 'ready',
+    sessionId: sanitizedSessionId,
+    cols: ptyCols,
+    rows: ptyRows,
+    monitor: monitorMode,
+  })
 }
 
 server.on('upgrade', (req, socket, head) => {
