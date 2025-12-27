@@ -86,8 +86,8 @@ class WorkspaceButton(Gtk.Button):
         if event.button == 3:  # Right click
             menu = Gtk.Menu()
 
-            # Rename item
-            rename_item = Gtk.MenuItem(label="Rename...")
+            # Edit item
+            rename_item = Gtk.MenuItem(label="Edit...")
             rename_item.connect('activate', self.on_rename_clicked)
             menu.append(rename_item)
 
@@ -486,9 +486,15 @@ class WorkspaceSwitcher(Gtk.Window):
         self.refresh_workspaces()
 
     def rename_workspace(self, workspace_id, current_name):
-        """Rename a workspace (display name only, not the ID)"""
+        """Edit a workspace (name and path)"""
+        # Get current workspace data
+        workspaces = self.load_config()
+        current_ws = next((ws for ws in workspaces if ws['id'] == workspace_id), None)
+        if not current_ws:
+            return
+
         dialog = Gtk.Dialog(
-            title="Rename Workspace",
+            title="Edit Workspace",
             transient_for=self,
             flags=0
         )
@@ -496,31 +502,77 @@ class WorkspaceSwitcher(Gtk.Window):
             Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
             Gtk.STOCK_OK, Gtk.ResponseType.OK
         )
-        dialog.set_default_size(250, 100)
+        dialog.set_default_size(350, 150)
 
         box = dialog.get_content_area()
         box.set_margin_start(10)
         box.set_margin_end(10)
         box.set_margin_top(10)
         box.set_margin_bottom(10)
+        box.set_spacing(8)
 
-        entry = Gtk.Entry()
-        entry.set_text(current_name)
-        entry.select_region(0, -1)
-        entry.connect('activate', lambda e: dialog.response(Gtk.ResponseType.OK))
-        box.pack_start(entry, True, True, 0)
+        # Name field
+        name_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        name_label = Gtk.Label(label="Name:")
+        name_label.set_width_chars(6)
+        name_label.set_xalign(0)
+        name_entry = Gtk.Entry()
+        name_entry.set_text(current_name)
+        name_entry.select_region(0, -1)
+        name_box.pack_start(name_label, False, False, 0)
+        name_box.pack_start(name_entry, True, True, 0)
+        box.pack_start(name_box, False, False, 0)
+
+        # Path field with browse button
+        path_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        path_label = Gtk.Label(label="Path:")
+        path_label.set_width_chars(6)
+        path_label.set_xalign(0)
+        path_entry = Gtk.Entry()
+        path_entry.set_text(current_ws.get('path', ''))
+
+        def on_browse(button):
+            file_dialog = Gtk.FileChooserDialog(
+                title="Select Project Directory",
+                parent=dialog,
+                action=Gtk.FileChooserAction.SELECT_FOLDER
+            )
+            file_dialog.add_buttons(
+                Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+                Gtk.STOCK_OPEN, Gtk.ResponseType.OK
+            )
+            if file_dialog.run() == Gtk.ResponseType.OK:
+                path_entry.set_text(file_dialog.get_filename())
+            file_dialog.destroy()
+
+        browse_btn = Gtk.Button(label="...")
+        browse_btn.connect('clicked', on_browse)
+        path_box.pack_start(path_label, False, False, 0)
+        path_box.pack_start(path_entry, True, True, 0)
+        path_box.pack_start(browse_btn, False, False, 0)
+        box.pack_start(path_box, False, False, 0)
+
+        name_entry.connect('activate', lambda e: dialog.response(Gtk.ResponseType.OK))
 
         dialog.show_all()
         response = dialog.run()
 
         if response == Gtk.ResponseType.OK:
-            new_name = entry.get_text().strip()
-            if new_name and new_name != current_name:
-                workspaces = self.load_config()
-                for ws in workspaces:
-                    if ws['id'] == workspace_id:
+            new_name = name_entry.get_text().strip()
+            new_path = path_entry.get_text().strip()
+            changed = False
+
+            for ws in workspaces:
+                if ws['id'] == workspace_id:
+                    if new_name and new_name != ws.get('name'):
                         ws['name'] = new_name
-                        break
+                        changed = True
+                    if new_path and new_path != ws.get('path'):
+                        ws['path'] = new_path
+                        changed = True
+                    break
+
+            if changed:
                 self.save_config(workspaces)
                 self.refresh_workspaces()
 
