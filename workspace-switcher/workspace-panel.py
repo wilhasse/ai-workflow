@@ -15,7 +15,7 @@ import signal
 import sys
 
 CONFIG_FILE = os.path.expanduser("~/ai-workflow/workspace-switcher/workspaces.json")
-REFRESH_INTERVAL = 3000  # ms
+REFRESH_INTERVAL = 5000  # ms
 
 class WorkspaceButton(Gtk.Button):
     """A styled button representing a workspace/tmux session"""
@@ -404,9 +404,9 @@ class WorkspaceSwitcher(Gtk.Window):
 
     def refresh_workspaces(self):
         """Reload workspaces and session info"""
-        # Clear existing buttons
+        # Clear existing buttons - destroy them to free memory
         for child in self.workspace_box.get_children():
-            self.workspace_box.remove(child)
+            child.destroy()
 
         # Load config
         workspaces = self.load_config()
