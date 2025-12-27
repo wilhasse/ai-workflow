@@ -603,7 +603,13 @@ function App() {
               >
                 <header className="workspace-overview-card-header">
                   <div>
-                    <h3>{workspace.name}</h3>
+                    <h3
+                      className={`terminal-title ${
+                        workspaceActivity[workspace.id] ? 'activity-title' : ''
+                      }`}
+                    >
+                      {workspace.name}
+                    </h3>
                     {workspace.description && (
                       <p>{workspace.description}</p>
                     )}
@@ -683,7 +689,9 @@ function App() {
         <div className="terminal-view-header">
           <div>
             <div className="terminal-title-row">
-              <h3>{activeWorkspace.name}</h3>
+              <h3 className={`terminal-title ${activeWorkspaceIsBusy ? 'activity-title' : ''}`}>
+                {activeWorkspace.name}
+              </h3>
               <span
                 className={`terminal-activity-indicator ${
                   activeWorkspaceIsBusy ? 'activity-pulse' : ''

@@ -1265,13 +1265,33 @@ button.danger:hover:not(:disabled) {
   gap: var(--space-sm);
 }
 
+.terminal-title {
+  margin: 0;
+  color: var(--color-text-primary);
+  transition: color var(--transition-fast);
+}
+
+.terminal-title.activity-title {
+  animation: activityTitleGlow 1.1s ease-in-out infinite;
+}
+
 .terminal-activity-indicator {
-  width: 0.55rem;
-  height: 0.55rem;
+  position: relative;
+  width: 0.75rem;
+  height: 0.75rem;
   border-radius: 50%;
   background: rgba(148, 163, 184, 0.35);
-  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.25);
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.35);
   flex-shrink: 0;
+}
+
+.terminal-activity-indicator::after {
+  content: '';
+  position: absolute;
+  inset: -0.2rem;
+  border-radius: 50%;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  opacity: 0;
 }
 
 .activity-pulse {
@@ -1280,22 +1300,55 @@ button.danger:hover:not(:disabled) {
 
 .terminal-activity-indicator.activity-pulse {
   background: var(--color-terminal-green);
-  box-shadow: 0 0 8px rgba(34, 197, 94, 0.5);
+  box-shadow: 0 0 14px rgba(34, 197, 94, 0.65);
+}
+
+.terminal-activity-indicator.activity-pulse::after {
+  border-color: rgba(34, 197, 94, 0.6);
+  animation: activityRing 1.1s ease-out infinite;
+}
+
+.workspace-overview-card-status {
+  font-size: 1rem;
+  line-height: 1;
 }
 
 .workspace-overview-card-status.activity-pulse {
   color: var(--color-terminal-green);
-  text-shadow: 0 0 10px rgba(34, 197, 94, 0.6);
+  text-shadow: 0 0 14px rgba(34, 197, 94, 0.8);
+  filter: drop-shadow(0 0 6px rgba(34, 197, 94, 0.6));
 }
 
 @keyframes activityPulse {
   0%, 100% {
-    opacity: 0.5;
-    transform: scale(0.9);
+    opacity: 0.4;
+    transform: scale(0.85);
   }
   50% {
     opacity: 1;
-    transform: scale(1.1);
+    transform: scale(1.25);
+  }
+}
+
+@keyframes activityRing {
+  0% {
+    opacity: 0.7;
+    transform: scale(0.8);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.6);
+  }
+}
+
+@keyframes activityTitleGlow {
+  0%, 100% {
+    color: var(--color-text-primary);
+    text-shadow: none;
+  }
+  50% {
+    color: var(--color-terminal-green);
+    text-shadow: 0 0 12px rgba(34, 197, 94, 0.6);
   }
 }
 
