@@ -48,8 +48,12 @@ class WorkspaceButton(Gtk.Button):
 
         top_box.pack_start(self.status_dot, False, False, 0)
 
-        # Workspace name
-        name_label = Gtk.Label(label=workspace['name'])
+        # Workspace name - brighter if session active
+        name_label = Gtk.Label()
+        if session_info:
+            name_label.set_markup(f'<span foreground="#2c3e50">{workspace["name"]}</span>')
+        else:
+            name_label.set_markup(f'<span foreground="#7f8c8d">{workspace["name"]}</span>')
         name_label.set_ellipsize(Pango.EllipsizeMode.END)
         name_label.set_max_width_chars(12)
         top_box.pack_start(name_label, True, True, 0)
@@ -584,15 +588,16 @@ class WorkspaceSwitcher(Gtk.Window):
         try:
             result = subprocess.run(
                 ['tmux', 'list-sessions', '-F', '#{session_name}:#{session_windows}'],
-                capture_output=True, text=True
+                capture_output=True, text=True,
+                env={**os.environ, 'TMUX': ''}  # Ensure we can query from outside tmux
             )
             if result.returncode == 0:
                 for line in result.stdout.strip().split('\n'):
                     if ':' in line:
                         name, windows = line.rsplit(':', 1)
                         sessions[name] = {'windows': int(windows)}
-        except:
-            pass
+        except Exception as e:
+            print(f"tmux detection error: {e}")  # Debug logging
         return sessions
 
     def on_add_workspace(self, button):
