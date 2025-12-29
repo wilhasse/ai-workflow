@@ -22,6 +22,7 @@ const FONT_SIZE_STORAGE_KEY = 'terminal-dashboard-font-size'
 const VOICE_SERVICE_STORAGE_KEY = 'terminal-dashboard-voice-service'
 const VOICE_LANGUAGE_STORAGE_KEY = 'terminal-dashboard-voice-language'
 const OVERVIEW_COLUMNS_STORAGE_KEY = 'terminal-dashboard-overview-columns'
+const OVERVIEW_HIDDEN_STORAGE_KEY = 'terminal-dashboard-overview-hidden'
 
 // Constants
 const FONT_SIZE_OPTIONS = [12, 14, 16, 18, 20, 22]
@@ -112,6 +113,19 @@ function App() {
     }
     return DEFAULT_OVERVIEW_COLUMNS
   })
+  const [overviewHiddenIds, setOverviewHiddenIds] = useState(() => {
+    if (typeof window === 'undefined') return []
+    try {
+      const stored = JSON.parse(window.localStorage.getItem(OVERVIEW_HIDDEN_STORAGE_KEY) || '[]')
+      if (Array.isArray(stored)) {
+        return stored
+      }
+    } catch {
+      // ignore
+    }
+    return []
+  })
+  const [overviewFilterOpen, setOverviewFilterOpen] = useState(false)
 
   // Voice transcription state
   const [voiceService, setVoiceService] = useState(() => {
@@ -147,6 +161,14 @@ function App() {
   const activeWorkspaces = useMemo(
     () => workspaces.filter((workspace) => workspace.active),
     [workspaces],
+  )
+  const overviewHiddenSet = useMemo(
+    () => new Set(overviewHiddenIds),
+    [overviewHiddenIds],
+  )
+  const visibleWorkspaces = useMemo(
+    () => activeWorkspaces.filter((workspace) => !overviewHiddenSet.has(workspace.id)),
+    [activeWorkspaces, overviewHiddenSet],
   )
   const overviewFontSize = useMemo(() => {
     const reduction = Math.min(4, Math.max(2, overviewColumns - 2))
@@ -199,11 +221,34 @@ function App() {
   }, [canUseOverview, overviewMode])
 
   useEffect(() => {
+    if (!overviewMode) {
+      setOverviewFilterOpen(false)
+    }
+  }, [overviewMode])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(OVERVIEW_HIDDEN_STORAGE_KEY, JSON.stringify(overviewHiddenIds))
+  }, [overviewHiddenIds])
+
+  useEffect(() => {
     return () => {
       activityTimersRef.current.forEach((timeoutId) => clearTimeout(timeoutId))
       activityTimersRef.current.clear()
       activityTimestampsRef.current.clear()
     }
+  }, [])
+
+  const toggleOverviewVisibility = useCallback((workspaceId) => {
+    setOverviewHiddenIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(workspaceId)) {
+        next.delete(workspaceId)
+      } else {
+        next.add(workspaceId)
+      }
+      return Array.from(next)
+    })
   }, [])
 
   const markWorkspaceActivity = useCallback((workspaceId) => {
@@ -546,6 +591,22 @@ function App() {
         )
       }
 
+      if (visibleWorkspaces.length === 0) {
+        return (
+          <div className="empty-state">
+            <p>No terminals selected for grid view</p>
+            <p className="hint">Use the filter to show workspaces again</p>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => setOverviewHiddenIds([])}
+            >
+              Show all
+            </button>
+          </div>
+        )
+      }
+
       return (
         <section className="workspace-overview">
           <div className="workspace-overview-header">
@@ -555,7 +616,42 @@ function App() {
             </div>
             <div className="workspace-overview-controls">
               <div className="workspace-overview-meta">
-                {activeWorkspaces.length} active
+                {visibleWorkspaces.length}/{activeWorkspaces.length} visible
+              </div>
+              <div className="workspace-overview-filter">
+                <button
+                  type="button"
+                  className="secondary overview-filter-toggle"
+                  onClick={() => setOverviewFilterOpen((prev) => !prev)}
+                >
+                  Filter
+                </button>
+                {overviewFilterOpen && (
+                  <div className="workspace-overview-filter-menu">
+                    <div className="filter-menu-header">
+                      <span>Show in grid</span>
+                      <button
+                        type="button"
+                        className="filter-reset"
+                        onClick={() => setOverviewHiddenIds([])}
+                      >
+                        Show all
+                      </button>
+                    </div>
+                    <div className="filter-menu-list">
+                      {activeWorkspaces.map((workspace) => (
+                        <label key={`filter-${workspace.id}`} className="filter-menu-item">
+                          <input
+                            type="checkbox"
+                            checked={!overviewHiddenSet.has(workspace.id)}
+                            onChange={() => toggleOverviewVisibility(workspace.id)}
+                          />
+                          <span>{workspace.name}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
               <div className="workspace-overview-columns-control">
                 <span>Columns</span>
@@ -595,7 +691,7 @@ function App() {
             className="workspace-overview-grid"
             style={{ '--overview-columns': overviewColumns }}
           >
-            {activeWorkspaces.map((workspace) => (
+            {visibleWorkspaces.map((workspace) => (
               <article
                 key={`overview-${workspace.id}`}
                 className="workspace-overview-card"

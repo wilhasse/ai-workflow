@@ -2650,6 +2650,75 @@ button.danger:hover:not(:disabled) {
   gap: var(--space-md);
 }
 
+.workspace-overview-filter {
+  position: relative;
+}
+
+.overview-filter-toggle {
+  padding: 0.35rem 0.75rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.workspace-overview-filter-menu {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  right: 0;
+  min-width: 200px;
+  background: rgba(19, 24, 39, 0.98);
+  border: 1px solid var(--color-border-medium);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  padding: var(--space-sm);
+  z-index: 20;
+}
+
+.filter-menu-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-tertiary);
+  margin-bottom: var(--space-sm);
+}
+
+.filter-reset {
+  background: transparent;
+  border: none;
+  color: var(--color-accent-primary);
+  font-weight: 600;
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+
+.filter-reset:hover {
+  text-decoration: underline;
+}
+
+.filter-menu-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.filter-menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: 0.85rem;
+  color: var(--color-text-primary);
+  cursor: pointer;
+}
+
+.filter-menu-item input {
+  accent-color: var(--color-accent-primary);
+}
+
 .workspace-overview-columns-control {
   display: flex;
   align-items: center;
