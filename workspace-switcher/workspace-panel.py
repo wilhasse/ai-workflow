@@ -15,17 +15,28 @@ import signal
 import sys
 
 CONFIG_FILE = os.path.expanduser("~/ai-workflow/workspace-switcher/workspaces.json")
-REFRESH_INTERVAL = 5000  # ms
+REFRESH_INTERVAL = 2000  # ms
 
 class WorkspaceButton(Gtk.Button):
     """A styled button representing a workspace/tmux session"""
 
-    def __init__(self, workspace, session_info=None, on_remove=None, on_rename=None):
+    def __init__(
+        self,
+        workspace,
+        session_info=None,
+        on_remove=None,
+        on_rename=None,
+        activity_recent=False
+    ):
         super().__init__()
         self.workspace = workspace
         self.session_info = session_info
         self.on_remove_callback = on_remove
         self.on_rename_callback = on_rename
+        self._activity_timeout_id = None
+        self._escaped_name = GLib.markup_escape_text(workspace["name"])
+        self._base_color = "#2c3e50" if session_info else "#7f8c8d"
+        self._pulse_color = "#4ade80"
 
         # Main container
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
@@ -49,14 +60,12 @@ class WorkspaceButton(Gtk.Button):
         top_box.pack_start(self.status_dot, False, False, 0)
 
         # Workspace name - brighter if session active
-        name_label = Gtk.Label()
-        if session_info:
-            name_label.set_markup(f'<span foreground="#2c3e50">{workspace["name"]}</span>')
-        else:
-            name_label.set_markup(f'<span foreground="#7f8c8d">{workspace["name"]}</span>')
-        name_label.set_ellipsize(Pango.EllipsizeMode.END)
-        name_label.set_max_width_chars(12)
-        top_box.pack_start(name_label, True, True, 0)
+        self.name_label = Gtk.Label()
+        self._base_name_markup = f'<span foreground="{self._base_color}">{self._escaped_name}</span>'
+        self.name_label.set_markup(self._base_name_markup)
+        self.name_label.set_ellipsize(Pango.EllipsizeMode.END)
+        self.name_label.set_max_width_chars(12)
+        top_box.pack_start(self.name_label, True, True, 0)
 
         # Window count badge
         if session_info and session_info['windows'] > 0:
@@ -79,11 +88,15 @@ class WorkspaceButton(Gtk.Button):
         # Apply color styling
         self._apply_color(workspace.get('color', '#3498db'))
 
+        if activity_recent:
+            self._pulse_activity()
+
         # Connect click handler
         self.connect('clicked', self.on_clicked)
 
         # Right-click context menu
         self.connect('button-press-event', self.on_button_press)
+        self.connect('destroy', self._on_destroy)
 
     def on_button_press(self, widget, event):
         """Handle right-click for context menu"""
@@ -144,6 +157,32 @@ class WorkspaceButton(Gtk.Button):
         provider = Gtk.CssProvider()
         provider.load_from_data(css.encode())
         self.get_style_context().add_provider(provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+    def _pulse_activity(self):
+        """Temporarily highlight the workspace name when activity is detected."""
+        if self._activity_timeout_id:
+            GLib.source_remove(self._activity_timeout_id)
+            self._activity_timeout_id = None
+
+        self._set_name_color(self._pulse_color)
+
+        def clear_pulse():
+            self._restore_name_color()
+            self._activity_timeout_id = None
+            return False
+
+        self._activity_timeout_id = GLib.timeout_add(700, clear_pulse)
+
+    def _set_name_color(self, color):
+        self.name_label.set_markup(f'<span foreground="{color}">{self._escaped_name}</span>')
+
+    def _restore_name_color(self):
+        self._set_name_color(self._base_color)
+
+    def _on_destroy(self, widget):
+        if self._activity_timeout_id:
+            GLib.source_remove(self._activity_timeout_id)
+            self._activity_timeout_id = None
 
     def on_clicked(self, button):
         """Handle button click - focus existing window or create new one"""
@@ -388,6 +427,7 @@ class WorkspaceSwitcher(Gtk.Window):
         self.add(main_box)
 
         # Load workspaces
+        self.last_session_activity = {}
         self.refresh_workspaces()
 
         # Auto-refresh timer
@@ -417,14 +457,32 @@ class WorkspaceSwitcher(Gtk.Window):
 
         # Get tmux session info
         sessions = self.get_tmux_sessions()
+        self.last_session_activity = {
+            key: value
+            for key, value in self.last_session_activity.items()
+            if key in sessions
+        }
 
         # Create buttons
         active_count = 0
         for ws in workspaces:
             session_info = sessions.get(ws['id'])
+            activity_recent = False
             if session_info:
                 active_count += 1
-            btn = WorkspaceButton(ws, session_info, on_remove=self.remove_workspace, on_rename=self.rename_workspace)
+                activity = session_info.get('activity')
+                previous_activity = self.last_session_activity.get(ws['id'])
+                if activity is not None and previous_activity is not None and activity > previous_activity:
+                    activity_recent = True
+                if activity is not None:
+                    self.last_session_activity[ws['id']] = activity
+            btn = WorkspaceButton(
+                ws,
+                session_info,
+                on_remove=self.remove_workspace,
+                on_rename=self.rename_workspace,
+                activity_recent=activity_recent
+            )
             self.workspace_box.pack_start(btn, False, False, 0)
 
         # Update footer
@@ -587,15 +645,39 @@ class WorkspaceSwitcher(Gtk.Window):
         sessions = {}
         try:
             result = subprocess.run(
-                ['tmux', 'list-sessions', '-F', '#{session_name}:#{session_windows}'],
+                ['tmux', 'list-sessions', '-F', '#{session_name}:#{session_windows}:#{session_activity}'],
                 capture_output=True, text=True,
                 env={**os.environ, 'TMUX': ''}  # Ensure we can query from outside tmux
             )
             if result.returncode == 0:
                 for line in result.stdout.strip().split('\n'):
                     if ':' in line:
-                        name, windows = line.rsplit(':', 1)
-                        sessions[name] = {'windows': int(windows)}
+                        parts = line.rsplit(':', 2)
+                        if len(parts) != 3:
+                            continue
+                        name, windows, activity = parts
+                        sessions[name] = {
+                            'windows': int(windows),
+                            'activity': int(activity)
+                        }
+            windows_result = subprocess.run(
+                ['tmux', 'list-windows', '-a', '-F', '#{session_name}:#{window_activity}'],
+                capture_output=True, text=True,
+                env={**os.environ, 'TMUX': ''}
+            )
+            if windows_result.returncode == 0:
+                for line in windows_result.stdout.strip().split('\n'):
+                    if ':' not in line:
+                        continue
+                    session_name, activity = line.rsplit(':', 1)
+                    if not activity:
+                        continue
+                    session_info = sessions.get(session_name)
+                    if session_info is None:
+                        continue
+                    activity_value = int(activity)
+                    if activity_value > session_info['activity']:
+                        session_info['activity'] = activity_value
         except Exception as e:
             print(f"tmux detection error: {e}")  # Debug logging
         return sessions
