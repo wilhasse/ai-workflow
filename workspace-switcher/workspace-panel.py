@@ -688,7 +688,10 @@ class HostTabBar(Gtk.Box):
         self.buttons = {}
         self.health_indicators = {}
         self.workspace_counts = {}
+        self.name_labels = {}
         self._active_host = 'local'
+        self._pulse_timeout_ids = {}  # host_id -> timeout_id
+        self._pulse_color = "#4ade80"  # Green pulse color
 
         self.set_margin_start(4)
         self.set_margin_end(4)
@@ -699,11 +702,17 @@ class HostTabBar(Gtk.Box):
 
     def _build_tabs(self):
         """Build tab buttons for each host"""
+        # Clean up old pulse timeouts
+        for timeout_id in self._pulse_timeout_ids.values():
+            GLib.source_remove(timeout_id)
+        self._pulse_timeout_ids = {}
+
         for child in self.get_children():
             child.destroy()
 
         self.buttons = {}
         self.health_indicators = {}
+        self.name_labels = {}
 
         for host in self.hosts:
             host_id = host['id']
@@ -721,8 +730,10 @@ class HostTabBar(Gtk.Box):
             self.health_indicators[host_id] = health_dot
             btn_box.pack_start(health_dot, False, False, 0)
 
-            # Host name
-            name_label = Gtk.Label(label=host['name'])
+            # Host name (stored for activity pulsing)
+            name_label = Gtk.Label()
+            name_label.set_text(host['name'])
+            self.name_labels[host_id] = (name_label, host['name'])  # (widget, original_name)
             btn_box.pack_start(name_label, False, False, 0)
 
             # Workspace count badge
@@ -788,6 +799,30 @@ class HostTabBar(Gtk.Box):
 
     def get_active_host(self):
         return self._active_host
+
+    def pulse_activity(self, host_id):
+        """Pulse the tab name to indicate activity on that host"""
+        if host_id not in self.name_labels:
+            return
+        if host_id == self._active_host:
+            return  # Don't pulse the active tab
+
+        label, original_name = self.name_labels[host_id]
+
+        # Cancel existing pulse if any
+        if host_id in self._pulse_timeout_ids:
+            GLib.source_remove(self._pulse_timeout_ids[host_id])
+
+        # Set pulsing color
+        label.set_markup(f'<span foreground="{self._pulse_color}" weight="bold">{GLib.markup_escape_text(original_name)}</span>')
+
+        # Schedule reset
+        def reset_label():
+            label.set_text(original_name)
+            self._pulse_timeout_ids.pop(host_id, None)
+            return False
+
+        self._pulse_timeout_ids[host_id] = GLib.timeout_add(1500, reset_label)
 
 
 class WorkspaceSwitcher(Gtk.Window):
@@ -894,13 +929,18 @@ class WorkspaceSwitcher(Gtk.Window):
 
         # Load workspaces
         self.last_session_activity = {}
+        self.last_host_activity = {}  # host_id -> max_activity_timestamp
+        self.host_session_counts = {}  # host_id -> count of active sessions
         self.refresh_workspaces()
 
         # Update workspace counts in tab bar
         self._update_host_workspace_counts()
 
-        # Auto-refresh timer
+        # Auto-refresh timer for current tab
         GLib.timeout_add(REFRESH_INTERVAL, self.auto_refresh)
+
+        # Activity monitor for all hosts (check every 2 seconds)
+        GLib.timeout_add(2000, self._check_all_hosts_activity)
 
         # Start health checker and run immediate check
         self.health_checker.start()
@@ -989,6 +1029,68 @@ class WorkspaceSwitcher(Gtk.Window):
         self.refresh_workspaces()
         return False  # Don't repeat
 
+    def _check_all_hosts_activity(self):
+        """Check all hosts for activity and pulse tabs if new activity detected"""
+        def check_in_background():
+            all_workspaces = self.config.get('workspaces', [])
+
+            for host in self.hosts:
+                host_id = host['id']
+                host_info = host
+
+                # Get sessions for this host
+                sessions = self._get_sessions_for_host(host_id, host_info)
+
+                # Count active sessions (only for workspaces in config)
+                host_workspaces = [ws for ws in all_workspaces if ws.get('host', 'local') == host_id]
+                active_count = sum(1 for ws in host_workspaces if ws['id'] in sessions)
+                self.host_session_counts[host_id] = active_count
+
+                # Skip activity pulse for the currently selected host
+                if host_id == self._current_host:
+                    continue
+
+                # Find max activity timestamp
+                max_activity = 0
+                for session_info in sessions.values():
+                    activity = session_info.get('activity', 0) or 0
+                    if activity > max_activity:
+                        max_activity = activity
+
+                # Check if there's new activity
+                last_activity = self.last_host_activity.get(host_id, 0)
+                if max_activity > last_activity and last_activity > 0:
+                    # New activity detected - pulse the tab
+                    GLib.idle_add(self.host_tab_bar.pulse_activity, host_id)
+
+                # Update last known activity
+                if max_activity > 0:
+                    self.last_host_activity[host_id] = max_activity
+
+            # Update footer with all host counts
+            GLib.idle_add(self._update_footer)
+
+        # Run in background thread to not block UI
+        threading.Thread(target=check_in_background, daemon=True).start()
+        return True  # Keep timer running
+
+    def _update_footer(self):
+        """Update footer with session counts for all hosts"""
+        # Build host summary like "L:2 S:1 D:0"
+        parts = []
+        for host in self.hosts:
+            host_id = host['id']
+            name = host['name']
+            initial = name[0].upper()  # First letter
+            count = self.host_session_counts.get(host_id, 0)
+            if count > 0:
+                parts.append(f'<span foreground="#2ecc71">{initial}:{count}</span>')
+            else:
+                parts.append(f'<span foreground="#7f8c8d">{initial}:{count}</span>')
+
+        summary = " ".join(parts)
+        self.footer_label.set_markup(f'<span size="small">{summary}</span>')
+
     def refresh_workspaces(self):
         """Reload workspaces and session info"""
         # Clear existing buttons - destroy them to free memory
@@ -1037,12 +1139,9 @@ class WorkspaceSwitcher(Gtk.Window):
             )
             self.workspace_box.pack_start(btn, False, False, 0)
 
-        # Update footer with host context
-        total = len(workspaces)
-        host_name = host_info['name'] if host_info else 'Local'
-        self.footer_label.set_markup(
-            f'<span size="small" foreground="#7f8c8d">{active_count}/{total} active ({host_name})</span>'
-        )
+        # Update session count for current host and refresh footer
+        self.host_session_counts[self._current_host] = active_count
+        self._update_footer()
 
         self.workspace_box.show_all()
 
