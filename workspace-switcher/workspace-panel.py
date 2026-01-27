@@ -930,7 +930,7 @@ class WorkspaceSwitcher(Gtk.Window):
         # Load workspaces
         self.last_session_activity = {}
         self.last_host_activity = {}  # host_id -> max_activity_timestamp
-        self.host_session_counts = {}  # host_id -> count of active sessions
+        self.host_activity_counts = {}  # host_id -> count of sessions with recent activity
         self.refresh_workspaces()
 
         # Update workspace counts in tab bar
@@ -1032,8 +1032,6 @@ class WorkspaceSwitcher(Gtk.Window):
     def _check_all_hosts_activity(self):
         """Check all hosts for activity and pulse tabs if new activity detected"""
         def check_in_background():
-            all_workspaces = self.config.get('workspaces', [])
-
             for host in self.hosts:
                 host_id = host['id']
                 host_info = host
@@ -1041,33 +1039,34 @@ class WorkspaceSwitcher(Gtk.Window):
                 # Get sessions for this host
                 sessions = self._get_sessions_for_host(host_id, host_info)
 
-                # Count active sessions (only for workspaces in config)
-                host_workspaces = [ws for ws in all_workspaces if ws.get('host', 'local') == host_id]
-                active_count = sum(1 for ws in host_workspaces if ws['id'] in sessions)
-                self.host_session_counts[host_id] = active_count
-
-                # Skip activity pulse for the currently selected host
-                if host_id == self._current_host:
-                    continue
-
-                # Find max activity timestamp
+                # Find max activity timestamp and count sessions with new activity
                 max_activity = 0
-                for session_info in sessions.values():
+                activity_count = 0
+                last_host_activity = self.last_host_activity.get(host_id, 0)
+
+                for session_name, session_info in sessions.items():
                     activity = session_info.get('activity', 0) or 0
                     if activity > max_activity:
                         max_activity = activity
+                    # Count sessions that have activity newer than last check
+                    if activity > last_host_activity and last_host_activity > 0:
+                        activity_count += 1
 
-                # Check if there's new activity
-                last_activity = self.last_host_activity.get(host_id, 0)
-                if max_activity > last_activity and last_activity > 0:
-                    # New activity detected - pulse the tab
-                    GLib.idle_add(self.host_tab_bar.pulse_activity, host_id)
+                # Update activity count for footer
+                self.host_activity_counts[host_id] = activity_count
+
+                # Skip pulse for the currently selected host
+                if host_id != self._current_host:
+                    # Check if there's new activity
+                    if max_activity > last_host_activity and last_host_activity > 0:
+                        # New activity detected - pulse the tab
+                        GLib.idle_add(self.host_tab_bar.pulse_activity, host_id)
 
                 # Update last known activity
                 if max_activity > 0:
                     self.last_host_activity[host_id] = max_activity
 
-            # Update footer with all host counts
+            # Update footer with activity counts
             GLib.idle_add(self._update_footer)
 
         # Run in background thread to not block UI
@@ -1075,21 +1074,22 @@ class WorkspaceSwitcher(Gtk.Window):
         return True  # Keep timer running
 
     def _update_footer(self):
-        """Update footer with session counts for all hosts"""
-        # Build host summary like "L:2 S:1 D:0"
+        """Update footer with activity counts for all hosts"""
+        # Build host summary like "L:2  S:1  D:0" showing recent activity counts
         parts = []
         for host in self.hosts:
             host_id = host['id']
             name = host['name']
             initial = name[0].upper()  # First letter
-            count = self.host_session_counts.get(host_id, 0)
+            count = self.host_activity_counts.get(host_id, 0)
             if count > 0:
-                parts.append(f'<span foreground="#2ecc71">{initial}:{count}</span>')
+                # Green and bold when there's activity
+                parts.append(f'<span foreground="#2ecc71" weight="bold">{initial}:{count}</span>')
             else:
-                parts.append(f'<span foreground="#7f8c8d">{initial}:{count}</span>')
+                parts.append(f'<span foreground="#7f8c8d">{initial}:0</span>')
 
-        summary = " ".join(parts)
-        self.footer_label.set_markup(f'<span size="small">{summary}</span>')
+        summary = "   ".join(parts)  # More spacing between hosts
+        self.footer_label.set_markup(f'<span size="medium">{summary}</span>')
 
     def refresh_workspaces(self):
         """Reload workspaces and session info"""
@@ -1139,8 +1139,7 @@ class WorkspaceSwitcher(Gtk.Window):
             )
             self.workspace_box.pack_start(btn, False, False, 0)
 
-        # Update session count for current host and refresh footer
-        self.host_session_counts[self._current_host] = active_count
+        # Refresh footer (activity counts are updated by _check_all_hosts_activity)
         self._update_footer()
 
         self.workspace_box.show_all()
