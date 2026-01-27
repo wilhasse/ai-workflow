@@ -929,8 +929,9 @@ class WorkspaceSwitcher(Gtk.Window):
 
         # Load workspaces
         self.last_session_activity = {}
-        self.last_host_activity = {}  # host_id -> max_activity_timestamp
-        self.host_activity_counts = {}  # host_id -> count of sessions with recent activity
+        self.last_host_activity = {}  # host_id -> {session_name: last_activity}
+        self.active_sessions = []  # list of (host_id, session_name) with recent activity
+        self._footer_pulse_timeout = None
         self.refresh_workspaces()
 
         # Update workspace counts in tab bar
@@ -1032,6 +1033,9 @@ class WorkspaceSwitcher(Gtk.Window):
     def _check_all_hosts_activity(self):
         """Check all hosts for activity and pulse tabs if new activity detected"""
         def check_in_background():
+            new_active_sessions = []
+            all_workspaces = self.config.get('workspaces', [])
+
             for host in self.hosts:
                 host_id = host['id']
                 host_info = host
@@ -1039,57 +1043,75 @@ class WorkspaceSwitcher(Gtk.Window):
                 # Get sessions for this host
                 sessions = self._get_sessions_for_host(host_id, host_info)
 
-                # Find max activity timestamp and count sessions with new activity
-                max_activity = 0
-                activity_count = 0
-                last_host_activity = self.last_host_activity.get(host_id, 0)
+                # Initialize last activity tracking for this host if needed
+                if host_id not in self.last_host_activity:
+                    self.last_host_activity[host_id] = {}
+
+                last_activities = self.last_host_activity[host_id]
+                host_has_new_activity = False
 
                 for session_name, session_info in sessions.items():
                     activity = session_info.get('activity', 0) or 0
-                    if activity > max_activity:
-                        max_activity = activity
-                    # Count sessions that have activity newer than last check
-                    if activity > last_host_activity and last_host_activity > 0:
-                        activity_count += 1
+                    last_activity = last_activities.get(session_name, 0)
 
-                # Update activity count for footer
-                self.host_activity_counts[host_id] = activity_count
+                    # Check if this session has new activity
+                    if activity > last_activity and last_activity > 0:
+                        # Find workspace name for this session
+                        ws = next((w for w in all_workspaces if w['id'] == session_name), None)
+                        ws_name = ws['name'] if ws else session_name
+                        new_active_sessions.append((host_id, session_name, ws_name))
+                        host_has_new_activity = True
 
-                # Skip pulse for the currently selected host
-                if host_id != self._current_host:
-                    # Check if there's new activity
-                    if max_activity > last_host_activity and last_host_activity > 0:
-                        # New activity detected - pulse the tab
-                        GLib.idle_add(self.host_tab_bar.pulse_activity, host_id)
+                    # Update last known activity for this session
+                    if activity > 0:
+                        last_activities[session_name] = activity
 
-                # Update last known activity
-                if max_activity > 0:
-                    self.last_host_activity[host_id] = max_activity
+                # Pulse tab if activity on non-current host
+                if host_has_new_activity and host_id != self._current_host:
+                    GLib.idle_add(self.host_tab_bar.pulse_activity, host_id)
 
-            # Update footer with activity counts
-            GLib.idle_add(self._update_footer)
+            # Update active sessions list and footer
+            if new_active_sessions:
+                self.active_sessions = new_active_sessions
+                GLib.idle_add(self._pulse_footer)
 
         # Run in background thread to not block UI
         threading.Thread(target=check_in_background, daemon=True).start()
         return True  # Keep timer running
 
-    def _update_footer(self):
-        """Update footer with activity counts for all hosts"""
-        # Build host summary like "L:2  S:1  D:0" showing recent activity counts
-        parts = []
-        for host in self.hosts:
-            host_id = host['id']
-            name = host['name']
-            initial = name[0].upper()  # First letter
-            count = self.host_activity_counts.get(host_id, 0)
-            if count > 0:
-                # Green and bold when there's activity
-                parts.append(f'<span foreground="#2ecc71" weight="bold">{initial}:{count}</span>')
-            else:
-                parts.append(f'<span foreground="#7f8c8d">{initial}:0</span>')
+    def _pulse_footer(self):
+        """Show active session names in footer with pulsing green"""
+        if not self.active_sessions:
+            self.footer_label.set_markup('<span size="medium" foreground="#7f8c8d">—</span>')
+            return
 
-        summary = "   ".join(parts)  # More spacing between hosts
-        self.footer_label.set_markup(f'<span size="medium">{summary}</span>')
+        # Cancel existing pulse timeout
+        if self._footer_pulse_timeout:
+            GLib.source_remove(self._footer_pulse_timeout)
+
+        # Build list of active session names
+        names = [name for (host_id, session_id, name) in self.active_sessions]
+        display = "  ".join(names)
+
+        # Show in green
+        self.footer_label.set_markup(f'<span size="medium" foreground="#2ecc71" weight="bold">{GLib.markup_escape_text(display)}</span>')
+
+        # Schedule fade back to gray after 2 seconds
+        def fade_footer():
+            self.footer_label.set_markup(f'<span size="medium" foreground="#7f8c8d">{GLib.markup_escape_text(display)}</span>')
+            self._footer_pulse_timeout = None
+            return False
+
+        self._footer_pulse_timeout = GLib.timeout_add(2000, fade_footer)
+
+    def _update_footer(self):
+        """Update footer - called from refresh_workspaces"""
+        if self.active_sessions:
+            names = [name for (host_id, session_id, name) in self.active_sessions]
+            display = "  ".join(names)
+            self.footer_label.set_markup(f'<span size="medium" foreground="#7f8c8d">{GLib.markup_escape_text(display)}</span>')
+        else:
+            self.footer_label.set_markup('<span size="medium" foreground="#7f8c8d">—</span>')
 
     def refresh_workspaces(self):
         """Reload workspaces and session info"""
