@@ -2,6 +2,7 @@
 """
 Workspace Switcher Panel - GTK panel for managing tmux project sessions
 Designed for x2go/XFCE environments with Claude Code workflows
+Supports multiple terminal emulators and remote VM workspaces via SSH
 """
 
 import gi
@@ -13,9 +14,139 @@ import json
 import os
 import signal
 import sys
+import threading
+import time
 
 CONFIG_FILE = os.path.expanduser("~/ai-workflow/workspace-switcher/workspaces.json")
 REFRESH_INTERVAL = 2000  # ms
+SSH_HEALTH_INTERVAL = 30  # seconds
+SSH_CACHE_TTL = 5  # seconds
+
+
+class SSHHealthChecker:
+    """Background thread for checking SSH host reachability"""
+
+    def __init__(self, on_status_change):
+        self.on_status_change = on_status_change
+        self.host_status = {}  # host_id -> {'reachable': bool, 'last_check': timestamp}
+        self._running = False
+        self._thread = None
+        self._hosts = []
+
+    def set_hosts(self, hosts):
+        """Update the list of hosts to check"""
+        self._hosts = [h for h in hosts if h.get('ssh')]  # Only check remote hosts
+
+    def check_all_now(self):
+        """Run immediate health check for all hosts (called from main thread)"""
+        def do_check():
+            for host in self._hosts:
+                host_id = host['id']
+                ssh_target = host.get('ssh')
+                if not ssh_target:
+                    continue
+                reachable = self._check_host(ssh_target)
+                self.host_status[host_id] = {
+                    'reachable': reachable,
+                    'last_check': time.time()
+                }
+                GLib.idle_add(self.on_status_change, host_id, reachable)
+        # Run in background to not block UI
+        threading.Thread(target=do_check, daemon=True).start()
+
+    def mark_reachable(self, host_id):
+        """Mark a host as reachable (called when SSH succeeds)"""
+        if host_id and host_id != 'local':
+            old_status = self.host_status.get(host_id, {}).get('reachable')
+            self.host_status[host_id] = {
+                'reachable': True,
+                'last_check': time.time()
+            }
+            if old_status != True:
+                GLib.idle_add(self.on_status_change, host_id, True)
+
+    def start(self):
+        """Start the health checker thread"""
+        if self._running:
+            return
+        self._running = True
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        """Stop the health checker thread"""
+        self._running = False
+
+    def _run(self):
+        """Main loop for health checking"""
+        while self._running:
+            for host in self._hosts:
+                host_id = host['id']
+                ssh_target = host.get('ssh')
+                if not ssh_target:
+                    continue
+
+                reachable = self._check_host(ssh_target)
+                old_status = self.host_status.get(host_id, {}).get('reachable')
+                self.host_status[host_id] = {
+                    'reachable': reachable,
+                    'last_check': time.time()
+                }
+
+                # Notify on status change
+                if old_status != reachable:
+                    GLib.idle_add(self.on_status_change, host_id, reachable)
+
+            time.sleep(SSH_HEALTH_INTERVAL)
+
+    def _check_host(self, ssh_target):
+        """Check if SSH host is reachable"""
+        try:
+            result = subprocess.run(
+                ['ssh', '-o', 'ConnectTimeout=2', '-o', 'BatchMode=yes', ssh_target, 'exit'],
+                capture_output=True,
+                timeout=5
+            )
+            return result.returncode == 0
+        except (subprocess.TimeoutExpired, Exception):
+            return False
+
+    def get_status(self, host_id):
+        """Get cached status for a host"""
+        return self.host_status.get(host_id, {}).get('reachable', None)
+
+    def is_local(self, host_id):
+        """Check if host is local (no SSH needed)"""
+        return host_id == 'local' or host_id is None
+
+
+class RemoteSessionCache:
+    """Cache for remote tmux session queries"""
+
+    def __init__(self):
+        self._cache = {}  # host_id -> {'sessions': dict, 'timestamp': float}
+
+    def get(self, host_id):
+        """Get cached sessions if not expired"""
+        entry = self._cache.get(host_id)
+        if entry and (time.time() - entry['timestamp']) < SSH_CACHE_TTL:
+            return entry['sessions']
+        return None
+
+    def set(self, host_id, sessions):
+        """Cache sessions for a host"""
+        self._cache[host_id] = {
+            'sessions': sessions,
+            'timestamp': time.time()
+        }
+
+    def invalidate(self, host_id=None):
+        """Invalidate cache for a host or all hosts"""
+        if host_id:
+            self._cache.pop(host_id, None)
+        else:
+            self._cache.clear()
+
 
 class WorkspaceButton(Gtk.Button):
     """A styled button representing a workspace/tmux session"""
@@ -23,16 +154,20 @@ class WorkspaceButton(Gtk.Button):
     def __init__(
         self,
         workspace,
+        host_info=None,
         session_info=None,
         on_remove=None,
         on_rename=None,
+        on_activate=None,
         activity_recent=False
     ):
         super().__init__()
         self.workspace = workspace
+        self.host_info = host_info
         self.session_info = session_info
         self.on_remove_callback = on_remove
         self.on_rename_callback = on_rename
+        self.on_activate_callback = on_activate
         self._activity_timeout_id = None
         self._escaped_name = GLib.markup_escape_text(workspace["name"])
         self._base_color = "#2c3e50" if session_info else "#7f8c8d"
@@ -140,7 +275,13 @@ class WorkspaceButton(Gtk.Button):
     def on_kill_session(self, menu_item):
         """Kill the tmux session for this workspace"""
         session_name = self.workspace['id']
-        subprocess.run(['tmux', 'kill-session', '-t', session_name])
+        host = self.workspace.get('host', 'local')
+
+        if host == 'local' or not self.host_info or not self.host_info.get('ssh'):
+            subprocess.run(['tmux', 'kill-session', '-t', session_name])
+        else:
+            ssh_target = self.host_info['ssh']
+            subprocess.run(['ssh', ssh_target, f'tmux kill-session -t {session_name}'])
 
     def _apply_color(self, color):
         """Apply workspace color to button"""
@@ -189,33 +330,43 @@ class WorkspaceButton(Gtk.Button):
         ws = self.workspace
         session_name = ws['id']
         work_dir = ws['path']
-        window_title = f'{ws["name"]} - Workspace'
+        host = ws.get('host', 'local')
 
         # First, try to find and focus an existing terminal window for this workspace
-        if self._focus_existing_window(window_title):
+        # Search by session name (tmux sets window title to "session : window — Konsole")
+        if self._focus_existing_window(session_name):
             return  # Window found and focused, done!
-
-        # No existing window, check if tmux session exists
-        result = subprocess.run(['tmux', 'has-session', '-t', session_name],
-                                capture_output=True)
-        session_exists = result.returncode == 0
-
-        if session_exists:
-            # Attach to existing session in new terminal
-            cmd = f"tmux attach-session -t {session_name}"
-        else:
-            # Create new session and attach
-            cmd = f"tmux new-session -s {session_name} -c {work_dir}"
 
         # Get terminal from config
         terminal = self._get_terminal()
 
-        # Launch terminal with tmux command
+        # Build the tmux command based on host type
+        if host == 'local' or not self.host_info or not self.host_info.get('ssh'):
+            # Local workspace
+            result = subprocess.run(['tmux', 'has-session', '-t', session_name],
+                                    capture_output=True)
+            session_exists = result.returncode == 0
+
+            if session_exists:
+                cmd = f"tmux attach-session -t {session_name}"
+            else:
+                cmd = f"tmux new-session -s {session_name} -c {work_dir}"
+        else:
+            # Remote workspace via SSH
+            ssh_target = self.host_info['ssh']
+            # SSH + tmux attach/create in one command
+            tmux_cmd = f"tmux attach -t {session_name} || tmux new -s {session_name} -c {work_dir}"
+            cmd = f'ssh -t {ssh_target} "{tmux_cmd}"'
+
+        # Launch terminal with command
         subprocess.Popen([
             terminal,
-            '--title', window_title,
             '-e', f'bash -c "{cmd}; exec bash"'
         ])
+
+        # Notify parent to refresh after a delay (so session appears as active)
+        if self.on_activate_callback:
+            self.on_activate_callback(ws.get('host', 'local'))
 
     def _focus_existing_window(self, title):
         """Try to find and focus a window with the given title. Returns True if found."""
@@ -251,14 +402,15 @@ class WorkspaceButton(Gtk.Button):
 class AddWorkspaceDialog(Gtk.Dialog):
     """Dialog to add a new workspace"""
 
-    def __init__(self, parent):
+    def __init__(self, parent, hosts=None):
         super().__init__(title="Add Workspace", transient_for=parent, flags=0)
         self.add_buttons(
             Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
             Gtk.STOCK_OK, Gtk.ResponseType.OK
         )
 
-        self.set_default_size(350, 200)
+        self.hosts = hosts or [{'id': 'local', 'name': 'Local', 'ssh': None}]
+        self.set_default_size(350, 250)
 
         box = self.get_content_area()
         box.set_margin_start(10)
@@ -266,6 +418,19 @@ class AddWorkspaceDialog(Gtk.Dialog):
         box.set_margin_top(10)
         box.set_margin_bottom(10)
         box.set_spacing(8)
+
+        # Host field
+        host_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        host_label = Gtk.Label(label="Host:")
+        host_label.set_width_chars(12)
+        host_label.set_xalign(0)
+        self.host_combo = Gtk.ComboBoxText()
+        for host in self.hosts:
+            self.host_combo.append(host['id'], host['name'])
+        self.host_combo.set_active(0)
+        host_box.pack_start(host_label, False, False, 0)
+        host_box.pack_start(self.host_combo, True, True, 0)
+        box.pack_start(host_box, False, False, 0)
 
         # ID field
         id_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -347,8 +512,282 @@ class AddWorkspaceDialog(Gtk.Dialog):
             'path': self.path_entry.get_text().strip(),
             'color': color,
             'icon': 'folder',
-            'description': ''
+            'description': '',
+            'host': self.host_combo.get_active_id() or 'local'
         }
+
+
+class SettingsDialog(Gtk.Dialog):
+    """Dialog for application settings"""
+
+    def __init__(self, parent, config):
+        super().__init__(title="Settings", transient_for=parent, flags=0)
+        self.add_buttons(
+            Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+            Gtk.STOCK_OK, Gtk.ResponseType.OK
+        )
+
+        self.config = config
+        self.set_default_size(400, 300)
+
+        box = self.get_content_area()
+        box.set_margin_start(10)
+        box.set_margin_end(10)
+        box.set_margin_top(10)
+        box.set_margin_bottom(10)
+        box.set_spacing(12)
+
+        # Terminal emulator section
+        terminal_frame = Gtk.Frame(label="Terminal")
+        terminal_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        terminal_box.set_margin_start(10)
+        terminal_box.set_margin_end(10)
+        terminal_box.set_margin_top(10)
+        terminal_box.set_margin_bottom(10)
+
+        term_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        term_label = Gtk.Label(label="Emulator:")
+        term_label.set_width_chars(10)
+        term_label.set_xalign(0)
+
+        self.terminal_combo = Gtk.ComboBoxText()
+        settings = config.get('settings', {})
+        terminals = settings.get('terminals', ['xfce4-terminal', 'konsole', 'gnome-terminal'])
+        current_terminal = settings.get('terminal', 'xfce4-terminal')
+
+        for term in terminals:
+            self.terminal_combo.append_text(term)
+
+        # Set active terminal
+        try:
+            idx = terminals.index(current_terminal)
+            self.terminal_combo.set_active(idx)
+        except ValueError:
+            self.terminal_combo.set_active(0)
+
+        term_row.pack_start(term_label, False, False, 0)
+        term_row.pack_start(self.terminal_combo, True, True, 0)
+        terminal_box.pack_start(term_row, False, False, 0)
+
+        # Shell path
+        shell_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        shell_label = Gtk.Label(label="Shell:")
+        shell_label.set_width_chars(10)
+        shell_label.set_xalign(0)
+        self.shell_entry = Gtk.Entry()
+        self.shell_entry.set_text(settings.get('shell', '/bin/bash'))
+        shell_row.pack_start(shell_label, False, False, 0)
+        shell_row.pack_start(self.shell_entry, True, True, 0)
+        terminal_box.pack_start(shell_row, False, False, 0)
+
+        terminal_frame.add(terminal_box)
+        box.pack_start(terminal_frame, False, False, 0)
+
+        # Hosts section
+        hosts_frame = Gtk.Frame(label="Remote Hosts")
+        hosts_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        hosts_box.set_margin_start(10)
+        hosts_box.set_margin_end(10)
+        hosts_box.set_margin_top(10)
+        hosts_box.set_margin_bottom(10)
+
+        # Host list
+        hosts = config.get('hosts', [])
+        self.host_store = Gtk.ListStore(str, str, str)  # id, name, ssh
+        for host in hosts:
+            self.host_store.append([host['id'], host['name'], host.get('ssh') or ''])
+
+        self.host_tree = Gtk.TreeView(model=self.host_store)
+
+        # Columns
+        renderer = Gtk.CellRendererText()
+        renderer.set_property('editable', True)
+        renderer.connect('edited', self._on_host_name_edited)
+        col = Gtk.TreeViewColumn("Name", renderer, text=1)
+        col.set_expand(True)
+        self.host_tree.append_column(col)
+
+        renderer2 = Gtk.CellRendererText()
+        renderer2.set_property('editable', True)
+        renderer2.connect('edited', self._on_host_ssh_edited)
+        col2 = Gtk.TreeViewColumn("SSH Target", renderer2, text=2)
+        col2.set_expand(True)
+        self.host_tree.append_column(col2)
+
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_min_content_height(100)
+        scroll.add(self.host_tree)
+        hosts_box.pack_start(scroll, True, True, 0)
+
+        # Add/Remove host buttons
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        add_host_btn = Gtk.Button(label="Add Host")
+        add_host_btn.connect('clicked', self._on_add_host)
+        remove_host_btn = Gtk.Button(label="Remove")
+        remove_host_btn.connect('clicked', self._on_remove_host)
+        btn_box.pack_start(add_host_btn, False, False, 0)
+        btn_box.pack_start(remove_host_btn, False, False, 0)
+        hosts_box.pack_start(btn_box, False, False, 0)
+
+        hosts_frame.add(hosts_box)
+        box.pack_start(hosts_frame, True, True, 0)
+
+        self.show_all()
+
+    def _on_host_name_edited(self, renderer, path, new_text):
+        self.host_store[path][1] = new_text
+
+    def _on_host_ssh_edited(self, renderer, path, new_text):
+        self.host_store[path][2] = new_text
+
+    def _on_add_host(self, button):
+        # Generate unique ID
+        existing_ids = [row[0] for row in self.host_store]
+        new_id = "host1"
+        counter = 1
+        while new_id in existing_ids:
+            counter += 1
+            new_id = f"host{counter}"
+        self.host_store.append([new_id, f"Host {counter}", "user@hostname"])
+
+    def _on_remove_host(self, button):
+        selection = self.host_tree.get_selection()
+        model, iter = selection.get_selected()
+        if iter:
+            host_id = model[iter][0]
+            if host_id != 'local':  # Don't allow removing local
+                model.remove(iter)
+
+    def get_settings(self):
+        """Return updated settings"""
+        settings = self.config.get('settings', {}).copy()
+        settings['terminal'] = self.terminal_combo.get_active_text() or 'xfce4-terminal'
+        settings['shell'] = self.shell_entry.get_text().strip() or '/bin/bash'
+        return settings
+
+    def get_hosts(self):
+        """Return updated hosts list"""
+        hosts = []
+        for row in self.host_store:
+            host = {
+                'id': row[0],
+                'name': row[1],
+                'ssh': row[2] if row[2] else None
+            }
+            hosts.append(host)
+        return hosts
+
+
+class HostTabBar(Gtk.Box):
+    """Tab bar for switching between hosts"""
+
+    def __init__(self, hosts, on_host_selected):
+        super().__init__(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
+        self.hosts = hosts
+        self.on_host_selected = on_host_selected
+        self.buttons = {}
+        self.health_indicators = {}
+        self.workspace_counts = {}
+        self._active_host = 'local'
+
+        self.set_margin_start(4)
+        self.set_margin_end(4)
+        self.set_margin_top(4)
+        self.set_margin_bottom(4)
+
+        self._build_tabs()
+
+    def _build_tabs(self):
+        """Build tab buttons for each host"""
+        for child in self.get_children():
+            child.destroy()
+
+        self.buttons = {}
+        self.health_indicators = {}
+
+        for host in self.hosts:
+            host_id = host['id']
+            btn = Gtk.Button()
+            btn.set_relief(Gtk.ReliefStyle.NONE)
+
+            btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+
+            # Health indicator dot
+            health_dot = Gtk.Label()
+            if host.get('ssh'):
+                health_dot.set_markup('<span foreground="#7f8c8d">●</span>')  # Gray = unknown
+            else:
+                health_dot.set_markup('<span foreground="#2ecc71">●</span>')  # Green = local always reachable
+            self.health_indicators[host_id] = health_dot
+            btn_box.pack_start(health_dot, False, False, 0)
+
+            # Host name
+            name_label = Gtk.Label(label=host['name'])
+            btn_box.pack_start(name_label, False, False, 0)
+
+            # Workspace count badge
+            count_label = Gtk.Label()
+            count_label.set_markup('<span size="small" foreground="#95a5a6">(0)</span>')
+            self.workspace_counts[host_id] = count_label
+            btn_box.pack_start(count_label, False, False, 0)
+
+            btn.add(btn_box)
+            btn.connect('clicked', self._on_tab_clicked, host_id)
+            self.buttons[host_id] = btn
+            self.pack_start(btn, False, False, 0)
+
+        self._update_active_style()
+        self.show_all()
+
+    def _on_tab_clicked(self, button, host_id):
+        self._active_host = host_id
+        self._update_active_style()
+        self.on_host_selected(host_id)
+
+    def _update_active_style(self):
+        """Update visual style to show active tab"""
+        for host_id, btn in self.buttons.items():
+            ctx = btn.get_style_context()
+            if host_id == self._active_host:
+                css = """
+                button {
+                    background-color: alpha(@theme_selected_bg_color, 0.3);
+                    border-bottom: 2px solid @theme_selected_bg_color;
+                }
+                """
+            else:
+                css = """
+                button {
+                    background-color: transparent;
+                    border-bottom: 2px solid transparent;
+                }
+                """
+            provider = Gtk.CssProvider()
+            provider.load_from_data(css.encode())
+            ctx.add_provider(provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+    def update_hosts(self, hosts):
+        """Update the host list and rebuild tabs"""
+        self.hosts = hosts
+        self._build_tabs()
+
+    def update_health(self, host_id, reachable):
+        """Update health indicator for a host"""
+        if host_id in self.health_indicators:
+            if reachable:
+                self.health_indicators[host_id].set_markup('<span foreground="#2ecc71">●</span>')
+            else:
+                self.health_indicators[host_id].set_markup('<span foreground="#e74c3c">●</span>')
+
+    def update_workspace_count(self, host_id, count):
+        """Update workspace count badge"""
+        if host_id in self.workspace_counts:
+            self.workspace_counts[host_id].set_markup(
+                f'<span size="small" foreground="#95a5a6">({count})</span>'
+            )
+
+    def get_active_host(self):
+        return self._active_host
 
 
 class WorkspaceSwitcher(Gtk.Window):
@@ -358,7 +797,7 @@ class WorkspaceSwitcher(Gtk.Window):
         super().__init__(title="Workspaces")
 
         # Window setup for panel-like behavior
-        self.set_default_size(180, 400)
+        self.set_default_size(180, 500)
         self.set_keep_above(True)
         self.set_decorated(True)
         self.set_resizable(True)
@@ -371,10 +810,22 @@ class WorkspaceSwitcher(Gtk.Window):
             geometry = monitor.get_geometry()
             self.move(geometry.x + geometry.width - 200, geometry.y + 50)
 
+        # Load config
+        self.config = self._load_full_config()
+        self.hosts = self.config.get('hosts', [{'id': 'local', 'name': 'Local', 'ssh': None}])
+        self._current_host = 'local'
+
+        # Session cache for remote hosts
+        self.remote_session_cache = RemoteSessionCache()
+
+        # SSH health checker
+        self.health_checker = SSHHealthChecker(self._on_host_health_changed)
+        self.health_checker.set_hosts(self.hosts)
+
         # Main container
         main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
 
-        # Header with title and add button
+        # Header with title and buttons
         header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         header_box.set_margin_start(8)
         header_box.set_margin_end(8)
@@ -384,6 +835,14 @@ class WorkspaceSwitcher(Gtk.Window):
         title_label = Gtk.Label()
         title_label.set_markup('<b>Workspaces</b>')
         header_box.pack_start(title_label, True, True, 0)
+
+        # Settings button
+        settings_btn = Gtk.Button()
+        settings_btn.set_image(Gtk.Image.new_from_icon_name("preferences-system", Gtk.IconSize.SMALL_TOOLBAR))
+        settings_btn.set_relief(Gtk.ReliefStyle.NONE)
+        settings_btn.set_tooltip_text("Settings")
+        settings_btn.connect('clicked', self.on_settings_clicked)
+        header_box.pack_end(settings_btn, False, False, 0)
 
         # Add workspace button
         add_btn = Gtk.Button()
@@ -402,6 +861,13 @@ class WorkspaceSwitcher(Gtk.Window):
         header_box.pack_end(refresh_btn, False, False, 0)
 
         main_box.pack_start(header_box, False, False, 0)
+
+        # Separator
+        main_box.pack_start(Gtk.Separator(), False, False, 4)
+
+        # Host tab bar
+        self.host_tab_bar = HostTabBar(self.hosts, self._on_host_tab_selected)
+        main_box.pack_start(self.host_tab_bar, False, False, 0)
 
         # Separator
         main_box.pack_start(Gtk.Separator(), False, False, 4)
@@ -430,14 +896,79 @@ class WorkspaceSwitcher(Gtk.Window):
         self.last_session_activity = {}
         self.refresh_workspaces()
 
+        # Update workspace counts in tab bar
+        self._update_host_workspace_counts()
+
         # Auto-refresh timer
         GLib.timeout_add(REFRESH_INTERVAL, self.auto_refresh)
+
+        # Start health checker and run immediate check
+        self.health_checker.start()
+        self.health_checker.check_all_now()
 
         # Handle close
         self.connect('delete-event', self.on_close)
 
+    def _load_full_config(self):
+        """Load full config file"""
+        try:
+            with open(CONFIG_FILE, 'r') as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {
+                'hosts': [{'id': 'local', 'name': 'Local', 'ssh': None}],
+                'workspaces': [],
+                'settings': {'terminal': 'xfce4-terminal', 'shell': '/bin/bash'}
+            }
+
+    def _save_full_config(self, config):
+        """Save full config file"""
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump(config, f, indent=2)
+
+    def _on_host_tab_selected(self, host_id):
+        """Handle host tab selection"""
+        self._current_host = host_id
+        self.remote_session_cache.invalidate(host_id)
+        self.refresh_workspaces()
+
+    def _on_host_health_changed(self, host_id, reachable):
+        """Handle SSH health status change"""
+        self.host_tab_bar.update_health(host_id, reachable)
+
+    def _update_host_workspace_counts(self):
+        """Update workspace count badges on host tabs"""
+        workspaces = self.config.get('workspaces', [])
+        counts = {}
+        for ws in workspaces:
+            host = ws.get('host', 'local')
+            counts[host] = counts.get(host, 0) + 1
+
+        for host in self.hosts:
+            self.host_tab_bar.update_workspace_count(host['id'], counts.get(host['id'], 0))
+
+    def on_settings_clicked(self, button):
+        """Show settings dialog"""
+        dialog = SettingsDialog(self, self.config)
+        response = dialog.run()
+
+        if response == Gtk.ResponseType.OK:
+            # Update settings
+            self.config['settings'] = dialog.get_settings()
+            self.config['hosts'] = dialog.get_hosts()
+            self._save_full_config(self.config)
+
+            # Reload hosts
+            self.hosts = self.config['hosts']
+            self.host_tab_bar.update_hosts(self.hosts)
+            self.health_checker.set_hosts(self.hosts)
+            self._update_host_workspace_counts()
+
+        dialog.destroy()
+
     def on_close(self, widget, event):
         """Handle window close - actually close the application"""
+        self.health_checker.stop()
         Gtk.main_quit()
         return False  # Allow close
 
@@ -446,6 +977,18 @@ class WorkspaceSwitcher(Gtk.Window):
         self.refresh_workspaces()
         return True  # Keep timer running
 
+    def _on_workspace_activated(self, host_id):
+        """Called when a workspace is opened - schedule refresh to update status"""
+        # Invalidate cache for this host so next refresh gets fresh data
+        self.remote_session_cache.invalidate(host_id)
+        # Schedule a refresh after 1 second to give tmux time to create the session
+        GLib.timeout_add(1000, self._delayed_refresh)
+
+    def _delayed_refresh(self):
+        """Single delayed refresh after workspace activation"""
+        self.refresh_workspaces()
+        return False  # Don't repeat
+
     def refresh_workspaces(self):
         """Reload workspaces and session info"""
         # Clear existing buttons - destroy them to free memory
@@ -453,10 +996,17 @@ class WorkspaceSwitcher(Gtk.Window):
             child.destroy()
 
         # Load config
-        workspaces = self.load_config()
+        self.config = self._load_full_config()
+        workspaces = self.config.get('workspaces', [])
+
+        # Filter by current host
+        workspaces = [ws for ws in workspaces if ws.get('host', 'local') == self._current_host]
+
+        # Get host info
+        host_info = next((h for h in self.hosts if h['id'] == self._current_host), None)
 
         # Get tmux session info
-        sessions = self.get_tmux_sessions()
+        sessions = self._get_sessions_for_host(self._current_host, host_info)
         self.last_session_activity = {
             key: value
             for key, value in self.last_session_activity.items()
@@ -478,20 +1028,75 @@ class WorkspaceSwitcher(Gtk.Window):
                     self.last_session_activity[ws['id']] = activity
             btn = WorkspaceButton(
                 ws,
-                session_info,
+                host_info=host_info,
+                session_info=session_info,
                 on_remove=self.remove_workspace,
                 on_rename=self.rename_workspace,
+                on_activate=self._on_workspace_activated,
                 activity_recent=activity_recent
             )
             self.workspace_box.pack_start(btn, False, False, 0)
 
-        # Update footer
+        # Update footer with host context
         total = len(workspaces)
+        host_name = host_info['name'] if host_info else 'Local'
         self.footer_label.set_markup(
-            f'<span size="small" foreground="#7f8c8d">{active_count}/{total} active</span>'
+            f'<span size="small" foreground="#7f8c8d">{active_count}/{total} active ({host_name})</span>'
         )
 
         self.workspace_box.show_all()
+
+    def _get_sessions_for_host(self, host_id, host_info):
+        """Get tmux sessions for a specific host"""
+        if host_id == 'local' or not host_info or not host_info.get('ssh'):
+            return self.get_tmux_sessions()
+        else:
+            # Check cache first
+            cached = self.remote_session_cache.get(host_id)
+            if cached is not None:
+                return cached
+
+            # Check health before querying
+            if self.health_checker.get_status(host_id) == False:
+                return {}
+
+            # Query remote tmux
+            sessions = self._get_remote_tmux_sessions(host_info['ssh'])
+            if sessions is not None:  # Query succeeded (even if empty)
+                self.health_checker.mark_reachable(host_id)
+                self.remote_session_cache.set(host_id, sessions)
+                return sessions
+            else:
+                return {}  # Connection failed
+
+    def _get_remote_tmux_sessions(self, ssh_target):
+        """Get tmux sessions from a remote host via SSH. Returns None on connection failure."""
+        sessions = {}
+        try:
+            result = subprocess.run(
+                ['ssh', '-o', 'ConnectTimeout=3', '-o', 'BatchMode=yes', ssh_target,
+                 'tmux list-sessions -F "#{session_name}:#{session_windows}:#{session_activity}"'],
+                capture_output=True, text=True, timeout=10
+            )
+            # returncode 0 = success, 1 = no sessions (tmux not running), both mean SSH worked
+            if result.returncode in (0, 1):
+                if result.returncode == 0:
+                    for line in result.stdout.strip().split('\n'):
+                        if ':' in line:
+                            parts = line.rsplit(':', 2)
+                            if len(parts) != 3:
+                                continue
+                            name, windows, activity = parts
+                            sessions[name] = {
+                                'windows': int(windows),
+                                'activity': int(activity) if activity else None
+                            }
+                return sessions  # Return {} for no sessions, but not None
+            else:
+                return None  # SSH or other error
+        except (subprocess.TimeoutExpired, Exception) as e:
+            print(f"Remote tmux query error: {e}")
+            return None  # Connection failed
 
     def load_config(self):
         """Load workspaces from config file"""
@@ -506,23 +1111,33 @@ class WorkspaceSwitcher(Gtk.Window):
 
     def save_config(self, workspaces):
         """Save workspaces to config file"""
-        try:
-            with open(CONFIG_FILE, 'r') as f:
-                config = json.load(f)
-        except:
-            config = {'settings': {'terminal': 'xfce4-terminal'}}
-
-        config['workspaces'] = workspaces
-
-        with open(CONFIG_FILE, 'w') as f:
-            json.dump(config, f, indent=2)
+        self.config['workspaces'] = workspaces
+        self._save_full_config(self.config)
+        self._update_host_workspace_counts()
 
     def remove_workspace(self, workspace_id):
         """Remove a workspace from config, optionally killing tmux session"""
+        # Find the workspace to get its host
+        workspaces = self.config.get('workspaces', [])
+        ws = next((w for w in workspaces if w['id'] == workspace_id), None)
+        if not ws:
+            return
+
+        host_id = ws.get('host', 'local')
+        host_info = next((h for h in self.hosts if h['id'] == host_id), None)
+
         # Check if tmux session exists
-        result = subprocess.run(['tmux', 'has-session', '-t', workspace_id],
-                                capture_output=True)
-        session_exists = result.returncode == 0
+        if host_id == 'local' or not host_info or not host_info.get('ssh'):
+            result = subprocess.run(['tmux', 'has-session', '-t', workspace_id],
+                                    capture_output=True)
+            session_exists = result.returncode == 0
+        else:
+            result = subprocess.run(
+                ['ssh', '-o', 'ConnectTimeout=2', '-o', 'BatchMode=yes', host_info['ssh'],
+                 f'tmux has-session -t {workspace_id}'],
+                capture_output=True, timeout=5
+            )
+            session_exists = result.returncode == 0
 
         if session_exists:
             # Ask user if they want to kill the session too
@@ -540,17 +1155,19 @@ class WorkspaceSwitcher(Gtk.Window):
             dialog.destroy()
 
             if response == Gtk.ResponseType.YES:
-                subprocess.run(['tmux', 'kill-session', '-t', workspace_id])
+                if host_id == 'local' or not host_info or not host_info.get('ssh'):
+                    subprocess.run(['tmux', 'kill-session', '-t', workspace_id])
+                else:
+                    subprocess.run(['ssh', host_info['ssh'], f'tmux kill-session -t {workspace_id}'])
 
-        workspaces = self.load_config()
-        workspaces = [ws for ws in workspaces if ws['id'] != workspace_id]
+        workspaces = [w for w in workspaces if w['id'] != workspace_id]
         self.save_config(workspaces)
         self.refresh_workspaces()
 
     def rename_workspace(self, workspace_id, current_name):
         """Edit a workspace (name and path)"""
         # Get current workspace data
-        workspaces = self.load_config()
+        workspaces = self.config.get('workspaces', [])
         current_ws = next((ws for ws in workspaces if ws['id'] == workspace_id), None)
         if not current_ws:
             return
@@ -564,7 +1181,7 @@ class WorkspaceSwitcher(Gtk.Window):
             Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
             Gtk.STOCK_OK, Gtk.ResponseType.OK
         )
-        dialog.set_default_size(350, 150)
+        dialog.set_default_size(350, 200)
 
         box = dialog.get_content_area()
         box.set_margin_start(10)
@@ -572,6 +1189,20 @@ class WorkspaceSwitcher(Gtk.Window):
         box.set_margin_top(10)
         box.set_margin_bottom(10)
         box.set_spacing(8)
+
+        # Host field
+        host_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        host_label = Gtk.Label(label="Host:")
+        host_label.set_width_chars(6)
+        host_label.set_xalign(0)
+        host_combo = Gtk.ComboBoxText()
+        for host in self.hosts:
+            host_combo.append(host['id'], host['name'])
+        current_host = current_ws.get('host', 'local')
+        host_combo.set_active_id(current_host)
+        host_box.pack_start(host_label, False, False, 0)
+        host_box.pack_start(host_combo, True, True, 0)
+        box.pack_start(host_box, False, False, 0)
 
         # Name field
         name_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -622,6 +1253,7 @@ class WorkspaceSwitcher(Gtk.Window):
         if response == Gtk.ResponseType.OK:
             new_name = name_entry.get_text().strip()
             new_path = path_entry.get_text().strip()
+            new_host = host_combo.get_active_id() or 'local'
             changed = False
 
             for ws in workspaces:
@@ -631,6 +1263,9 @@ class WorkspaceSwitcher(Gtk.Window):
                         changed = True
                     if new_path and new_path != ws.get('path'):
                         ws['path'] = new_path
+                        changed = True
+                    if new_host != ws.get('host', 'local'):
+                        ws['host'] = new_host
                         changed = True
                     break
 
@@ -684,13 +1319,13 @@ class WorkspaceSwitcher(Gtk.Window):
 
     def on_add_workspace(self, button):
         """Show dialog to add new workspace"""
-        dialog = AddWorkspaceDialog(self)
+        dialog = AddWorkspaceDialog(self, hosts=self.hosts)
         response = dialog.run()
 
         if response == Gtk.ResponseType.OK:
             ws = dialog.get_workspace()
             if ws['id'] and ws['name'] and ws['path']:
-                workspaces = self.load_config()
+                workspaces = self.config.get('workspaces', [])
                 workspaces.append(ws)
                 self.save_config(workspaces)
                 self.refresh_workspaces()
