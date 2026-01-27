@@ -1,24 +1,129 @@
 {
+  "hosts": [
+    {
+      "id": "local",
+      "name": "Local",
+      "ssh": null
+    },
+    {
+      "id": "vm9",
+      "name": "Supersaber",
+      "ssh": "cslog@10.1.0.9"
+    },
+    {
+      "id": "vm12",
+      "name": "DB Server",
+      "ssh": "cslog@10.1.0.12"
+    }
+  ],
   "workspaces": [
     {
-      "id": "ai-workflow",
-      "name": "AI Workflow",
-      "path": "/home/cslog/ai-workflow",
+      "id": "dbtools",
+      "name": "smart-sql",
+      "path": "/home/cslog/smart-sql",
+      "color": "#e74c3c",
+      "icon": "folder",
+      "description": "",
+      "host": "vm9"
+    },
+    {
+      "id": "mysql",
+      "name": "MySQL Tests",
+      "path": "/home/cslog/mysql",
       "color": "#3498db",
-      "icon": "folder-blue",
-      "description": "Terminal dashboard & Whisper API"
+      "icon": "folder",
+      "description": "",
+      "host": "local"
+    },
+    {
+      "id": "olos",
+      "name": "Olos API",
+      "path": "/home/cslog/svn/ticslog_trunk/go/apiolos",
+      "color": "#3498db",
+      "icon": "folder",
+      "description": "",
+      "host": "local"
+    },
+    {
+      "id": "innodb-go",
+      "name": "Innodb Rust",
+      "path": "/home/cslog/mysql/innodb-rust",
+      "color": "#e74c3c",
+      "icon": "folder",
+      "description": "",
+      "host": "vm9"
+    },
+    {
+      "id": "fusion",
+      "name": "cslog-db",
+      "path": "/home/cslog/mysql",
+      "color": "#9b59b6",
+      "icon": "folder",
+      "description": "",
+      "host": "vm12"
+    },
+    {
+      "id": "docker",
+      "name": "Docker Projects",
+      "path": "/home/cslog/svn/ticslog_trunk/docker",
+      "color": "#3498db",
+      "icon": "folder",
+      "description": "",
+      "host": "local"
     },
     {
       "id": "cslog-crm",
-      "name": "CRM Review",
+      "name": "CRM principal",
       "path": "/home/cslog/cslog-crm",
+      "color": "#3498db",
+      "icon": "folder",
+      "description": "",
+      "host": "local"
+    },
+    {
+      "id": "rust",
+      "name": "Rust Study",
+      "path": "/home/cslog/rust-study",
       "color": "#e74c3c",
-      "icon": "folder-red",
-      "description": "CRM project"
+      "icon": "folder",
+      "description": "",
+      "host": "vm9"
+    },
+    {
+      "id": "ticslog",
+      "name": "TI CSLOG",
+      "path": "/home/cslog/svn/ticslog_trunk",
+      "color": "#3498db",
+      "icon": "folder",
+      "description": "",
+      "host": "local"
+    },
+    {
+      "id": "doris-rust",
+      "name": "Doris Rust",
+      "path": "/home/cslog/mysql/doris-rust",
+      "color": "#e74c3c",
+      "icon": "folder",
+      "description": "",
+      "host": "vm9"
+    },
+    {
+      "id": "intervalor",
+      "name": "Intervalor",
+      "path": "/home/cslog",
+      "color": "#3498db",
+      "icon": "folder",
+      "description": "",
+      "host": "local"
     }
   ],
   "settings": {
     "terminal": "xfce4-terminal",
+    "terminals": [
+      "xfce4-terminal",
+      "konsole",
+      "gnome-terminal"
+    ],
     "shell": "/bin/bash",
     "defaultEditor": "code"
   }
