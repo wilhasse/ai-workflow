@@ -1080,36 +1080,24 @@ class WorkspaceSwitcher(Gtk.Window):
         return True  # Keep timer running
 
     def _pulse_footer(self):
-        """Show active session names in footer with pulsing green"""
+        """Show active session names in footer - bold green, separated by /"""
         if not self.active_sessions:
             self.footer_label.set_markup('<span size="medium" foreground="#7f8c8d">—</span>')
             return
 
-        # Cancel existing pulse timeout
-        if self._footer_pulse_timeout:
-            GLib.source_remove(self._footer_pulse_timeout)
-
-        # Build list of active session names
+        # Build list of active session names separated by /
         names = [name for (host_id, session_id, name) in self.active_sessions]
-        display = "  ".join(names)
+        display = " / ".join(names)
 
-        # Show in green
+        # Show in bold green (no blinking)
         self.footer_label.set_markup(f'<span size="medium" foreground="#2ecc71" weight="bold">{GLib.markup_escape_text(display)}</span>')
-
-        # Schedule fade back to gray after 2 seconds
-        def fade_footer():
-            self.footer_label.set_markup(f'<span size="medium" foreground="#7f8c8d">{GLib.markup_escape_text(display)}</span>')
-            self._footer_pulse_timeout = None
-            return False
-
-        self._footer_pulse_timeout = GLib.timeout_add(2000, fade_footer)
 
     def _update_footer(self):
         """Update footer - called from refresh_workspaces"""
         if self.active_sessions:
             names = [name for (host_id, session_id, name) in self.active_sessions]
-            display = "  ".join(names)
-            self.footer_label.set_markup(f'<span size="medium" foreground="#7f8c8d">{GLib.markup_escape_text(display)}</span>')
+            display = " / ".join(names)
+            self.footer_label.set_markup(f'<span size="medium" foreground="#2ecc71" weight="bold">{GLib.markup_escape_text(display)}</span>')
         else:
             self.footer_label.set_markup('<span size="medium" foreground="#7f8c8d">—</span>')
 
