@@ -354,31 +354,31 @@ class WorkspaceButton(Gtk.Button):
         else:
             # Remote workspace via SSH
             ssh_target = self.host_info['ssh']
-            # SSH + tmux attach/create in one command
+            # SSH + tmux attach/create in one command (use single quotes to avoid escaping issues)
             tmux_cmd = f"tmux attach -t {session_name} || tmux new -s {session_name} -c {work_dir}"
-            cmd = f'ssh -t {ssh_target} "{tmux_cmd}"'
+            cmd = f"ssh -t {ssh_target} '{tmux_cmd}'"
 
-        # Launch terminal with command
+        # Launch terminal with command (use single quotes for outer to allow double quotes in cmd)
         subprocess.Popen([
             terminal,
-            '-e', f'bash -c "{cmd}; exec bash"'
+            '-e', f"bash -c \"{cmd}; exec bash\""
         ])
 
         # Notify parent to refresh after a delay (so session appears as active)
         if self.on_activate_callback:
             self.on_activate_callback(ws.get('host', 'local'))
 
-    def _focus_existing_window(self, title):
-        """Try to find and focus a window with the given title. Returns True if found."""
+    def _focus_existing_window(self, search_term):
+        """Try to find and focus a window with the given search term in title. Returns True if found."""
         try:
             # List all windows with wmctrl
             result = subprocess.run(['wmctrl', '-l'], capture_output=True, text=True)
             if result.returncode != 0:
                 return False
 
-            # Search for window with matching title
+            # Search for window with matching title (e.g., "dbtools : bash" contains "dbtools")
             for line in result.stdout.strip().split('\n'):
-                if title in line:
+                if search_term in line:
                     # Extract window ID (first column)
                     window_id = line.split()[0]
                     # Activate (focus) the window
