@@ -355,8 +355,9 @@ class WorkspaceButton(Gtk.Button):
             # Remote workspace via SSH
             ssh_target = self.host_info['ssh']
             # SSH + tmux attach/create in one command (use single quotes to avoid escaping issues)
+            # Added keepalive options to prevent disconnects on idle
             tmux_cmd = f"tmux attach -t {session_name} || tmux new -s {session_name} -c {work_dir}"
-            cmd = f"ssh -t {ssh_target} '{tmux_cmd}'"
+            cmd = f"ssh -t -o ServerAliveInterval=60 -o ServerAliveCountMax=3 {ssh_target} '{tmux_cmd}'"
 
         # Launch terminal with command (use single quotes for outer to allow double quotes in cmd)
         subprocess.Popen([
