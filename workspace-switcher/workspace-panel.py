@@ -837,7 +837,8 @@ class WorkspaceSwitcher(Gtk.Window):
         self.set_keep_above(True)
         self.set_decorated(True)
         self.set_resizable(True)
-        self.set_type_hint(Gdk.WindowTypeHint.UTILITY)
+        self.set_type_hint(Gdk.WindowTypeHint.NORMAL)
+        self.set_skip_taskbar_hint(False)
 
         # Position on right side of screen
         display = Gdk.Display.get_default()
@@ -880,6 +881,14 @@ class WorkspaceSwitcher(Gtk.Window):
         settings_btn.connect('clicked', self.on_settings_clicked)
         header_box.pack_end(settings_btn, False, False, 0)
 
+        # Minimize button
+        minimize_btn = Gtk.Button()
+        minimize_btn.set_image(Gtk.Image.new_from_icon_name("window-minimize", Gtk.IconSize.SMALL_TOOLBAR))
+        minimize_btn.set_relief(Gtk.ReliefStyle.NONE)
+        minimize_btn.set_tooltip_text("Minimize")
+        minimize_btn.connect('clicked', lambda b: self.iconify())
+        header_box.pack_end(minimize_btn, False, False, 0)
+
         # Add workspace button
         add_btn = Gtk.Button()
         add_btn.set_image(Gtk.Image.new_from_icon_name("list-add", Gtk.IconSize.SMALL_TOOLBAR))
@@ -921,9 +930,12 @@ class WorkspaceSwitcher(Gtk.Window):
         scroll.add(self.workspace_box)
         main_box.pack_start(scroll, True, True, 0)
 
-        # Footer with session count
+        # Footer with session count (wraps after 2 names per line)
         self.footer_label = Gtk.Label()
         self.footer_label.set_markup('<span size="small" foreground="#7f8c8d">Loading...</span>')
+        self.footer_label.set_line_wrap(True)
+        self.footer_label.set_justify(Gtk.Justification.CENTER)
+        self.footer_label.set_max_width_chars(30)
         main_box.pack_end(self.footer_label, False, False, 8)
 
         self.add(main_box)
@@ -1081,14 +1093,18 @@ class WorkspaceSwitcher(Gtk.Window):
         return True  # Keep timer running
 
     def _pulse_footer(self):
-        """Show active session names in footer - bold green, separated by /"""
+        """Show active session names in footer - bold green, 2 per line"""
         if not self.active_sessions:
             self.footer_label.set_markup('<span size="medium" foreground="#7f8c8d">—</span>')
             return
 
-        # Build list of active session names separated by /
+        # Build list of active session names, 2 per line
         names = [name for (host_id, session_id, name) in self.active_sessions]
-        display = " / ".join(names)
+        lines = []
+        for i in range(0, len(names), 2):
+            line = " / ".join(names[i:i+2])
+            lines.append(line)
+        display = "\n".join(lines)
 
         # Show in bold green (no blinking)
         self.footer_label.set_markup(f'<span size="medium" foreground="#2ecc71" weight="bold">{GLib.markup_escape_text(display)}</span>')
@@ -1097,7 +1113,11 @@ class WorkspaceSwitcher(Gtk.Window):
         """Update footer - called from refresh_workspaces"""
         if self.active_sessions:
             names = [name for (host_id, session_id, name) in self.active_sessions]
-            display = " / ".join(names)
+            lines = []
+            for i in range(0, len(names), 2):
+                line = " / ".join(names[i:i+2])
+                lines.append(line)
+            display = "\n".join(lines)
             self.footer_label.set_markup(f'<span size="medium" foreground="#2ecc71" weight="bold">{GLib.markup_escape_text(display)}</span>')
         else:
             self.footer_label.set_markup('<span size="medium" foreground="#7f8c8d">—</span>')
