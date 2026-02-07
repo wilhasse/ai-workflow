@@ -12,6 +12,8 @@ from gi.repository import Gtk, Gdk, GLib, Pango
 import subprocess
 import json
 import os
+import hashlib
+import shlex
 import signal
 import sys
 import threading
@@ -942,7 +944,10 @@ class WorkspaceSwitcher(Gtk.Window):
 
         # Load workspaces
         self.last_session_activity = {}
+        self.last_session_fingerprint = {}
         self.last_host_activity = {}  # host_id -> {session_name: last_activity}
+        self.last_host_fingerprint = {}  # host_id -> {session_name: pane_fingerprint}
+        self._activity_check_lock = threading.Lock()
         self.active_sessions = []  # list of (host_id, session_name) with recent activity
         self._footer_pulse_timeout = None
         self.refresh_workspaces()
@@ -1045,48 +1050,85 @@ class WorkspaceSwitcher(Gtk.Window):
 
     def _check_all_hosts_activity(self):
         """Check all hosts for activity and pulse tabs if new activity detected"""
+        if not self._activity_check_lock.acquire(blocking=False):
+            return True
+
         def check_in_background():
-            new_active_sessions = []
-            all_workspaces = self.config.get('workspaces', [])
+            try:
+                new_active_sessions = []
+                all_workspaces = self.config.get('workspaces', [])
 
-            for host in self.hosts:
-                host_id = host['id']
-                host_info = host
+                for host in self.hosts:
+                    host_id = host['id']
+                    host_info = host
 
-                # Get sessions for this host
-                sessions = self._get_sessions_for_host(host_id, host_info)
+                    # Get sessions for this host
+                    sessions = self._get_sessions_for_host(host_id, host_info)
 
-                # Initialize last activity tracking for this host if needed
-                if host_id not in self.last_host_activity:
-                    self.last_host_activity[host_id] = {}
+                    # Initialize last activity tracking for this host if needed
+                    if host_id not in self.last_host_activity:
+                        self.last_host_activity[host_id] = {}
+                    if host_id not in self.last_host_fingerprint:
+                        self.last_host_fingerprint[host_id] = {}
 
-                last_activities = self.last_host_activity[host_id]
-                host_has_new_activity = False
+                    last_activities = self.last_host_activity[host_id]
+                    last_fingerprints = self.last_host_fingerprint[host_id]
+                    host_has_new_activity = False
 
-                for session_name, session_info in sessions.items():
-                    activity = session_info.get('activity', 0) or 0
-                    last_activity = last_activities.get(session_name, 0)
+                    for session_name, session_info in sessions.items():
+                        activity = session_info.get('activity', 0) or 0
+                        last_activity = last_activities.get(session_name, 0)
+                        fingerprint = None
 
-                    # Check if this session has new activity
-                    if activity > last_activity and last_activity > 0:
-                        # Find workspace name for this session
-                        ws = next((w for w in all_workspaces if w['id'] == session_name), None)
-                        ws_name = ws['name'] if ws else session_name
-                        new_active_sessions.append((host_id, session_name, ws_name))
-                        host_has_new_activity = True
+                        # Capture pane fingerprint only for first-seen sessions or when tmux
+                        # reports new activity to keep polling overhead low.
+                        if session_name not in last_fingerprints or (
+                            activity > last_activity and last_activity > 0
+                        ):
+                            fingerprint = self._capture_session_fingerprint(session_name, host_info)
 
-                    # Update last known activity for this session
-                    if activity > 0:
-                        last_activities[session_name] = activity
+                        # Check if this session has new activity
+                        if activity > last_activity and last_activity > 0:
+                            last_fingerprint = last_fingerprints.get(session_name)
+                            if (
+                                fingerprint is not None
+                                and last_fingerprint is not None
+                                and fingerprint != last_fingerprint
+                            ):
+                                # Find workspace name for this session
+                                ws = next((w for w in all_workspaces if w['id'] == session_name), None)
+                                ws_name = ws['name'] if ws else session_name
+                                new_active_sessions.append((host_id, session_name, ws_name))
+                                host_has_new_activity = True
 
-                # Pulse tab if activity on non-current host
-                if host_has_new_activity and host_id != self._current_host:
-                    GLib.idle_add(self.host_tab_bar.pulse_activity, host_id)
+                        # Update last known activity for this session
+                        if activity > 0:
+                            last_activities[session_name] = activity
+                        if fingerprint is not None:
+                            last_fingerprints[session_name] = fingerprint
 
-            # Update active sessions list and footer
-            if new_active_sessions:
-                self.active_sessions = new_active_sessions
-                GLib.idle_add(self._pulse_footer)
+                    # Drop stale session state
+                    live_sessions = set(sessions.keys())
+                    for session_name in list(last_activities.keys()):
+                        if session_name not in live_sessions:
+                            last_activities.pop(session_name, None)
+                    for session_name in list(last_fingerprints.keys()):
+                        if session_name not in live_sessions:
+                            last_fingerprints.pop(session_name, None)
+
+                    # Pulse tab if activity on non-current host
+                    if host_has_new_activity and host_id != self._current_host:
+                        GLib.idle_add(self.host_tab_bar.pulse_activity, host_id)
+
+                # Update active sessions list and footer
+                if new_active_sessions:
+                    self.active_sessions = new_active_sessions
+                    GLib.idle_add(self._pulse_footer)
+                else:
+                    self.active_sessions = []
+                    GLib.idle_add(self._update_footer)
+            finally:
+                self._activity_check_lock.release()
 
         # Run in background thread to not block UI
         threading.Thread(target=check_in_background, daemon=True).start()
@@ -1140,9 +1182,16 @@ class WorkspaceSwitcher(Gtk.Window):
 
         # Get tmux session info
         sessions = self._get_sessions_for_host(self._current_host, host_info)
+        current_host_activities = self.last_host_activity.get(self._current_host, {})
+        current_host_fingerprints = self.last_host_fingerprint.get(self._current_host, {})
         self.last_session_activity = {
             key: value
             for key, value in self.last_session_activity.items()
+            if key in sessions
+        }
+        self.last_session_fingerprint = {
+            key: value
+            for key, value in self.last_session_fingerprint.items()
             if key in sessions
         }
 
@@ -1153,12 +1202,24 @@ class WorkspaceSwitcher(Gtk.Window):
             activity_recent = False
             if session_info:
                 active_count += 1
-                activity = session_info.get('activity')
+                activity = current_host_activities.get(ws['id'])
                 previous_activity = self.last_session_activity.get(ws['id'])
-                if activity is not None and previous_activity is not None and activity > previous_activity:
+                fingerprint = current_host_fingerprints.get(ws['id'])
+                previous_fingerprint = self.last_session_fingerprint.get(ws['id'])
+                if (
+                    activity is not None
+                    and previous_activity is not None
+                    and activity > previous_activity
+                    and
+                    fingerprint is not None
+                    and previous_fingerprint is not None
+                    and fingerprint != previous_fingerprint
+                ):
                     activity_recent = True
                 if activity is not None:
                     self.last_session_activity[ws['id']] = activity
+                if fingerprint is not None:
+                    self.last_session_fingerprint[ws['id']] = fingerprint
             btn = WorkspaceButton(
                 ws,
                 host_info=host_info,
@@ -1198,13 +1259,48 @@ class WorkspaceSwitcher(Gtk.Window):
             else:
                 return {}  # Connection failed
 
+    def _capture_session_fingerprint(self, session_name, host_info):
+        """Capture a stable fingerprint of visible pane content for activity filtering."""
+        try:
+            if not session_name:
+                return None
+
+            if not host_info or host_info.get('id') == 'local' or not host_info.get('ssh'):
+                result = subprocess.run(
+                    ['tmux', 'capture-pane', '-p', '-S', '-40', '-t', session_name],
+                    capture_output=True,
+                    text=True,
+                    env={**os.environ, 'TMUX': ''}
+                )
+            else:
+                session_target = shlex.quote(session_name)
+                cmd = f'tmux capture-pane -p -S -40 -t {session_target} 2>/dev/null'
+                result = subprocess.run(
+                    ['ssh', '-o', 'ConnectTimeout=3', '-o', 'BatchMode=yes', host_info['ssh'], cmd],
+                    capture_output=True,
+                    text=True,
+                    timeout=6
+                )
+
+            if result.returncode != 0:
+                return None
+
+            lines = [line.rstrip() for line in result.stdout.splitlines()]
+            normalized = '\n'.join(lines[-40:])
+            return hashlib.sha1(normalized.encode('utf-8')).hexdigest()
+        except Exception:
+            return None
+
     def _get_remote_tmux_sessions(self, ssh_target):
         """Get tmux sessions from a remote host via SSH. Returns None on connection failure."""
         sessions = {}
         try:
-            # Use session_activity only. window_activity can advance due TUI redraws
-            # even when no real command execution is happening.
-            cmd = 'tmux list-sessions -F "#{session_name}:#{session_windows}:#{session_activity}" 2>/dev/null'
+            # Query both session info and window activity in one SSH call.
+            cmd = (
+                'tmux list-sessions -F "#{session_name}:#{session_windows}:#{session_activity}" 2>/dev/null; '
+                'echo "---"; '
+                'tmux list-windows -a -F "#{session_name}:#{window_activity}" 2>/dev/null'
+            )
             result = subprocess.run(
                 ['ssh', '-o', 'ConnectTimeout=3', '-o', 'BatchMode=yes', ssh_target, cmd],
                 capture_output=True, text=True, timeout=10
@@ -1212,7 +1308,14 @@ class WorkspaceSwitcher(Gtk.Window):
             # returncode 0 = success, 1 = no sessions (tmux not running), both mean SSH worked
             if result.returncode in (0, 1):
                 output = result.stdout.strip()
-                for line in output.split('\n'):
+                if '---' in output:
+                    sessions_part, windows_part = output.split('---', 1)
+                else:
+                    sessions_part = output
+                    windows_part = ''
+
+                # Parse session info
+                for line in sessions_part.strip().split('\n'):
                     if ':' in line:
                         parts = line.rsplit(':', 2)
                         if len(parts) != 3:
@@ -1222,6 +1325,15 @@ class WorkspaceSwitcher(Gtk.Window):
                             'windows': int(windows) if windows else 0,
                             'activity': int(activity) if activity else 0
                         }
+
+                # Use max window activity to track active output more responsively.
+                for line in windows_part.strip().split('\n'):
+                    if ':' in line:
+                        session_name, activity = line.rsplit(':', 1)
+                        if session_name in sessions and activity:
+                            activity_val = int(activity)
+                            if activity_val > sessions[session_name]['activity']:
+                                sessions[session_name]['activity'] = activity_val
 
                 return sessions  # Return {} for no sessions, but not None
             else:
@@ -1427,6 +1539,24 @@ class WorkspaceSwitcher(Gtk.Window):
                             'windows': int(windows),
                             'activity': int(activity)
                         }
+            windows_result = subprocess.run(
+                ['tmux', 'list-windows', '-a', '-F', '#{session_name}:#{window_activity}'],
+                capture_output=True, text=True,
+                env={**os.environ, 'TMUX': ''}
+            )
+            if windows_result.returncode == 0:
+                for line in windows_result.stdout.strip().split('\n'):
+                    if ':' not in line:
+                        continue
+                    session_name, activity = line.rsplit(':', 1)
+                    if not activity:
+                        continue
+                    session_info = sessions.get(session_name)
+                    if session_info is None:
+                        continue
+                    activity_value = int(activity)
+                    if activity_value > session_info['activity']:
+                        session_info['activity'] = activity_value
         except Exception as e:
             print(f"tmux detection error: {e}")  # Debug logging
         return sessions
