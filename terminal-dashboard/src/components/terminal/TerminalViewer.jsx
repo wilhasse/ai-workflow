@@ -4,6 +4,13 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 
 const SHORTCUTS_STORAGE_KEY = 'terminal-dashboard-shortcuts'
+const ESC = '\\u001B'
+const BEL = '\\u0007'
+const ANSI_CSI_PATTERN = new RegExp(`${ESC}\\[[0-?]*[ -/]*[@-~]`, 'g')
+const ANSI_OSC_PATTERN = new RegExp(`${ESC}\\][^${BEL}]*(?:${BEL}|${ESC}\\\\)`, 'g')
+const ANSI_DCS_PATTERN = new RegExp(`${ESC}[P^_X].*?${ESC}\\\\`, 'gs')
+const ANSI_SINGLE_PATTERN = new RegExp(`${ESC}[@-_]`, 'g')
+const CONTROL_CHARS_PATTERN = new RegExp('\\p{Cc}', 'gu')
 
 const DEFAULT_SHORTCUTS = [
   { id: 'ctrl-c', label: 'C-c', keys: '\x03', description: 'Interrupt (Ctrl+C)' },
@@ -39,6 +46,20 @@ const saveShortcuts = (shortcuts) => {
   } catch (e) {
     console.warn('Failed to save shortcuts', e)
   }
+}
+
+const hasRenderableOutput = (value) => {
+  if (typeof value !== 'string' || value.length === 0) {
+    return false
+  }
+  const stripped = value
+    .replace(ANSI_OSC_PATTERN, '')
+    .replace(ANSI_DCS_PATTERN, '')
+    .replace(ANSI_CSI_PATTERN, '')
+    .replace(ANSI_SINGLE_PATTERN, '')
+    .replace(CONTROL_CHARS_PATTERN, '')
+    .trim()
+  return stripped.length > 0
 }
 
 function TerminalViewer({
@@ -199,7 +220,7 @@ function TerminalViewer({
         return
       }
       if (payload.type === 'data' && typeof payload.payload === 'string') {
-        if (typeof onActivityRef.current === 'function') {
+        if (typeof onActivityRef.current === 'function' && hasRenderableOutput(payload.payload)) {
           const now = Date.now()
           if (now - lastActivityRef.current > 250) {
             lastActivityRef.current = now
