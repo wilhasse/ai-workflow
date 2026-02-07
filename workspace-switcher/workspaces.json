@@ -45,18 +45,9 @@
       "host": "local"
     },
     {
-      "id": "innodb-go",
-      "name": "Innodb Rust",
-      "path": "/home/cslog/mysql/innodb-rust",
-      "color": "#e74c3c",
-      "icon": "folder",
-      "description": "",
-      "host": "vm9"
-    },
-    {
       "id": "fusion",
       "name": "cslog-db",
-      "path": "/home/cslog/mysql",
+      "path": "/home/cslog/mysql/cslog-db",
       "color": "#9b59b6",
       "icon": "folder",
       "description": "",
@@ -81,24 +72,6 @@
       "host": "local"
     },
     {
-      "id": "rust",
-      "name": "Rust Study",
-      "path": "/home/cslog/rust-study",
-      "color": "#e74c3c",
-      "icon": "folder",
-      "description": "",
-      "host": "vm9"
-    },
-    {
-      "id": "ticslog",
-      "name": "TI CSLOG",
-      "path": "/home/cslog/svn/ticslog_trunk",
-      "color": "#3498db",
-      "icon": "folder",
-      "description": "",
-      "host": "local"
-    },
-    {
       "id": "doris-rust",
       "name": "Doris Rust",
       "path": "/home/cslog/mysql/doris-rust",
@@ -111,6 +84,60 @@
       "id": "intervalor",
       "name": "Intervalor",
       "path": "/home/cslog",
+      "color": "#3498db",
+      "icon": "folder",
+      "description": "",
+      "host": "local"
+    },
+    {
+      "id": "aspect",
+      "name": "Aspect",
+      "path": "/home/cslog/siscob_trunk/net/aspect",
+      "color": "#3498db",
+      "icon": "folder",
+      "description": "",
+      "host": "local"
+    },
+    {
+      "id": "cslog-db",
+      "name": "cslog-db",
+      "path": "/home/cslog/mysql/cslog-db",
+      "color": "#3498db",
+      "icon": "folder",
+      "description": "",
+      "host": "vm9"
+    },
+    {
+      "id": "innodb-rust",
+      "name": "Innodb Rust",
+      "path": "/home/cslog/mysql/innodb-rust",
+      "color": "#3498db",
+      "icon": "folder",
+      "description": "",
+      "host": "vm9"
+    },
+    {
+      "id": "mysql-duckdb",
+      "name": "MySQL DuckDB",
+      "path": "/home/cslog/mysql/my-percona-server",
+      "color": "#3498db",
+      "icon": "folder",
+      "description": "",
+      "host": "vm9"
+    },
+    {
+      "id": "percona-server-84",
+      "name": "Percona 8.4",
+      "path": "~/mysql/percona-server-84",
+      "color": "#3498db",
+      "icon": "folder",
+      "description": "",
+      "host": "vm9"
+    },
+    {
+      "id": "mysql-gtid",
+      "name": "MySQL GITID",
+      "path": "/home/cslog/mysql",
       "color": "#3498db",
       "icon": "folder",
       "description": "",
