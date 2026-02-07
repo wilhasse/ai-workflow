@@ -1202,13 +1202,9 @@ class WorkspaceSwitcher(Gtk.Window):
         """Get tmux sessions from a remote host via SSH. Returns None on connection failure."""
         sessions = {}
         try:
-            # Query both session info and window activity in one SSH call
-            # Window activity is more granular than session activity
-            cmd = (
-                'tmux list-sessions -F "#{session_name}:#{session_windows}:#{session_activity}" 2>/dev/null; '
-                'echo "---"; '
-                'tmux list-windows -a -F "#{session_name}:#{window_activity}" 2>/dev/null'
-            )
+            # Use session_activity only. window_activity can advance due TUI redraws
+            # even when no real command execution is happening.
+            cmd = 'tmux list-sessions -F "#{session_name}:#{session_windows}:#{session_activity}" 2>/dev/null'
             result = subprocess.run(
                 ['ssh', '-o', 'ConnectTimeout=3', '-o', 'BatchMode=yes', ssh_target, cmd],
                 capture_output=True, text=True, timeout=10
@@ -1216,14 +1212,7 @@ class WorkspaceSwitcher(Gtk.Window):
             # returncode 0 = success, 1 = no sessions (tmux not running), both mean SSH worked
             if result.returncode in (0, 1):
                 output = result.stdout.strip()
-                if '---' in output:
-                    sessions_part, windows_part = output.split('---', 1)
-                else:
-                    sessions_part = output
-                    windows_part = ''
-
-                # Parse session info
-                for line in sessions_part.strip().split('\n'):
+                for line in output.split('\n'):
                     if ':' in line:
                         parts = line.rsplit(':', 2)
                         if len(parts) != 3:
@@ -1233,15 +1222,6 @@ class WorkspaceSwitcher(Gtk.Window):
                             'windows': int(windows) if windows else 0,
                             'activity': int(activity) if activity else 0
                         }
-
-                # Update with max window activity (more accurate than session activity)
-                for line in windows_part.strip().split('\n'):
-                    if ':' in line:
-                        session_name, activity = line.rsplit(':', 1)
-                        if session_name in sessions and activity:
-                            activity_val = int(activity)
-                            if activity_val > sessions[session_name]['activity']:
-                                sessions[session_name]['activity'] = activity_val
 
                 return sessions  # Return {} for no sessions, but not None
             else:
@@ -1447,24 +1427,6 @@ class WorkspaceSwitcher(Gtk.Window):
                             'windows': int(windows),
                             'activity': int(activity)
                         }
-            windows_result = subprocess.run(
-                ['tmux', 'list-windows', '-a', '-F', '#{session_name}:#{window_activity}'],
-                capture_output=True, text=True,
-                env={**os.environ, 'TMUX': ''}
-            )
-            if windows_result.returncode == 0:
-                for line in windows_result.stdout.strip().split('\n'):
-                    if ':' not in line:
-                        continue
-                    session_name, activity = line.rsplit(':', 1)
-                    if not activity:
-                        continue
-                    session_info = sessions.get(session_name)
-                    if session_info is None:
-                        continue
-                    activity_value = int(activity)
-                    if activity_value > session_info['activity']:
-                        session_info['activity'] = activity_value
         except Exception as e:
             print(f"tmux detection error: {e}")  # Debug logging
         return sessions
