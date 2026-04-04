@@ -99,16 +99,15 @@ export async function upsertSyncState(records) {
 }
 
 // Query helpers for the read API
-export async function searchMessages(q, { source, vm_id, limit = 50, offset = 0 } = {}) {
+export async function searchMessages(q, { source, vm_id, from, to, limit = 50, offset = 0 } = {}) {
   const pool = getPool()
-  const escaped = q.replace(/'/g, "''")
-  // Use MATCH_PHRASE for exact phrase matching, MATCH_ALL for multi-word general search
-  const hasSpecialChars = /[._\-/\\]/.test(q)
-  let where = hasSpecialChars
-    ? `m.content_text LIKE ${pool.escape('%' + q + '%')}`
-    : `m.content_text MATCH_ALL '${escaped}'`
+  // Split query on special chars into words for MATCH_ALL (uses inverted index, fast)
+  const words = q.replace(/[._\-/\\]+/g, ' ').trim().replace(/'/g, "''")
+  let where = `m.content_text MATCH_ALL '${words}'`
   if (source) where += ` AND m.source = ${pool.escape(source)}`
   if (vm_id) where += ` AND m.vm_id = ${pool.escape(vm_id)}`
+  if (from) where += ` AND m.ts >= ${pool.escape(from)}`
+  if (to) where += ` AND m.ts <= ${pool.escape(to + ' 23:59:59')}`
   const sql = `
     SELECT m.message_id, m.session_id, m.vm_id, m.source, m.msg_role,
            m.content_text, m.ts, m.seq_num,

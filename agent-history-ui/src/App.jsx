@@ -16,9 +16,9 @@ function dateStr(d) {
 
 const defaults = (() => {
   const today = new Date()
-  const yesterday = new Date(today)
-  yesterday.setDate(yesterday.getDate() - 1)
-  return { from: dateStr(yesterday), to: dateStr(today) }
+  const threeMonthsAgo = new Date(today)
+  threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3)
+  return { from: dateStr(threeMonthsAgo), to: dateStr(today) }
 })()
 
 // Global fetch counter to discard stale responses
