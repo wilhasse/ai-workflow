@@ -6,17 +6,44 @@ import SearchResults from './components/SearchResults.jsx'
 
 const LIMIT = 50
 
+function dateStr(d) {
+  return d.toISOString().slice(0, 10)
+}
+
+function getDefaultDates() {
+  const today = new Date()
+  const yesterday = new Date(today)
+  yesterday.setDate(yesterday.getDate() - 1)
+  return { from: dateStr(yesterday), to: dateStr(today) }
+}
+
 export default function App() {
   const [sessions, setSessions] = useState([])
   const [searchResults, setSearchResults] = useState(null)
   const [selectedSession, setSelectedSession] = useState(null)
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
-  const [filters, setFilters] = useState({ vm_id: '', source: '', project: '', from: '', to: '' })
+  const [filters, setFilters] = useState({ vm_id: '', source: '', project: '', ...getDefaultDates() })
   const [offset, setOffset] = useState(0)
   const [hasMore, setHasMore] = useState(true)
   const [syncInfo, setSyncInfo] = useState(null)
+  const [theme, setTheme] = useState(() => localStorage.getItem('ah-theme') || 'dark')
+  const [font, setFont] = useState(() => localStorage.getItem('ah-font') || 'Outfit')
+  const [fontSize, setFontSize] = useState(() => Number(localStorage.getItem('ah-fontsize')) || 14)
   const debounceRef = useRef(null)
+
+  // Apply theme + font
+  useEffect(() => {
+    document.documentElement.className = theme === 'light' ? 'light' : ''
+    localStorage.setItem('ah-theme', theme)
+  }, [theme])
+
+  useEffect(() => {
+    document.documentElement.style.setProperty('--font-ui', `'${font}', sans-serif`)
+    document.documentElement.style.fontSize = `${fontSize}px`
+    localStorage.setItem('ah-font', font)
+    localStorage.setItem('ah-fontsize', String(fontSize))
+  }, [font, fontSize])
 
   // Load sessions on mount and filter change
   const loadSessions = useCallback(async (off = 0, append = false) => {
@@ -38,39 +65,34 @@ export default function App() {
     }
   }, [filters])
 
+  // Load on mount
   useEffect(() => {
-    if (!query) {
-      setSearchResults(null)
-      loadSessions(0)
-    }
-  }, [filters, loadSessions, query])
-
-  // Load sync status
-  useEffect(() => {
+    handleBuscar()
     getSyncStatus().then(setSyncInfo).catch(() => {})
   }, [])
 
-  // Debounced search
-  useEffect(() => {
-    if (!query.trim()) {
-      setSearchResults(null)
-      return
-    }
-    clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(async () => {
-      setLoading(true)
-      try {
+  const handleBuscar = async () => {
+    setLoading(true)
+    setOffset(0)
+    setSelectedSession(null)
+    try {
+      if (query.trim()) {
         const data = await searchMessages(query, { ...filters, limit: LIMIT })
         setSearchResults(data)
-      } catch (err) {
-        console.error('Search failed:', err)
-        setSearchResults([])
-      } finally {
-        setLoading(false)
+        setSessions([])
+      } else {
+        setSearchResults(null)
+        const data = await listSessions({ ...filters, limit: LIMIT, offset: 0 })
+        setSessions(data)
+        setHasMore(data.length === LIMIT)
+        setOffset(data.length)
       }
-    }, 400)
-    return () => clearTimeout(debounceRef.current)
-  }, [query, filters])
+    } catch (err) {
+      console.error('Buscar failed:', err)
+    } finally {
+      setLoading(false)
+    }
+  }
 
   const handleSelectSession = async (sessionId) => {
     try {
@@ -92,9 +114,42 @@ export default function App() {
   return (
     <div className="app">
       <div className="app-header">
-        <div className="app-title">
-          Agent History
-          <span>{totalSessions > 0 && `${totalSessions} files synced`}</span>
+        <div className="app-title-row">
+          <div className="app-title">
+            Agent History
+            <span>{totalSessions > 0 && `${totalSessions} files synced`}</span>
+          </div>
+          <div className="settings-row">
+            <select
+              className="filter-select"
+              value={font}
+              onChange={e => setFont(e.target.value)}
+            >
+              <option value="Outfit">Outfit</option>
+              <option value="Inter">Inter</option>
+              <option value="Roboto">Roboto</option>
+              <option value="JetBrains Mono">JetBrains Mono</option>
+              <option value="system-ui">System</option>
+            </select>
+            <select
+              className="filter-select"
+              value={fontSize}
+              onChange={e => setFontSize(Number(e.target.value))}
+            >
+              <option value="12">12px</option>
+              <option value="13">13px</option>
+              <option value="14">14px</option>
+              <option value="15">15px</option>
+              <option value="16">16px</option>
+              <option value="18">18px</option>
+            </select>
+            <button
+              className="theme-toggle"
+              onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}
+            >
+              {theme === 'dark' ? '☀ Light' : '● Dark'}
+            </button>
+          </div>
         </div>
 
         <div className="search-row">
@@ -104,7 +159,11 @@ export default function App() {
             placeholder="Search conversations... (full-text)"
             value={query}
             onChange={e => setQuery(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && handleBuscar()}
           />
+          <button className="btn-buscar" onClick={handleBuscar} disabled={loading}>
+            {loading ? 'Buscando...' : 'Buscar'}
+          </button>
         </div>
 
         <div className="filters-row">
