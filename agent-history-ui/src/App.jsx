@@ -10,12 +10,15 @@ function dateStr(d) {
   return d.toISOString().slice(0, 10)
 }
 
-function getDefaultDates() {
+const defaults = (() => {
   const today = new Date()
   const yesterday = new Date(today)
   yesterday.setDate(yesterday.getDate() - 1)
   return { from: dateStr(yesterday), to: dateStr(today) }
-}
+})()
+
+// Global fetch counter to discard stale responses
+let fetchId = 0
 
 export default function App() {
   const [sessions, setSessions] = useState([])
@@ -23,17 +26,18 @@ export default function App() {
   const [selectedSession, setSelectedSession] = useState(null)
   const [loading, setLoading] = useState(false)
   const [query, setQuery] = useState('')
-  const [filters, setFilters] = useState({ vm_id: '', source: '', project: '', ...getDefaultDates() })
+  const [vmId, setVmId] = useState('')
+  const [source, setSource] = useState('')
+  const [project, setProject] = useState('')
+  const [fromDate, setFromDate] = useState(defaults.from)
+  const [toDate, setToDate] = useState(defaults.to)
   const [offset, setOffset] = useState(0)
   const [hasMore, setHasMore] = useState(true)
   const [syncInfo, setSyncInfo] = useState(null)
   const [theme, setTheme] = useState(() => localStorage.getItem('ah-theme') || 'dark')
   const [font, setFont] = useState(() => localStorage.getItem('ah-font') || 'JetBrains Mono')
   const [fontSize, setFontSize] = useState(() => Number(localStorage.getItem('ah-fontsize')) || 14)
-  // Incremented to trigger a fresh search
-  const [searchTrigger, setSearchTrigger] = useState(0)
 
-  // Apply theme + font
   useEffect(() => {
     document.documentElement.className = theme === 'light' ? 'light' : ''
     localStorage.setItem('ah-theme', theme)
@@ -46,57 +50,83 @@ export default function App() {
     localStorage.setItem('ah-fontsize', String(fontSize))
   }, [font, fontSize])
 
-  // Single effect that runs the search whenever searchTrigger changes
-  useEffect(() => {
-    let cancelled = false
-    async function run() {
-      setLoading(true)
-      setSelectedSession(null)
-      setOffset(0)
-      try {
-        if (query.trim()) {
-          const data = await searchMessages(query, { ...filters, limit: LIMIT })
-          if (!cancelled) {
-            setSearchResults(data)
-            setSessions([])
-          }
-        } else {
-          const data = await listSessions({ ...filters, limit: LIMIT, offset: 0 })
-          if (!cancelled) {
-            setSearchResults(null)
-            setSessions(data)
-            setHasMore(data.length === LIMIT)
-            setOffset(data.length)
-          }
-        }
-      } catch (err) {
-        console.error('Search failed:', err)
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
-    }
-    run()
-    return () => { cancelled = true }
-  }, [searchTrigger])
-
-  // Trigger search on mount
   useEffect(() => {
     getSyncStatus().then(setSyncInfo).catch(() => {})
   }, [])
 
-  // When any filter changes, auto-trigger search
-  const isFirstRender = useRef(true)
-  useEffect(() => {
-    if (isFirstRender.current) {
-      isFirstRender.current = false
-      return
-    }
-    setSearchTrigger(n => n + 1)
-  }, [filters.vm_id, filters.source, filters.project, filters.from, filters.to])
+  // The core fetch — takes ALL filter values explicitly, uses fetchId to discard stale results
+  async function doFetch(opts) {
+    const myId = ++fetchId
+    const filters = {}
+    if (opts.vm_id) filters.vm_id = opts.vm_id
+    if (opts.source) filters.source = opts.source
+    if (opts.project) filters.project = opts.project
+    if (opts.from) filters.from = opts.from
+    if (opts.to) filters.to = opts.to
 
-  const handleSearch = () => setSearchTrigger(n => n + 1)
+    setLoading(true)
+    setSelectedSession(null)
+    setOffset(0)
+
+    try {
+      if (opts.query && opts.query.trim()) {
+        const data = await searchMessages(opts.query, { ...filters, limit: LIMIT })
+        if (fetchId !== myId) return // stale
+        setSearchResults(data)
+        setSessions([])
+      } else {
+        const data = await listSessions({ ...filters, limit: LIMIT, offset: 0 })
+        if (fetchId !== myId) return // stale
+        setSearchResults(null)
+        setSessions(data)
+        setHasMore(data.length === LIMIT)
+        setOffset(data.length)
+      }
+    } catch (err) {
+      console.error('Fetch failed:', err)
+    } finally {
+      if (fetchId === myId) setLoading(false)
+    }
+  }
+
+  // Build current filter state as explicit object
+  function currentFilters(overrides = {}) {
+    return {
+      vm_id: overrides.vm_id ?? vmId,
+      source: overrides.source ?? source,
+      project: overrides.project ?? project,
+      from: overrides.from ?? fromDate,
+      to: overrides.to ?? toDate,
+      query: overrides.query ?? query,
+    }
+  }
+
+  // Initial load
+  const didMount = useRef(false)
+  useEffect(() => {
+    if (!didMount.current) {
+      didMount.current = true
+      doFetch(currentFilters())
+    }
+  })
+
+  const handleSearch = () => doFetch(currentFilters())
+
+  // Each handler passes ALL current values + the one that changed
+  const handleVmChange = (v) => { setVmId(v); doFetch(currentFilters({ vm_id: v })) }
+  const handleSourceChange = (v) => { setSource(v); doFetch(currentFilters({ source: v })) }
+  const handleProjectChange = (v) => { setProject(v); doFetch(currentFilters({ project: v })) }
+  const handleFromChange = (v) => { setFromDate(v); doFetch(currentFilters({ from: v })) }
+  const handleToChange = (v) => { setToDate(v); doFetch(currentFilters({ to: v })) }
 
   const loadMore = async () => {
+    const filters = {}
+    if (vmId) filters.vm_id = vmId
+    if (source) filters.source = source
+    if (project) filters.project = project
+    if (fromDate) filters.from = fromDate
+    if (toDate) filters.to = toDate
+
     setLoading(true)
     try {
       const data = await listSessions({ ...filters, limit: LIMIT, offset })
@@ -119,10 +149,6 @@ export default function App() {
     }
   }
 
-  const handleFilterChange = (key, value) => {
-    setFilters(prev => ({ ...prev, [key]: value }))
-  }
-
   const totalSessions = syncInfo?.reduce((sum, s) => sum + (s.file_count || 0), 0) || 0
 
   return (
@@ -134,22 +160,14 @@ export default function App() {
             <span>{totalSessions > 0 && `${totalSessions} files synced`}</span>
           </div>
           <div className="settings-row">
-            <select
-              className="filter-select"
-              value={font}
-              onChange={e => setFont(e.target.value)}
-            >
+            <select className="filter-select" value={font} onChange={e => setFont(e.target.value)}>
               <option value="Outfit">Outfit</option>
               <option value="Inter">Inter</option>
               <option value="Roboto">Roboto</option>
               <option value="JetBrains Mono">JetBrains Mono</option>
               <option value="system-ui">System</option>
             </select>
-            <select
-              className="filter-select"
-              value={fontSize}
-              onChange={e => setFontSize(Number(e.target.value))}
-            >
+            <select className="filter-select" value={fontSize} onChange={e => setFontSize(Number(e.target.value))}>
               <option value="12">12px</option>
               <option value="13">13px</option>
               <option value="14">14px</option>
@@ -157,10 +175,7 @@ export default function App() {
               <option value="16">16px</option>
               <option value="18">18px</option>
             </select>
-            <button
-              className="theme-toggle"
-              onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}
-            >
+            <button className="theme-toggle" onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}>
               {theme === 'dark' ? '☀ Light' : '● Dark'}
             </button>
           </div>
@@ -182,11 +197,7 @@ export default function App() {
 
         <div className="filters-row">
           <label className="filter-label">VM:</label>
-          <select
-            className="filter-select"
-            value={filters.vm_id}
-            onChange={e => handleFilterChange('vm_id', e.target.value)}
-          >
+          <select className="filter-select" value={vmId} onChange={e => handleVmChange(e.target.value)}>
             <option value="">All VMs</option>
             <option value="dev-vm">dev-vm</option>
             <option value="godev4">godev4</option>
@@ -194,11 +205,7 @@ export default function App() {
           </select>
 
           <label className="filter-label">Source:</label>
-          <select
-            className="filter-select"
-            value={filters.source}
-            onChange={e => handleFilterChange('source', e.target.value)}
-          >
+          <select className="filter-select" value={source} onChange={e => handleSourceChange(e.target.value)}>
             <option value="">All</option>
             <option value="claude">Claude</option>
             <option value="codex">Codex</option>
@@ -209,79 +216,49 @@ export default function App() {
             className="filter-input"
             type="text"
             placeholder="e.g. ai-workflow"
-            value={filters.project}
-            onChange={e => handleFilterChange('project', e.target.value)}
+            value={project}
+            onChange={e => handleProjectChange(e.target.value)}
           />
 
           <label className="filter-label">From:</label>
-          <input
-            className="filter-input"
-            type="date"
-            value={filters.from}
-            onChange={e => handleFilterChange('from', e.target.value)}
-          />
+          <input className="filter-input" type="date" value={fromDate} onChange={e => handleFromChange(e.target.value)} />
 
           <label className="filter-label">To:</label>
-          <input
-            className="filter-input"
-            type="date"
-            value={filters.to}
-            onChange={e => handleFilterChange('to', e.target.value)}
-          />
+          <input className="filter-input" type="date" value={toDate} onChange={e => handleToChange(e.target.value)} />
         </div>
       </div>
 
       <div className="app-content">
-        {/* Search results mode */}
         {searchResults !== null && !selectedSession && (
-          <SearchResults
-            results={searchResults}
-            query={query}
-            onSelectSession={handleSelectSession}
-          />
+          <SearchResults results={searchResults} query={query} onSelectSession={handleSelectSession} />
         )}
 
-        {/* Session list mode */}
         {searchResults === null && !selectedSession && (
           <div className="session-list">
             {loading && sessions.length === 0 && <div className="loading">Loading sessions...</div>}
             {!loading && sessions.length === 0 && <div className="empty-state">No sessions found</div>}
             {sessions.map(s => (
-              <SessionCard
-                key={`${s.session_id}-${s.vm_id}`}
-                session={s}
-                active={false}
-                onClick={() => setSelectedSession(s)}
-              />
+              <SessionCard key={`${s.session_id}-${s.vm_id}`} session={s} active={false} onClick={() => setSelectedSession(s)} />
             ))}
             {hasMore && sessions.length > 0 && (
-              <button className="load-more" onClick={loadMore}>
-                Load more sessions
-              </button>
+              <button className="load-more" onClick={loadMore}>Load more sessions</button>
             )}
           </div>
         )}
 
-        {/* Session list + detail (desktop split) */}
         {selectedSession && (
           <>
             <div className="session-list with-detail">
-              {(searchResults || sessions).map(s => {
-                const id = s.session_id
-                return (
-                  <SessionCard
-                    key={`${id}-${s.vm_id || ''}`}
-                    session={s}
-                    active={id === selectedSession.session_id}
-                    onClick={() => handleSelectSession(id)}
-                  />
-                )
-              })}
+              {(searchResults || sessions).map(s => (
+                <SessionCard
+                  key={`${s.session_id}-${s.vm_id || ''}`}
+                  session={s}
+                  active={s.session_id === selectedSession.session_id}
+                  onClick={() => handleSelectSession(s.session_id)}
+                />
+              ))}
             </div>
-            <SessionDetail
-              session={selectedSession}
-              onBack={() => setSelectedSession(null)}
-            />
+            <SessionDetail session={selectedSession} onBack={() => setSelectedSession(null)} />
           </>
         )}
       </div>
