@@ -101,8 +101,8 @@ export async function upsertSyncState(records) {
 // Query helpers for the read API
 export async function searchMessages(q, { source, vm_id, from, to, limit = 50, offset = 0 } = {}) {
   const pool = getPool()
-  // Split query on special chars into words for MATCH_ALL (uses inverted index, fast)
-  const words = q.replace(/[._\-/\\]+/g, ' ').trim().replace(/'/g, "''")
+  // Split query on special chars into words, drop short tokens (tokenizer ignores them)
+  const words = q.replace(/[._\-/\\]+/g, ' ').trim().split(/\s+/).filter(w => w.length >= 3).join(' ').replace(/'/g, "''")
   let where = `m.content_text MATCH_ALL '${words}'`
   if (source) where += ` AND m.source = ${pool.escape(source)}`
   if (vm_id) where += ` AND m.vm_id = ${pool.escape(vm_id)}`
