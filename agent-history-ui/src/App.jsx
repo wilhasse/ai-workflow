@@ -28,14 +28,8 @@ export default function App() {
   const [hasMore, setHasMore] = useState(true)
   const [syncInfo, setSyncInfo] = useState(null)
   const [theme, setTheme] = useState(() => localStorage.getItem('ah-theme') || 'dark')
-  const [font, setFont] = useState(() => localStorage.getItem('ah-font') || 'Outfit')
+  const [font, setFont] = useState(() => localStorage.getItem('ah-font') || 'JetBrains Mono')
   const [fontSize, setFontSize] = useState(() => Number(localStorage.getItem('ah-fontsize')) || 14)
-
-  // Use ref to always have latest filters/query in doSearch
-  const filtersRef = useRef(filters)
-  const queryRef = useRef(query)
-  filtersRef.current = filters
-  queryRef.current = query
 
   // Apply theme + font
   useEffect(() => {
@@ -50,16 +44,14 @@ export default function App() {
     localStorage.setItem('ah-fontsize', String(fontSize))
   }, [font, fontSize])
 
-  const doSearch = useCallback(async (append = false, off = 0) => {
+  const doSearch = async (currentFilters, currentQuery, append = false, off = 0) => {
     setLoading(true)
     if (!append) {
       setOffset(0)
       setSelectedSession(null)
     }
-    const currentFilters = filtersRef.current
-    const currentQuery = queryRef.current
     try {
-      if (currentQuery.trim()) {
+      if (currentQuery && currentQuery.trim()) {
         const data = await searchMessages(currentQuery, { ...currentFilters, limit: LIMIT })
         setSearchResults(data)
         setSessions([])
@@ -79,11 +71,11 @@ export default function App() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }
 
   // Load on mount
   useEffect(() => {
-    doSearch()
+    doSearch(filters, query)
     getSyncStatus().then(setSyncInfo).catch(() => {})
   }, [])
 
@@ -94,7 +86,7 @@ export default function App() {
       isFirstRender.current = false
       return
     }
-    doSearch()
+    doSearch(filters, query)
   }, [filters.vm_id, filters.source, filters.project, filters.from, filters.to])
 
   const handleSelectSession = async (sessionId) => {
@@ -160,9 +152,9 @@ export default function App() {
             placeholder="Search conversations... (full-text)"
             value={query}
             onChange={e => setQuery(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && doSearch()}
+            onKeyDown={e => e.key === 'Enter' && doSearch(filters, query)}
           />
-          <button className="btn-buscar" onClick={() => doSearch()} disabled={loading}>
+          <button className="btn-buscar" onClick={() => doSearch(filters, query)} disabled={loading}>
             {loading ? 'Searching...' : 'Search'}
           </button>
         </div>
@@ -242,7 +234,7 @@ export default function App() {
               />
             ))}
             {hasMore && sessions.length > 0 && (
-              <button className="load-more" onClick={() => doSearch(true, offset)}>
+              <button className="load-more" onClick={() => doSearch(filters, query, true, offset)}>
                 Load more sessions
               </button>
             )}
