@@ -1,0 +1,18 @@
+[Unit]
+Description=Agent History Collector - syncs .claude/.codex to central API
+After=network.target
+
+[Service]
+Type=simple
+User=cslog
+Environment=VM_ID=dev-vm
+Environment=API_URL=http://10.1.0.7:5002
+Environment=CLAUDE_HOME=/home/cslog/.claude
+Environment=CODEX_HOME=/home/cslog/.codex
+Environment=SYNC_INTERVAL_MS=300000
+ExecStart=/usr/bin/node /home/cslog/ai-workflow/agent-history-collector/src/collector.js
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

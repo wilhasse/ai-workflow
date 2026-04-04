@@ -1,0 +1,29 @@
+version: '3.8'
+
+# Agent History collector — run on remote VMs that don't host the API
+# Points to the central API on 10.1.0.9:5002
+#
+# Usage (set VM_ID per host):
+#   VM_ID=godev4 docker-compose -f docker-compose-agent-history-collector.yml up -d
+
+services:
+  agent-history-collector:
+    build:
+      context: ./agent-history-collector
+      dockerfile: Dockerfile
+    container_name: agent-history-collector
+    environment:
+      - VM_ID=${VM_ID:-remote-vm}
+      - API_URL=http://10.1.0.7:5002
+      - CLAUDE_HOME=/data/.claude
+      - CODEX_HOME=/data/.codex
+      - SYNC_INTERVAL_MS=300000
+      - DATA_DIR=/data/.agent-history-collector
+    volumes:
+      - /home/cslog/.claude:/data/.claude:ro
+      - /home/cslog/.codex:/data/.codex:ro
+      - collector-data:/data/.agent-history-collector
+    restart: unless-stopped
+
+volumes:
+  collector-data:
