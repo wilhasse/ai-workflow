@@ -101,7 +101,12 @@ export async function upsertSyncState(records) {
 // Query helpers for the read API
 export async function searchMessages(q, { source, vm_id, limit = 50, offset = 0 } = {}) {
   const pool = getPool()
-  let where = `m.content_text MATCH_ALL '${q.replace(/'/g, "''")}'`
+  const escaped = q.replace(/'/g, "''")
+  // Use MATCH_PHRASE for exact phrase matching, MATCH_ALL for multi-word general search
+  const hasSpecialChars = /[._\-/\\]/.test(q)
+  let where = hasSpecialChars
+    ? `m.content_text LIKE ${pool.escape('%' + q + '%')}`
+    : `m.content_text MATCH_ALL '${escaped}'`
   if (source) where += ` AND m.source = ${pool.escape(source)}`
   if (vm_id) where += ` AND m.vm_id = ${pool.escape(vm_id)}`
   const sql = `

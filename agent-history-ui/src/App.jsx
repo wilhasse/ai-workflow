@@ -7,7 +7,11 @@ import SearchResults from './components/SearchResults.jsx'
 const LIMIT = 50
 
 function dateStr(d) {
-  return d.toISOString().slice(0, 10)
+  // Use local date (not UTC) to match user's timezone
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
 }
 
 const defaults = (() => {
@@ -71,12 +75,12 @@ export default function App() {
     try {
       if (opts.query && opts.query.trim()) {
         const data = await searchMessages(opts.query, { ...filters, limit: LIMIT })
-        if (fetchId !== myId) return // stale
+        if (fetchId !== myId) return
         setSearchResults(data)
         setSessions([])
       } else {
         const data = await listSessions({ ...filters, limit: LIMIT, offset: 0 })
-        if (fetchId !== myId) return // stale
+        if (fetchId !== myId) return
         setSearchResults(null)
         setSessions(data)
         setHasMore(data.length === LIMIT)
