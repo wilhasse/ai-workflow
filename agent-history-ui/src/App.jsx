@@ -30,7 +30,12 @@ export default function App() {
   const [theme, setTheme] = useState(() => localStorage.getItem('ah-theme') || 'dark')
   const [font, setFont] = useState(() => localStorage.getItem('ah-font') || 'Outfit')
   const [fontSize, setFontSize] = useState(() => Number(localStorage.getItem('ah-fontsize')) || 14)
-  const debounceRef = useRef(null)
+
+  // Use ref to always have latest filters/query in doSearch
+  const filtersRef = useRef(filters)
+  const queryRef = useRef(query)
+  filtersRef.current = filters
+  queryRef.current = query
 
   // Apply theme + font
   useEffect(() => {
@@ -45,68 +50,64 @@ export default function App() {
     localStorage.setItem('ah-fontsize', String(fontSize))
   }, [font, fontSize])
 
-  // Load sessions on mount and filter change
-  const loadSessions = useCallback(async (off = 0, append = false) => {
+  const doSearch = useCallback(async (append = false, off = 0) => {
     setLoading(true)
-    try {
-      const params = { ...filters, limit: LIMIT, offset: off }
-      const data = await listSessions(params)
-      if (append) {
-        setSessions(prev => [...prev, ...data])
-      } else {
-        setSessions(data)
-      }
-      setHasMore(data.length === LIMIT)
-      setOffset(off + data.length)
-    } catch (err) {
-      console.error('Failed to load sessions:', err)
-    } finally {
-      setLoading(false)
+    if (!append) {
+      setOffset(0)
+      setSelectedSession(null)
     }
-  }, [filters])
-
-  // Load on mount
-  useEffect(() => {
-    handleBuscar()
-    getSyncStatus().then(setSyncInfo).catch(() => {})
-  }, [])
-
-  const handleBuscar = async () => {
-    setLoading(true)
-    setOffset(0)
-    setSelectedSession(null)
+    const currentFilters = filtersRef.current
+    const currentQuery = queryRef.current
     try {
-      if (query.trim()) {
-        const data = await searchMessages(query, { ...filters, limit: LIMIT })
+      if (currentQuery.trim()) {
+        const data = await searchMessages(currentQuery, { ...currentFilters, limit: LIMIT })
         setSearchResults(data)
         setSessions([])
       } else {
         setSearchResults(null)
-        const data = await listSessions({ ...filters, limit: LIMIT, offset: 0 })
-        setSessions(data)
+        const data = await listSessions({ ...currentFilters, limit: LIMIT, offset: off })
+        if (append) {
+          setSessions(prev => [...prev, ...data])
+        } else {
+          setSessions(data)
+        }
         setHasMore(data.length === LIMIT)
-        setOffset(data.length)
+        setOffset(off + data.length)
       }
     } catch (err) {
-      console.error('Buscar failed:', err)
+      console.error('Search failed:', err)
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
+
+  // Load on mount
+  useEffect(() => {
+    doSearch()
+    getSyncStatus().then(setSyncInfo).catch(() => {})
+  }, [])
+
+  // Auto-refresh when any filter changes (VM, source, project, dates)
+  const isFirstRender = useRef(true)
+  useEffect(() => {
+    if (isFirstRender.current) {
+      isFirstRender.current = false
+      return
+    }
+    doSearch()
+  }, [filters.vm_id, filters.source, filters.project, filters.from, filters.to])
 
   const handleSelectSession = async (sessionId) => {
     try {
       const s = await getSession(sessionId)
       setSelectedSession(s)
     } catch {
-      // Session might not be in agent_sessions (e.g. search result only)
       setSelectedSession({ session_id: sessionId, source: '', vm_id: '', project: '', started_at: '' })
     }
   }
 
   const handleFilterChange = (key, value) => {
     setFilters(prev => ({ ...prev, [key]: value }))
-    setOffset(0)
   }
 
   const totalSessions = syncInfo?.reduce((sum, s) => sum + (s.file_count || 0), 0) || 0
@@ -159,10 +160,10 @@ export default function App() {
             placeholder="Search conversations... (full-text)"
             value={query}
             onChange={e => setQuery(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && handleBuscar()}
+            onKeyDown={e => e.key === 'Enter' && doSearch()}
           />
-          <button className="btn-buscar" onClick={handleBuscar} disabled={loading}>
-            {loading ? 'Buscando...' : 'Buscar'}
+          <button className="btn-buscar" onClick={() => doSearch()} disabled={loading}>
+            {loading ? 'Searching...' : 'Search'}
           </button>
         </div>
 
@@ -241,7 +242,7 @@ export default function App() {
               />
             ))}
             {hasMore && sessions.length > 0 && (
-              <button className="load-more" onClick={() => loadSessions(offset, true)}>
+              <button className="load-more" onClick={() => doSearch(true, offset)}>
                 Load more sessions
               </button>
             )}

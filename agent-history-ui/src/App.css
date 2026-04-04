@@ -32,25 +32,25 @@
 
 /* Light theme */
 :root.light {
-  --bg-deep: #f5f5f5;
+  --bg-deep: #f0f1f4;
   --bg-base: #ffffff;
-  --bg-surface: #f0f0f0;
-  --bg-elevated: #e8e8e8;
-  --bg-hover: #e0e0e0;
-  --border: #d0d0d0;
-  --border-light: #bbb;
-  --text-primary: #1a1a2e;
-  --text-secondary: #555;
-  --text-muted: #888;
-  --accent: #d97706;
-  --accent-dim: #b45309;
-  --accent-bg: rgba(217, 119, 6, 0.08);
-  --claude: #b45309;
-  --codex: #2563eb;
-  --user-bg: #e8f0fe;
-  --assistant-bg: #f8f8f8;
-  --code-bg: rgba(0,0,0,0.06);
-  --mark-bg: rgba(217, 119, 6, 0.2);
+  --bg-surface: #f5f5f7;
+  --bg-elevated: #eaeaed;
+  --bg-hover: #e2e2e6;
+  --border: #c8c8d0;
+  --border-light: #aaa;
+  --text-primary: #111118;
+  --text-secondary: #3a3a4a;
+  --text-muted: #6a6a7a;
+  --accent: #b45309;
+  --accent-dim: #92400e;
+  --accent-bg: rgba(180, 83, 9, 0.08);
+  --claude: #92400e;
+  --codex: #1d4ed8;
+  --user-bg: #dbeafe;
+  --assistant-bg: #f3f3f5;
+  --code-bg: rgba(0,0,0,0.07);
+  --mark-bg: rgba(180, 83, 9, 0.2);
 }
 
 html, body, #root {
