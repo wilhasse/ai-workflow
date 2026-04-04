@@ -118,12 +118,14 @@ export async function searchMessages(q, { source, vm_id, limit = 50, offset = 0 
   return rows
 }
 
-export async function listSessions({ source, vm_id, project, limit = 50, offset = 0 } = {}) {
+export async function listSessions({ source, vm_id, project, from, to, limit = 50, offset = 0 } = {}) {
   const pool = getPool()
   const conditions = []
   if (source) conditions.push(`source = ${pool.escape(source)}`)
   if (vm_id) conditions.push(`vm_id = ${pool.escape(vm_id)}`)
   if (project) conditions.push(`project LIKE ${pool.escape('%' + project + '%')}`)
+  if (from) conditions.push(`started_at >= ${pool.escape(from)}`)
+  if (to) conditions.push(`started_at <= ${pool.escape(to + ' 23:59:59')}`)
   const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : ''
   const sql = `SELECT * FROM agent_sessions ${where} ORDER BY started_at DESC LIMIT ${Number(limit)} OFFSET ${Number(offset)}`
   const [rows] = await pool.query(sql)
