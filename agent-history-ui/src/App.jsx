@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { listSessions, searchMessages, getSession, getSyncStatus } from './api.js'
 import SessionCard from './components/SessionCard.jsx'
 import SessionDetail from './components/SessionDetail.jsx'
@@ -21,7 +21,7 @@ export default function App() {
   const [sessions, setSessions] = useState([])
   const [searchResults, setSearchResults] = useState(null)
   const [selectedSession, setSelectedSession] = useState(null)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false)
   const [query, setQuery] = useState('')
   const [filters, setFilters] = useState({ vm_id: '', source: '', project: '', ...getDefaultDates() })
   const [offset, setOffset] = useState(0)
@@ -30,6 +30,8 @@ export default function App() {
   const [theme, setTheme] = useState(() => localStorage.getItem('ah-theme') || 'dark')
   const [font, setFont] = useState(() => localStorage.getItem('ah-font') || 'JetBrains Mono')
   const [fontSize, setFontSize] = useState(() => Number(localStorage.getItem('ah-fontsize')) || 14)
+  // Incremented to trigger a fresh search
+  const [searchTrigger, setSearchTrigger] = useState(0)
 
   // Apply theme + font
   useEffect(() => {
@@ -44,50 +46,69 @@ export default function App() {
     localStorage.setItem('ah-fontsize', String(fontSize))
   }, [font, fontSize])
 
-  const doSearch = async (currentFilters, currentQuery, append = false, off = 0) => {
-    setLoading(true)
-    if (!append) {
-      setOffset(0)
-      setSelectedSession(null)
-    }
-    try {
-      if (currentQuery && currentQuery.trim()) {
-        const data = await searchMessages(currentQuery, { ...currentFilters, limit: LIMIT })
-        setSearchResults(data)
-        setSessions([])
-      } else {
-        setSearchResults(null)
-        const data = await listSessions({ ...currentFilters, limit: LIMIT, offset: off })
-        if (append) {
-          setSessions(prev => [...prev, ...data])
-        } else {
-          setSessions(data)
-        }
-        setHasMore(data.length === LIMIT)
-        setOffset(off + data.length)
-      }
-    } catch (err) {
-      console.error('Search failed:', err)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  // Load on mount
+  // Single effect that runs the search whenever searchTrigger changes
   useEffect(() => {
-    doSearch(filters, query)
+    let cancelled = false
+    async function run() {
+      setLoading(true)
+      setSelectedSession(null)
+      setOffset(0)
+      try {
+        if (query.trim()) {
+          const data = await searchMessages(query, { ...filters, limit: LIMIT })
+          if (!cancelled) {
+            setSearchResults(data)
+            setSessions([])
+          }
+        } else {
+          const data = await listSessions({ ...filters, limit: LIMIT, offset: 0 })
+          if (!cancelled) {
+            setSearchResults(null)
+            setSessions(data)
+            setHasMore(data.length === LIMIT)
+            setOffset(data.length)
+          }
+        }
+      } catch (err) {
+        console.error('Search failed:', err)
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    run()
+    return () => { cancelled = true }
+  }, [searchTrigger])
+
+  // Trigger search on mount
+  useEffect(() => {
     getSyncStatus().then(setSyncInfo).catch(() => {})
   }, [])
 
-  // Auto-refresh when any filter changes (VM, source, project, dates)
+  // When any filter changes, auto-trigger search
   const isFirstRender = useRef(true)
   useEffect(() => {
     if (isFirstRender.current) {
       isFirstRender.current = false
       return
     }
-    doSearch(filters, query)
+    setSearchTrigger(n => n + 1)
   }, [filters.vm_id, filters.source, filters.project, filters.from, filters.to])
+
+  const handleSearch = () => setSearchTrigger(n => n + 1)
+
+  const loadMore = async () => {
+    setLoading(true)
+    try {
+      const data = await listSessions({ ...filters, limit: LIMIT, offset })
+      setSessions(prev => [...prev, ...data])
+      setHasMore(data.length === LIMIT)
+      setOffset(prev => prev + data.length)
+    } catch (err) {
+      console.error('Load more failed:', err)
+    } finally {
+      setLoading(false)
+    }
+  }
 
   const handleSelectSession = async (sessionId) => {
     try {
@@ -152,9 +173,9 @@ export default function App() {
             placeholder="Search conversations... (full-text)"
             value={query}
             onChange={e => setQuery(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && doSearch(filters, query)}
+            onKeyDown={e => e.key === 'Enter' && handleSearch()}
           />
-          <button className="btn-buscar" onClick={() => doSearch(filters, query)} disabled={loading}>
+          <button className="btn-buscar" onClick={handleSearch} disabled={loading}>
             {loading ? 'Searching...' : 'Search'}
           </button>
         </div>
@@ -234,7 +255,7 @@ export default function App() {
               />
             ))}
             {hasMore && sessions.length > 0 && (
-              <button className="load-more" onClick={() => doSearch(filters, query, true, offset)}>
+              <button className="load-more" onClick={loadMore}>
                 Load more sessions
               </button>
             )}
