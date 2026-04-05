@@ -61,6 +61,7 @@ coverage/
 .cache/
 *.cache
 .parcel-cache
+.playwright-mcp
 
 # Runtime data
 tmux-session-service/data/sessions.json
