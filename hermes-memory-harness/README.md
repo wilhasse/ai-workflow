@@ -170,6 +170,9 @@ A minimal container/service path is included:
 
 - `Dockerfile`
 - `docker-compose.example.yml`
+- `scripts/deploy-sync-container.sh`
+
+The deployment helper script is the recommended path on hosts where Docker Compose bridge-network creation is unreliable or exhausted. It uses `docker build` + `docker run --network host` and mounts the local Hermes home directly.
 
 Example:
 
@@ -188,3 +191,29 @@ This mounts `~/.hermes` into the container and writes directly to Hermes'
 - Imported sessions are namespaced as `doris:<source>:<session_id>` to avoid
   collisions with live Hermes sessions.
 - Imported session sources are stored as `history:<source>`.
+
+### Recommended deployment helper
+
+Build and run the sync container against the local Hermes home:
+
+```bash
+cd /home/cslog/ai-workflow/hermes-memory-harness
+./scripts/deploy-sync-container.sh deploy
+```
+
+Common operations:
+
+```bash
+./scripts/deploy-sync-container.sh status
+./scripts/deploy-sync-container.sh logs
+./scripts/deploy-sync-container.sh restart
+./scripts/deploy-sync-container.sh stop
+```
+
+Override defaults with environment variables when deploying on another machine:
+
+```bash
+HMH_HERMES_HOME_HOST=$HOME/.hermes HMH_DORIS_HOST=10.1.0.7 HMH_DORIS_PORT=9030 HMH_DORIS_USER=root HMH_DORIS_PASSWORD= HMH_DEFAULT_SOURCES=codex,claude HMH_POLL_INTERVAL_SECONDS=60 ./scripts/deploy-sync-container.sh deploy
+```
+
+This script is intended for the machine that owns the active Hermes home. If run on a different machine, it will feed that machine's mounted Hermes home, not some other remote instance.
