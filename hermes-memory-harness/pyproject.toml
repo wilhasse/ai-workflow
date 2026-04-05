@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hermes-memory-harness"
+version = "0.1.0"
+description = "Import Doris agent history into Hermes session recall and generate durable memory drafts"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "PyMySQL>=1.1.1,<2",
+]
+
+[project.scripts]
+hmh = "hermes_memory_harness.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
