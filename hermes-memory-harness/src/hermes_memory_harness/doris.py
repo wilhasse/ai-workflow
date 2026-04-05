@@ -116,6 +116,33 @@ class DorisClient:
                     message_count=int(row["session_row_count"] or 0),
                 )
 
+    def fetch_session_metadata(self, source: str, session_id: str) -> DorisSession | None:
+        sql = """
+            select
+                session_id,
+                source,
+                min(started_at) as started_at,
+                max(project) as project,
+                max(display_text) as display_text,
+                count(*) as session_row_count
+            from agent_sessions
+            where source = %s and session_id = %s
+            group by session_id, source
+        """
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(sql, (source, session_id))
+            row = cur.fetchone()
+        if not row:
+            return None
+        return DorisSession(
+            session_id=row["session_id"],
+            source=row["source"],
+            started_at=row["started_at"],
+            project=row["project"],
+            display_text=row["display_text"],
+            message_count=int(row["session_row_count"] or 0),
+        )
+
     def fetch_messages(self, source: str, session_id: str) -> list[DorisMessage]:
         sql = """
             select
@@ -150,6 +177,46 @@ class DorisClient:
             )
             for row in rows
         ]
+
+    def fetch_messages_since(self, source: str, since_ts: datetime) -> list[DorisMessage]:
+        sql = """
+            select
+                session_id,
+                source,
+                msg_role,
+                msg_type,
+                seq_num,
+                min(ts) as ts,
+                content_text,
+                max(content_json) as content_json
+            from agent_messages
+            where source = %s and ts >= %s
+            group by session_id, source, msg_role, msg_type, seq_num, content_text
+            order by min(ts) asc, session_id asc
+        """
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(sql, (source, since_ts))
+            rows = cur.fetchall()
+        return [
+            DorisMessage(
+                session_id=row["session_id"],
+                source=row["source"],
+                role=row["msg_role"],
+                msg_type=row["msg_type"],
+                seq_num=row["seq_num"],
+                ts=row["ts"],
+                content_text=row["content_text"] or "",
+                content_json=row["content_json"],
+            )
+            for row in rows
+        ]
+
+    def fetch_source_max_ts(self, source: str) -> datetime | None:
+        sql = "select max(ts) as max_ts from agent_messages where source = %s"
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(sql, (source,))
+            row = cur.fetchone()
+        return row["max_ts"] if row else None
 
     def fetch_message_volume(self, source: str) -> dict[str, Any]:
         sql = """

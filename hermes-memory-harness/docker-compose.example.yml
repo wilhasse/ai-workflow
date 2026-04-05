@@ -1,0 +1,15 @@
+services:
+  hermes-memory-harness:
+    build: .
+    restart: unless-stopped
+    environment:
+      HMH_DORIS_HOST: 10.1.0.7
+      HMH_DORIS_PORT: 9030
+      HMH_DORIS_USER: root
+      HMH_DORIS_PASSWORD: ""
+      HMH_DORIS_DATABASE: agent_history
+      HMH_HERMES_HOME: /hermes-home
+      HMH_DEFAULT_SOURCES: codex,claude
+      HMH_POLL_INTERVAL_SECONDS: 60
+    volumes:
+      - ${HOME}/.hermes:/hermes-home

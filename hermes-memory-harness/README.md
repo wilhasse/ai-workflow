@@ -3,13 +3,15 @@
 Small harness project for turning historical agent transcripts stored in Doris
 into inputs Hermes can use effectively.
 
-The current strategy is intentionally staged:
+The strategy is staged:
 
 1. Import historical transcripts into Hermes `state.db` so `session_search`
    can recall prior work.
 2. Generate compact review-first drafts for `MEMORY.md` and `USER.md`.
-3. Add a custom Hermes memory provider later only if automatic prefetch is
-   still needed.
+3. Run an incremental sync service so new Codex/Claude conversations continue
+   flowing into Hermes automatically.
+4. Add a custom Hermes memory provider later only if automatic prefetch beyond
+   session recall is still needed.
 
 This project is intentionally separate from `oh-my-codex`. It targets Hermes'
 own persistence and recall model.
@@ -21,6 +23,8 @@ Current MVP supports:
 - inspecting the Doris `agent_history` dataset
 - importing deduped historical sessions/messages into Hermes `state.db`
 - generating draft memory markdown from historical activity
+- incrementally syncing new Doris messages into Hermes via watermarks
+- running as a long-lived polling service
 
 Current non-goals:
 
@@ -56,6 +60,8 @@ Defaults are chosen for the current environment:
 - Doris database: `agent_history`
 - Doris user: `root`
 - Hermes home: `$HERMES_HOME` or `~/.hermes`
+- Default incremental sources: `codex,claude`
+- Default poll interval: `60s`
 
 You can override with env vars:
 
@@ -66,6 +72,8 @@ export HMH_DORIS_USER=root
 export HMH_DORIS_PASSWORD=
 export HMH_DORIS_DATABASE=agent_history
 export HMH_HERMES_HOME=~/.hermes
+export HMH_DEFAULT_SOURCES=codex,claude
+export HMH_POLL_INTERVAL_SECONDS=60
 ```
 
 ## Commands
@@ -76,39 +84,102 @@ Inspect available history:
 hmh inspect --source codex
 ```
 
-Import a small batch first:
+List top projects:
 
 ```bash
-hmh import-history --source codex --limit-sessions 25 --replace
+hmh list-projects --source codex --limit 25
 ```
 
-Restrict import to one project:
+Backfill one project first:
 
 ```bash
 hmh import-history --source codex --project /home/cslog/smart-sql --replace
 ```
 
-Generate draft memory files:
+Backfill a whole source:
+
+```bash
+hmh import-history --source codex --replace
+hmh import-history --source claude --replace
+```
+
+Generate memory drafts:
 
 ```bash
 hmh draft-memory --source codex
 ```
 
-Output draft files are written under:
+Show incremental watermarks:
 
-```text
-.generated/MEMORY.draft.md
-.generated/USER.draft.md
+```bash
+hmh watermarks
 ```
+
+Run one incremental sync pass:
+
+```bash
+hmh sync-once --source codex --source claude
+```
+
+Run the incremental service in the foreground:
+
+```bash
+hmh run-service --source codex --source claude --poll-interval 60
+```
+
+## Incremental Sync Semantics
+
+The incremental service uses Hermes-side watermark and fingerprint tables stored
+inside `state.db`:
+
+- `import_watermarks`
+- `imported_message_fingerprints`
+
+This means:
+
+- the service can restart without losing progress
+- duplicate rows from Doris do not create duplicate Hermes messages
+- a small overlap window is used when polling to avoid missing same-timestamp
+  messages while still remaining idempotent
+
+### First-time use after a full backfill
+
+If no watermark exists for a source, `sync-once` initializes the watermark to the
+current maximum Doris timestamp and imports nothing. This is intentional and is
+meant for the common case where historical data has already been backfilled.
+
+Typical flow:
+
+1. Do a full backfill with `import-history`
+2. Start the ongoing service with `run-service`
 
 ## Suggested Workflow
 
 1. Run `hmh inspect --source codex`
-2. Import a small subset with `hmh import-history --limit-sessions 25`
+2. Backfill one small project slice first
 3. Open Hermes and test `session_search`
-4. Generate memory drafts with `hmh draft-memory`
-5. Curate the drafts manually into Hermes `memories/`
-6. Only then consider a custom Hermes memory provider plugin
+4. Backfill larger sources (`codex`, `claude`)
+5. Generate memory drafts with `hmh draft-memory`
+6. Curate the drafts manually into Hermes `memories/`
+7. Start the incremental service to keep Hermes current
+8. Only then consider a custom Hermes memory provider plugin
+
+## Docker Service
+
+A minimal container/service path is included:
+
+- `Dockerfile`
+- `docker-compose.example.yml`
+
+Example:
+
+```bash
+cd /home/cslog/ai-workflow/hermes-memory-harness
+docker compose -f docker-compose.example.yml up -d
+```
+
+This mounts `~/.hermes` into the container and writes directly to Hermes'
+`state.db`, so the CLI and the sync service share the same recall store.
 
 ## Notes
 

@@ -5,6 +5,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 
 SCHEMA_VERSION = 6
@@ -61,7 +62,24 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source);
 CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_title_unique ON sessions(title) WHERE title IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, timestamp);
+
+CREATE TABLE IF NOT EXISTS imported_message_fingerprints (
+    source TEXT NOT NULL,
+    original_session_id TEXT NOT NULL,
+    imported_session_id TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    imported_at REAL NOT NULL,
+    PRIMARY KEY (source, original_session_id, fingerprint)
+);
+
+CREATE TABLE IF NOT EXISTS import_watermarks (
+    source TEXT PRIMARY KEY,
+    last_ts TEXT NOT NULL,
+    updated_at REAL NOT NULL
+);
 """
 
 FTS_SQL = """
@@ -112,9 +130,8 @@ class HermesStateStore:
     def _initialize_schema(self) -> None:
         self._conn.executescript(SCHEMA_SQL)
         self._conn.executescript(FTS_SQL)
-        self._conn.execute("DELETE FROM schema_version")
         self._conn.execute(
-            "INSERT INTO schema_version(version) VALUES (?)",
+            "INSERT OR REPLACE INTO schema_version(rowid, version) VALUES (1, ?)",
             (SCHEMA_VERSION,),
         )
         self._conn.commit()
@@ -127,8 +144,27 @@ class HermesStateStore:
             value = value.replace(tzinfo=timezone.utc)
         return value.timestamp()
 
+    @staticmethod
+    def _to_iso(value: datetime) -> str:
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.isoformat()
+
+    @staticmethod
+    def _from_iso(value: str | None) -> datetime | None:
+        if not value:
+            return None
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+
     def delete_session(self, session_id: str) -> None:
         self._conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+        self._conn.execute(
+            "DELETE FROM imported_message_fingerprints WHERE imported_session_id = ?",
+            (session_id,),
+        )
         self._conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
         self._conn.commit()
 
@@ -188,6 +224,82 @@ class HermesStateStore:
             "UPDATE sessions SET message_count = COALESCE(message_count, 0) + 1 WHERE id = ?",
             (session_id,),
         )
+
+    def append_imported_message_if_new(
+        self,
+        *,
+        source: str,
+        original_session_id: str,
+        imported_session_id: str,
+        fingerprint: str,
+        role: str,
+        content: str,
+        timestamp: datetime | None,
+    ) -> bool:
+        inserted = False
+        cursor = self._conn.execute(
+            """
+            INSERT OR IGNORE INTO imported_message_fingerprints (
+                source, original_session_id, imported_session_id, fingerprint, imported_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                source,
+                original_session_id,
+                imported_session_id,
+                fingerprint,
+                datetime.now(tz=timezone.utc).timestamp(),
+            ),
+        )
+        if cursor.rowcount:
+            self.append_message(
+                session_id=imported_session_id,
+                role=role,
+                content=content,
+                timestamp=timestamp,
+            )
+            self._conn.commit()
+            inserted = True
+        return inserted
+
+    def get_watermark(self, source: str) -> datetime | None:
+        row = self._conn.execute(
+            "SELECT last_ts FROM import_watermarks WHERE source = ?",
+            (source,),
+        ).fetchone()
+        return self._from_iso(row[0] if row else None)
+
+    def set_watermark(self, source: str, value: datetime) -> None:
+        self._conn.execute(
+            """
+            INSERT INTO import_watermarks (source, last_ts, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(source) DO UPDATE SET
+                last_ts=excluded.last_ts,
+                updated_at=excluded.updated_at
+            """,
+            (source, self._to_iso(value), datetime.now(tz=timezone.utc).timestamp()),
+        )
+        self._conn.commit()
+
+    def all_watermarks(self) -> dict[str, datetime | None]:
+        rows = self._conn.execute(
+            "SELECT source, last_ts FROM import_watermarks ORDER BY source"
+        ).fetchall()
+        return {row[0]: self._from_iso(row[1]) for row in rows}
+
+    def count_sessions_by_source(self) -> list[tuple[str, int]]:
+        rows = self._conn.execute(
+            "SELECT source, count(*) FROM sessions GROUP BY source ORDER BY count(*) DESC"
+        ).fetchall()
+        return [(row[0], row[1]) for row in rows]
+
+    def count_messages_for_source(self, source: str) -> int:
+        row = self._conn.execute(
+            "SELECT count(*) FROM messages m JOIN sessions s ON s.id = m.session_id WHERE s.source = ?",
+            (source,),
+        ).fetchone()
+        return int(row[0] if row else 0)
 
     def commit(self) -> None:
         self._conn.commit()

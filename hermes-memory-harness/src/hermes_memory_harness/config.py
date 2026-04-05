@@ -23,9 +23,21 @@ class HermesConfig:
 
 
 @dataclass(frozen=True)
+class ServiceConfig:
+    sources: tuple[str, ...]
+    poll_interval_seconds: int
+
+
+@dataclass(frozen=True)
 class AppConfig:
+    project_root: Path
     doris: DorisConfig
     hermes: HermesConfig
+    service: ServiceConfig
+
+
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[2]
 
 
 def _resolve_hermes_home() -> Path:
@@ -35,10 +47,18 @@ def _resolve_hermes_home() -> Path:
     return (Path.home() / ".hermes").resolve()
 
 
+def _default_sources() -> tuple[str, ...]:
+    raw = os.getenv("HMH_DEFAULT_SOURCES", "codex,claude")
+    values = tuple(v.strip() for v in raw.split(",") if v.strip())
+    return values or ("codex", "claude")
+
+
 def load_config() -> AppConfig:
+    project_root = _project_root()
     hermes_home = _resolve_hermes_home()
-    generated_dir = Path.cwd() / ".generated"
+    generated_dir = project_root / ".generated"
     return AppConfig(
+        project_root=project_root,
         doris=DorisConfig(
             host=os.getenv("HMH_DORIS_HOST", "10.1.0.7"),
             port=int(os.getenv("HMH_DORIS_PORT", "9030")),
@@ -55,5 +75,9 @@ def load_config() -> AppConfig:
                 os.getenv("HMH_HERMES_MEMORY_DIR", str(hermes_home / "memories"))
             ).expanduser().resolve(),
             generated_dir=generated_dir.resolve(),
+        ),
+        service=ServiceConfig(
+            sources=_default_sources(),
+            poll_interval_seconds=int(os.getenv("HMH_POLL_INTERVAL_SECONDS", "60")),
         ),
     )

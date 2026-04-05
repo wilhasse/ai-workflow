@@ -8,6 +8,7 @@ from .doris import DorisClient
 from .hermes_sqlite import HermesStateStore
 from .importer import import_history
 from .memory_draft import generate_memory_drafts
+from .sync_service import run_service, sync_source_once
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -20,6 +21,10 @@ def _build_parser() -> argparse.ArgumentParser:
     inspect_parser = sub.add_parser("inspect", help="Inspect Doris history")
     inspect_parser.add_argument("--source", default="codex")
     inspect_parser.add_argument("--top-projects", type=int, default=12)
+
+    projects_parser = sub.add_parser("list-projects", help="List top projects for a source")
+    projects_parser.add_argument("--source", default="codex")
+    projects_parser.add_argument("--limit", type=int, default=25)
 
     import_parser = sub.add_parser(
         "import-history",
@@ -37,7 +42,33 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     draft_parser.add_argument("--source", default="codex")
 
+    sync_parser = sub.add_parser(
+        "sync-once",
+        help="Incrementally sync new Doris messages into Hermes history using watermarks",
+    )
+    sync_parser.add_argument("--source", action="append", dest="sources")
+    sync_parser.add_argument("--dry-run", action="store_true")
+
+    service_parser = sub.add_parser(
+        "run-service",
+        help="Run a polling service that keeps Hermes history incrementally synced",
+    )
+    service_parser.add_argument("--source", action="append", dest="sources")
+    service_parser.add_argument("--poll-interval", type=int)
+
+    watermarks_parser = sub.add_parser(
+        "watermarks",
+        help="Show stored incremental sync watermarks",
+    )
+
     return parser
+
+
+def _resolve_sources(raw_sources: list[str] | None) -> list[str]:
+    config = load_config()
+    if raw_sources:
+        return raw_sources
+    return list(config.service.sources)
 
 
 def _cmd_inspect(source: str, top_projects: int) -> int:
@@ -56,6 +87,14 @@ def _cmd_inspect(source: str, top_projects: int) -> int:
     print()
     print("Message volume:")
     pprint(doris.fetch_message_volume(source))
+    return 0
+
+
+def _cmd_list_projects(source: str, limit: int) -> int:
+    config = load_config()
+    doris = DorisClient(config.doris)
+    for row in doris.fetch_top_projects(source, limit=limit):
+        print(f"{row['project']}\t{row['session_count']}")
     return 0
 
 
@@ -103,12 +142,63 @@ def _cmd_draft_memory(source: str) -> int:
     return 0
 
 
+def _cmd_sync_once(sources: list[str], dry_run: bool) -> int:
+    config = load_config()
+    doris = DorisClient(config.doris)
+    hermes = HermesStateStore(config.hermes.state_db_path)
+    try:
+        for source in sources:
+            stats = sync_source_once(doris, hermes, source=source, dry_run=dry_run)
+            print(
+                f"source={stats.source} initialized={stats.watermark_initialized} "
+                f"seen={stats.messages_seen} imported={stats.messages_imported} "
+                f"skipped={stats.messages_skipped} sessions_upserted={stats.sessions_upserted} "
+                f"watermark={stats.watermark}"
+            )
+    finally:
+        hermes.close()
+    return 0
+
+
+def _cmd_run_service(sources: list[str], poll_interval: int | None) -> int:
+    config = load_config()
+    doris = DorisClient(config.doris)
+    hermes = HermesStateStore(config.hermes.state_db_path)
+    try:
+        run_service(
+            doris,
+            hermes,
+            sources=sources,
+            poll_interval_seconds=poll_interval or config.service.poll_interval_seconds,
+        )
+    finally:
+        hermes.close()
+    return 0
+
+
+def _cmd_watermarks() -> int:
+    config = load_config()
+    hermes = HermesStateStore(config.hermes.state_db_path)
+    try:
+        watermarks = hermes.all_watermarks()
+        if not watermarks:
+            print("No watermarks stored.")
+            return 0
+        for source, value in watermarks.items():
+            print(f"{source}\t{value}")
+    finally:
+        hermes.close()
+    return 0
+
+
 def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
 
     if args.command == "inspect":
         return _cmd_inspect(args.source, args.top_projects)
+    if args.command == "list-projects":
+        return _cmd_list_projects(args.source, args.limit)
     if args.command == "import-history":
         return _cmd_import_history(
             source=args.source,
@@ -119,6 +209,12 @@ def main() -> int:
         )
     if args.command == "draft-memory":
         return _cmd_draft_memory(args.source)
+    if args.command == "sync-once":
+        return _cmd_sync_once(_resolve_sources(args.sources), args.dry_run)
+    if args.command == "run-service":
+        return _cmd_run_service(_resolve_sources(args.sources), args.poll_interval)
+    if args.command == "watermarks":
+        return _cmd_watermarks()
 
     parser.error(f"unknown command: {args.command}")
     return 2

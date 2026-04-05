@@ -4,4 +4,5 @@ __all__ = [
     "hermes_sqlite",
     "importer",
     "memory_draft",
+    "sync_service",
 ]

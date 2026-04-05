@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 
 from .doris import DorisClient, DorisMessage
@@ -41,6 +42,19 @@ def _message_content(message: DorisMessage) -> str:
     if message.content_json and message.content_json.strip():
         return message.content_json
     return ""
+
+
+def _message_fingerprint(message: DorisMessage) -> str:
+    payload = "|".join(
+        [
+            message.role or "",
+            message.msg_type or "",
+            str(message.seq_num) if message.seq_num is not None else "",
+            message.content_text or "",
+            message.content_json or "",
+        ]
+    )
+    return hashlib.sha256(payload.encode("utf-8", errors="ignore")).hexdigest()
 
 
 def import_history(
@@ -103,20 +117,28 @@ def import_history(
             content = _message_content(message)
             if not content.strip():
                 continue
-            hermes.append_message(
-                session_id=imported_id,
+            inserted = hermes.append_imported_message_if_new(
+                source=source,
+                original_session_id=message.session_id,
+                imported_session_id=imported_id,
+                fingerprint=_message_fingerprint(message),
                 role=_map_role(message.role),
                 content=content,
                 timestamp=message.ts,
             )
-            imported_messages += 1
+            if inserted:
+                imported_messages += 1
 
-        hermes.commit()
         stats = ImportStats(
             sessions_seen=stats.sessions_seen,
             sessions_imported=stats.sessions_imported + 1,
             sessions_replaced=stats.sessions_replaced,
             messages_imported=stats.messages_imported + imported_messages,
         )
+
+    if not dry_run:
+        latest = doris.fetch_source_max_ts(source)
+        if latest is not None:
+            hermes.set_watermark(source, latest)
 
     return stats
