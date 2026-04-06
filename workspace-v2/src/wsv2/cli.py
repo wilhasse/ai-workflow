@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 
 from .actions import WorkspaceActions, build_workspace_command
@@ -36,6 +37,30 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_popup_unavailable_message(details: str | None = None) -> str:
+    lines = [
+        "workspace-v2 popup needs a GUI session, but this shell has no active display.",
+        "",
+        f"DISPLAY={os.environ.get('DISPLAY', '')}",
+        f"WAYLAND_DISPLAY={os.environ.get('WAYLAND_DISPLAY', '')}",
+        f"TMUX={'set' if os.environ.get('TMUX') else ''}",
+        "",
+        "This usually means you are inside an SSH/tmux shell on a remote VM.",
+        "Run the popup from a KDE/XFCE terminal on the desktop host, or use:",
+        "  workspace-v2/scripts/wsv2 list",
+        "  workspace-v2/scripts/wsv2 open <target>",
+        "",
+        "If this tmux session should have GUI access, open a GUI terminal attached to the same tmux server and refresh tmux's GUI environment there before retrying.",
+    ]
+    if details:
+        lines.extend(["", f"GTK detail: {details}"])
+    return "\n".join(lines)
+
+
+def can_launch_gui_popup() -> bool:
+    return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -44,10 +69,17 @@ def main(argv: list[str] | None = None) -> int:
     actions = WorkspaceActions(config_path=args.config, state_path=args.state)
 
     if command == "popup":
-        from .popup import launch_popup
+        if not can_launch_gui_popup():
+            print(build_popup_unavailable_message(), file=sys.stderr)
+            return 2
+        try:
+            from .popup import launch_popup
 
-        launch_popup(actions)
-        return 0
+            launch_popup(actions)
+            return 0
+        except RuntimeError as error:
+            print(build_popup_unavailable_message(str(error)), file=sys.stderr)
+            return 2
 
     if command == "list":
         statuses = actions.list_workspace_statuses()

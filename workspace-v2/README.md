@@ -72,6 +72,22 @@ Suggested flow:
 
 That makes the launcher temporary instead of always occupying screen space.
 
+## Troubleshooting
+
+If `popup` says there is no active display, that shell is not attached to a GUI session. This is common inside SSH/tmux shells on remote VMs.
+
+In that case:
+
+- run `popup` from a terminal that belongs to your KDE/XFCE desktop session
+- or keep using the non-GUI commands:
+
+```bash
+./workspace-v2/scripts/wsv2 list
+./workspace-v2/scripts/wsv2 open <target>
+```
+
+If the shell should have GUI access but tmux dropped the display variables, refresh tmux's GUI environment from a GUI terminal attached to the same tmux server, then retry.
+
 ## Notes
 
 - The popup launcher solves the daily UI annoyance problem first.

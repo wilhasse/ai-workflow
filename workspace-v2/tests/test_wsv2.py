@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from wsv2.actions import build_terminal_command, build_workspace_command
 from wsv2.catalog import WorkspaceConfigError, load_config
+from wsv2.cli import build_popup_unavailable_message, can_launch_gui_popup
 from wsv2.state import LauncherState
 
 
@@ -92,6 +95,21 @@ class LauncherStateTests(unittest.TestCase):
 
         self.assertIn("vm9:dbtools", scores)
         self.assertGreater(scores["vm9:dbtools"], 0)
+
+
+class PopupEnvironmentTests(unittest.TestCase):
+    def test_can_launch_gui_popup_requires_display(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertFalse(can_launch_gui_popup())
+        with mock.patch.dict(os.environ, {"DISPLAY": ":0"}, clear=True):
+            self.assertTrue(can_launch_gui_popup())
+
+    def test_popup_unavailable_message_includes_guidance(self) -> None:
+        with mock.patch.dict(os.environ, {"TMUX": "1"}, clear=True):
+            message = build_popup_unavailable_message()
+        self.assertIn("needs a GUI session", message)
+        self.assertIn("workspace-v2/scripts/wsv2 open <target>", message)
+        self.assertIn("TMUX=set", message)
 
 
 if __name__ == "__main__":
