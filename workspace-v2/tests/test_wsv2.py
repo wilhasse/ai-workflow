@@ -12,6 +12,7 @@ from wsv2.catalog import WorkspaceConfigError, load_config
 from wsv2.cli import build_popup_unavailable_message, can_launch_gui_popup, detect_popup_surface
 from wsv2.state import LauncherState
 from wsv2.tui import build_tui_items, filter_tui_items
+from wsv2.drill import build_simulated_outage_payload, select_probe_targets
 
 
 def write_legacy_config(tmpdir: Path) -> Path:
@@ -222,6 +223,23 @@ class TuiFilterTests(unittest.TestCase):
         filtered = filter_tui_items(items, 'db')
         self.assertEqual(len(filtered), 1)
         self.assertEqual(filtered[0].status.workspace.id, 'dbtools')
+
+
+class OutageDrillTests(unittest.TestCase):
+    def test_build_simulated_outage_payload_rewrites_down_host_ssh(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_v2_config(Path(tmp))
+            payload = build_simulated_outage_payload(path, ['vm10'])
+        hosts = {host['id']: host for host in payload['hosts']}
+        self.assertEqual(hosts['vm10']['ssh'], 'cslog@127.0.0.254')
+        self.assertEqual(hosts['vm9']['ssh'], 'cslog@10.1.0.9')
+
+    def test_select_probe_targets_skips_down_hosts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, \
+            mock.patch('wsv2.catalog._runtime_identity_tokens', return_value={'godev4'}):
+            config = load_config(write_v2_config(Path(tmp)))
+        targets = select_probe_targets(config, ['vm10'])
+        self.assertEqual([workspace.host_id for workspace in targets], ['vm9'])
 
 
 if __name__ == '__main__':

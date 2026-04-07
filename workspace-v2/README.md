@@ -196,6 +196,35 @@ Minimal assumptions on a control host:
 - correct `WSV2_SELF_HOST` for that machine
 - access to `workspace-v2/catalog/workspaces.v2.json`
 
+## Phase 16.4 Outage Drill
+
+Phase `16.4` adds an explicit outage-validation helper instead of relying on manual interpretation of `list` output.
+
+Run the drill from the fallback control host, for example on `vm9` while simulating `vm10` down:
+
+```bash
+/home/cslog/ai-workflow/workspace-v2/scripts/run-outage-drill.sh --control-host vm9 --down-host vm10
+```
+
+What it does:
+
+- writes a temporary simulated config where the down host becomes unreachable
+- loads the catalog as the chosen control host
+- selects one healthy workspace per surviving host by default
+- creates and removes short-lived probe tmux sessions to verify control actually works
+
+Typical expected outcome for the current setup:
+
+- `vm10`-hosted workspaces show as down in the snapshot
+- `vm9` and `vm12` probe targets pass
+- workspaces whose files truly live on `vm10` remain unavailable by design
+
+You can also specify explicit targets:
+
+```bash
+/home/cslog/ai-workflow/workspace-v2/scripts/run-outage-drill.sh --control-host vm9 --down-host vm10 --target vm9:dbtools --target vm12:fusion
+```
+
 ## Verification
 
 Run the lightweight tests with:
