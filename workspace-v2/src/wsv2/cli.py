@@ -129,7 +129,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if command == "command":
         workspace = actions.resolve_workspace(args.target)
-        print(build_workspace_command(workspace))
+        print(
+            build_workspace_command(
+                workspace,
+                run_local=actions.config.host_runs_local(workspace.host_id),
+            )
+        )
         return 0
 
     parser.print_help()

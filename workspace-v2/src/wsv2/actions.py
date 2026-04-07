@@ -23,14 +23,14 @@ class WorkspaceStatus:
         return self.workspace.target
 
 
-def build_workspace_command(workspace: WorkspaceRecord) -> str:
+def build_workspace_command(workspace: WorkspaceRecord, *, run_local: bool) -> str:
     session_name = shlex.quote(workspace.id)
     work_dir = shlex.quote(workspace.path)
     tmux_cmd = (
         f"tmux attach-session -t {session_name} || "
         f"tmux new-session -s {session_name} -c {work_dir}"
     )
-    if workspace.host.is_local:
+    if run_local:
         return tmux_cmd
 
     ssh_target = shlex.quote(workspace.host.ssh or "")
@@ -89,7 +89,7 @@ class WorkspaceActions:
         host_reachability: dict[str, bool | None] = {}
 
         for host in self.config.hosts:
-            if host.is_local:
+            if self.config.host_runs_local(host):
                 host_sessions[host.id] = self._list_local_sessions()
                 host_reachability[host.id] = True
                 continue
@@ -114,7 +114,10 @@ class WorkspaceActions:
             return "focused"
 
         terminal = self._resolve_terminal()
-        command = build_workspace_command(workspace)
+        command = build_workspace_command(
+            workspace,
+            run_local=self.config.host_runs_local(workspace.host_id),
+        )
         subprocess.Popen(build_terminal_command(terminal, command, workspace.id))
         self.state.mark_recent(workspace.target)
         return "launched"
@@ -122,7 +125,7 @@ class WorkspaceActions:
     def kill_workspace(self, target: str) -> bool:
         workspace = self.resolve_workspace(target)
         session_name = workspace.id
-        if workspace.host.is_local:
+        if self.config.host_runs_local(workspace.host_id):
             result = subprocess.run(
                 ["tmux", "kill-session", "-t", session_name],
                 capture_output=True,

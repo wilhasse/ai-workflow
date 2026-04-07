@@ -13,7 +13,7 @@ from wsv2.cli import build_popup_unavailable_message, can_launch_gui_popup
 from wsv2.state import LauncherState
 
 
-def write_config(tmpdir: Path) -> Path:
+def write_legacy_config(tmpdir: Path) -> Path:
     config = {
         "hosts": [
             {"id": "vm9", "name": "Supersaber", "ssh": "cslog@10.1.0.9"},
@@ -43,34 +43,110 @@ def write_config(tmpdir: Path) -> Path:
     return path
 
 
+def write_v2_config(tmpdir: Path) -> Path:
+    config = {
+        "version": 2,
+        "self_host_env": "WSV2_SELF_HOST",
+        "hosts": [
+            {
+                "id": "vm10",
+                "name": "Main Desktop",
+                "ssh": "cslog@10.1.0.10",
+                "hostnames": ["godev4"],
+                "legacy_ids": ["local"],
+            },
+            {
+                "id": "vm9",
+                "name": "Supersaber",
+                "ssh": "cslog@10.1.0.9",
+                "hostnames": ["godev3"],
+            },
+        ],
+        "workspaces": [
+            {
+                "id": "mysql",
+                "name": "MySQL Tests",
+                "path": "~/mysql",
+                "host": "vm10",
+            },
+            {
+                "id": "dbtools",
+                "name": "smart-sql",
+                "path": "/srv/smart-sql",
+                "host": "vm9",
+            },
+        ],
+        "settings": {
+            "terminal": "xfce4-terminal",
+            "terminals": ["xfce4-terminal", "konsole"],
+            "shell": "/bin/bash",
+        },
+    }
+    path = tmpdir / "workspaces.v2.json"
+    path.write_text(json.dumps(config), encoding="utf-8")
+    return path
+
+
 class WorkspaceConfigTests(unittest.TestCase):
-    def test_load_config_inserts_local_host_and_expands_paths(self) -> None:
+    def test_load_legacy_config_keeps_local_host_behavior(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            config = load_config(write_config(Path(tmp)))
+            config = load_config(write_legacy_config(Path(tmp)))
 
         self.assertEqual(config.hosts[0].id, "local")
+        self.assertEqual(config.self_host_id, "local")
         mysql = config.resolve_workspace("mysql")
         self.assertTrue(mysql.path.endswith("/mysql"))
         self.assertEqual(mysql.target, "mysql")
+        self.assertTrue(config.host_runs_local(mysql.host_id))
 
         remote = config.resolve_workspace("vm9:dbtools")
         self.assertEqual(remote.target, "vm9:dbtools")
         self.assertEqual(remote.host.name, "Supersaber")
+        self.assertFalse(config.host_runs_local(remote.host_id))
+
+    def test_load_v2_config_resolves_self_host_from_runtime_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, \
+            mock.patch("wsv2.catalog._runtime_identity_tokens", return_value={"godev4", "godev4.local"}):
+            config = load_config(write_v2_config(Path(tmp)))
+
+        self.assertEqual(config.schema_version, 2)
+        self.assertEqual(config.self_host_id, "vm10")
+        mysql = config.resolve_workspace("mysql")
+        self.assertEqual(mysql.target, "vm10:mysql")
+        self.assertTrue(config.host_runs_local("vm10"))
+        self.assertFalse(config.host_runs_local("vm9"))
+        self.assertEqual(config.resolve_workspace("local:mysql").host_id, "vm10")
+
+    def test_load_v2_config_allows_env_override_for_self_host(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, \
+            mock.patch.dict(os.environ, {"WSV2_SELF_HOST": "vm9"}, clear=True):
+            config = load_config(write_v2_config(Path(tmp)))
+
+        self.assertEqual(config.self_host_id, "vm9")
+        self.assertTrue(config.host_runs_local("vm9"))
+        self.assertFalse(config.host_runs_local("vm10"))
 
     def test_resolve_workspace_rejects_unknown_targets(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            config = load_config(write_config(Path(tmp)))
+            config = load_config(write_legacy_config(Path(tmp)))
         with self.assertRaises(WorkspaceConfigError):
             config.resolve_workspace("missing")
 
 
 class CommandBuilderTests(unittest.TestCase):
     def test_build_workspace_command_matches_local_and_remote_models(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            config = load_config(write_config(Path(tmp)))
+        with tempfile.TemporaryDirectory() as tmp, \
+            mock.patch("wsv2.catalog._runtime_identity_tokens", return_value={"godev4", "godev4.local"}):
+            config = load_config(write_v2_config(Path(tmp)))
 
-        local_cmd = build_workspace_command(config.resolve_workspace("mysql"))
-        remote_cmd = build_workspace_command(config.resolve_workspace("vm9:dbtools"))
+        local_cmd = build_workspace_command(
+            config.resolve_workspace("mysql"),
+            run_local=config.host_runs_local("vm10"),
+        )
+        remote_cmd = build_workspace_command(
+            config.resolve_workspace("vm9:dbtools"),
+            run_local=config.host_runs_local("vm9"),
+        )
 
         self.assertIn("tmux attach-session -t mysql || tmux new-session -s mysql", local_cmd)
         self.assertIn("ssh -t -o ServerAliveInterval=60 -o ServerAliveCountMax=3", remote_cmd)
