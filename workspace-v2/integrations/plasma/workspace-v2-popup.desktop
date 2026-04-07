@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Workspace Launcher
+Comment=Popup launcher for tmux workspaces
+Exec=/home/cslog/ai-workflow/workspace-v2/scripts/wsv2 popup
+Icon=utilities-terminal
+Terminal=false
+Categories=Development;Utility;
+StartupNotify=false
+StartupWMClass=workspace-v2-popup

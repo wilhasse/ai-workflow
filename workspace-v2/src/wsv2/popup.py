@@ -13,6 +13,11 @@ from gi.repository import Gdk, GLib, Gtk, Pango
 from .actions import WorkspaceActions, WorkspaceStatus
 
 
+PROGRAM_CLASS = "workspace-v2-popup"
+WINDOW_ROLE = "workspace-v2-popup"
+WINDOW_TITLE = "Workspace Launcher"
+
+
 @dataclass(slots=True)
 class PopupItem:
     status: WorkspaceStatus
@@ -21,7 +26,7 @@ class PopupItem:
 
 class WorkspacePopup(Gtk.Window):
     def __init__(self, actions: WorkspaceActions) -> None:
-        super().__init__(title="Workspace Launcher")
+        super().__init__(title=WINDOW_TITLE)
         self.actions = actions
         self.recent_scores = self.actions.state.recent_scores()
         self.statuses = [
@@ -30,6 +35,7 @@ class WorkspacePopup(Gtk.Window):
         ]
         self.filtered_items: list[PopupItem] = []
 
+        self.set_role(WINDOW_ROLE)
         self.set_type_hint(Gdk.WindowTypeHint.DIALOG)
         self.set_position(Gtk.WindowPosition.CENTER_ALWAYS)
         self.set_modal(True)
@@ -44,7 +50,7 @@ class WorkspacePopup(Gtk.Window):
         self.add(outer)
 
         title = Gtk.Label()
-        title.set_markup("<b>Workspace Launcher</b>")
+        title.set_markup(f"<b>{GLib.markup_escape_text(WINDOW_TITLE)}</b>")
         title.set_xalign(0)
         outer.pack_start(title, False, False, 0)
 
@@ -305,5 +311,7 @@ class WorkspacePopup(Gtk.Window):
 
 
 def launch_popup(actions: WorkspaceActions) -> None:
+    GLib.set_prgname(PROGRAM_CLASS)
+    Gdk.set_program_class(PROGRAM_CLASS)
     WorkspacePopup(actions)
     Gtk.main()
