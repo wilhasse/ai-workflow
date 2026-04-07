@@ -155,8 +155,46 @@ If `popup` says it could not find a usable launcher surface, use one of:
 
 - The popup launcher solved the daily UI annoyance problem first.
 - Phase `16.1` removed the ambiguous `local` host assumption from the v2 path.
-- Phase `16.2` adds a non-GUI fallback path, but the full outage drill and secondary-host rollout are still later work.
+- Phase `16.2` adds a non-GUI fallback path for tmux and TTY usage.
+- Phase `16.3` adds first-class control-host bootstrap and sync/install helpers.
 - Recent workspace ordering is stored in `~/.local/state/ai-workflow/workspace-v2.json`.
+
+## Phase 16.3 Control-Host Bootstrap
+
+Phase `16.3` turns a machine into a first-class `workspace-v2` control host instead of just "a repo checkout that happens to exist".
+
+What gets installed:
+
+- `~/.local/bin/wsv2` wrapper
+- `~/.config/workspace-v2/control-host.env` with `WSV2_SELF_HOST`, `WSV2_CONFIG_PATH`, and `WSV2_REPO_ROOT`
+
+Bootstrap the current host:
+
+```bash
+/home/cslog/ai-workflow/workspace-v2/scripts/install-control-host.sh --host-id vm9
+```
+
+Sync and bootstrap another host:
+
+```bash
+/home/cslog/ai-workflow/workspace-v2/scripts/sync-control-host.sh --target cslog@10.1.0.10 --host-id vm10
+```
+
+After bootstrap, the operational entry point becomes simply:
+
+```bash
+wsv2 list
+wsv2 popup
+wsv2 attach vm9:dbtools
+```
+
+Minimal assumptions on a control host:
+
+- `tmux` installed
+- `ssh` installed
+- repo present at the configured path
+- correct `WSV2_SELF_HOST` for that machine
+- access to `workspace-v2/catalog/workspaces.v2.json`
 
 ## Verification
 
