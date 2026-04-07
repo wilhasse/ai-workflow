@@ -3,97 +3,190 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from pathlib import Path
+import subprocess
 import sys
+import tempfile
 
 from .actions import WorkspaceActions, build_workspace_command
+from .tui import select_workspace_tui, write_selected_target
+
+
+PACKAGE_ROOT = Path(__file__).resolve().parents[2]
+SCRIPT_PATH = PACKAGE_ROOT / 'scripts' / 'wsv2'
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Workspace v2 popup launcher")
-    parser.add_argument("--config", help="Path to workspaces.json")
-    parser.add_argument("--state", help="Path to launcher state file")
+    parser = argparse.ArgumentParser(description='Workspace v2 popup launcher')
+    parser.add_argument('--config', help='Path to workspaces.json')
+    parser.add_argument('--state', help='Path to launcher state file')
 
-    subparsers = parser.add_subparsers(dest="command")
+    subparsers = parser.add_subparsers(dest='command')
 
-    list_parser = subparsers.add_parser("list", help="List workspaces with status")
-    list_parser.add_argument("--json", action="store_true", help="Emit JSON instead of text")
+    list_parser = subparsers.add_parser('list', help='List workspaces with status')
+    list_parser.add_argument('--json', action='store_true', help='Emit JSON instead of text')
 
-    open_parser = subparsers.add_parser("open", help="Open or focus a workspace")
-    open_parser.add_argument("target", help="Workspace id or host:id")
+    open_parser = subparsers.add_parser('open', help='Open or focus a workspace in a GUI terminal')
+    open_parser.add_argument('target', help='Workspace id or host:id')
     open_parser.add_argument(
-        "--no-focus",
-        action="store_true",
-        help="Skip searching for an existing window before launching",
+        '--no-focus',
+        action='store_true',
+        help='Skip searching for an existing window before launching',
     )
 
-    kill_parser = subparsers.add_parser("kill", help="Kill a workspace tmux session")
-    kill_parser.add_argument("target", help="Workspace id or host:id")
+    attach_parser = subparsers.add_parser('attach', help='Attach/switch in the current shell or tmux client')
+    attach_parser.add_argument('target', help='Workspace id or host:id')
 
-    subparsers.add_parser("popup", help="Launch the popup UI")
+    kill_parser = subparsers.add_parser('kill', help='Kill a workspace tmux session')
+    kill_parser.add_argument('target', help='Workspace id or host:id')
 
-    command_parser = subparsers.add_parser("command", help="Print the tmux/ssh command for a target")
-    command_parser.add_argument("target", help="Workspace id or host:id")
+    subparsers.add_parser('popup', help='Launch the best available popup surface')
+    subparsers.add_parser('tmux-popup', help='Launch the tmux popup selector')
+
+    tui_parser = subparsers.add_parser('tui', help='Run the terminal selector inline')
+    tui_parser.add_argument('--select-only', action='store_true', help='Write the selected target and exit')
+    tui_parser.add_argument('--output', help='File path for selected target when using --select-only')
+
+    command_parser = subparsers.add_parser('command', help='Print the attach command for a target')
+    command_parser.add_argument('target', help='Workspace id or host:id')
 
     return parser
 
 
 def build_popup_unavailable_message(details: str | None = None) -> str:
     lines = [
-        "workspace-v2 popup needs a GUI session, but this shell has no active display.",
-        "",
+        'workspace-v2 could not find a usable launcher surface.',
+        '',
         f"DISPLAY={os.environ.get('DISPLAY', '')}",
         f"WAYLAND_DISPLAY={os.environ.get('WAYLAND_DISPLAY', '')}",
         f"TMUX={'set' if os.environ.get('TMUX') else ''}",
-        "",
-        "This usually means you are inside an SSH/tmux shell on a remote VM.",
-        "Run the popup from a KDE/XFCE terminal on the desktop host, or use:",
-        "  workspace-v2/scripts/wsv2 list",
-        "  workspace-v2/scripts/wsv2 open <target>",
-        "",
-        "If this tmux session should have GUI access, open a GUI terminal attached to the same tmux server and refresh tmux's GUI environment there before retrying.",
+        '',
+        'Supported surfaces:',
+        '  GUI popup when DISPLAY or WAYLAND_DISPLAY is present',
+        '  tmux popup when running inside tmux',
+        '  inline TUI when running on a normal TTY',
+        '',
+        'Fallback commands:',
+        '  workspace-v2/scripts/wsv2 list',
+        '  workspace-v2/scripts/wsv2 attach <target>',
     ]
     if details:
-        lines.extend(["", f"GTK detail: {details}"])
-    return "\n".join(lines)
+        lines.extend(['', f'Launcher detail: {details}'])
+    return '\n'.join(lines)
 
 
 def can_launch_gui_popup() -> bool:
-    return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    return bool(os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY'))
+
+
+def detect_popup_surface(*, stdin_isatty: bool | None = None, stdout_isatty: bool | None = None) -> str:
+    if can_launch_gui_popup():
+        return 'gui'
+    if os.environ.get('TMUX'):
+        return 'tmux'
+    if stdin_isatty is None:
+        stdin_isatty = sys.stdin.isatty()
+    if stdout_isatty is None:
+        stdout_isatty = sys.stdout.isatty()
+    if stdin_isatty and stdout_isatty:
+        return 'tui'
+    return 'unsupported'
+
+
+def run_tui(actions: WorkspaceActions, *, select_only: bool = False, output_path: str | None = None) -> int:
+    target = select_workspace_tui(actions)
+    if select_only:
+        if not output_path:
+            raise SystemExit('--select-only requires --output')
+        write_selected_target(output_path, target)
+        return 0
+    if not target:
+        return 0
+    actions.attach_workspace(target)
+    return 0
+
+
+def run_tmux_popup(actions: WorkspaceActions) -> int:
+    if not os.environ.get('TMUX'):
+        print('tmux-popup requires an active tmux client', file=sys.stderr)
+        return 2
+
+    with tempfile.NamedTemporaryFile(prefix='wsv2-', suffix='.target', delete=False) as handle:
+        output_path = handle.name
+
+    popup_cmd = (
+        f"{SCRIPT_PATH} tui --select-only --output {output_path}"
+    )
+    try:
+        subprocess.run(
+            [
+                'tmux',
+                'display-popup',
+                '-E',
+                '-w',
+                '80%',
+                '-h',
+                '75%',
+                '-T',
+                'Workspace Launcher',
+                popup_cmd,
+            ],
+            check=False,
+        )
+        selected = Path(output_path).read_text(encoding='utf-8').strip()
+    finally:
+        Path(output_path).unlink(missing_ok=True)
+
+    if not selected:
+        return 0
+    actions.attach_workspace(selected)
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    command = args.command or "popup"
+    command = args.command or 'popup'
     actions = WorkspaceActions(config_path=args.config, state_path=args.state)
 
-    if command == "popup":
-        if not can_launch_gui_popup():
-            print(build_popup_unavailable_message(), file=sys.stderr)
-            return 2
-        try:
-            from .popup import launch_popup
+    if command == 'popup':
+        surface = detect_popup_surface()
+        if surface == 'gui':
+            try:
+                from .popup import launch_popup
 
-            launch_popup(actions)
-            return 0
-        except RuntimeError as error:
-            print(build_popup_unavailable_message(str(error)), file=sys.stderr)
-            return 2
+                launch_popup(actions)
+                return 0
+            except RuntimeError as error:
+                print(build_popup_unavailable_message(str(error)), file=sys.stderr)
+                return 2
+        if surface == 'tmux':
+            return run_tmux_popup(actions)
+        if surface == 'tui':
+            return run_tui(actions)
+        print(build_popup_unavailable_message(), file=sys.stderr)
+        return 2
 
-    if command == "list":
+    if command == 'tmux-popup':
+        return run_tmux_popup(actions)
+
+    if command == 'tui':
+        return run_tui(actions, select_only=args.select_only, output_path=args.output)
+
+    if command == 'list':
         statuses = actions.list_workspace_statuses()
         if args.json:
             payload = [
                 {
-                    "id": status.workspace.id,
-                    "name": status.workspace.name,
-                    "host": status.workspace.host_id,
-                    "hostName": status.workspace.host.name,
-                    "path": status.workspace.path,
-                    "active": status.active,
-                    "reachable": status.reachable,
-                    "target": status.workspace.target,
+                    'id': status.workspace.id,
+                    'name': status.workspace.name,
+                    'host': status.workspace.host_id,
+                    'hostName': status.workspace.host.name,
+                    'path': status.workspace.path,
+                    'active': status.active,
+                    'reachable': status.reachable,
+                    'target': status.workspace.target,
                 }
                 for status in statuses
             ]
@@ -102,11 +195,11 @@ def main(argv: list[str] | None = None) -> int:
 
         for status in statuses:
             if status.reachable is False:
-                dot = "!"
+                dot = '!'
             elif status.active:
-                dot = "*"
+                dot = '*'
             else:
-                dot = "."
+                dot = '.'
             print(
                 f"{dot} {status.workspace.name:<18} "
                 f"[{status.workspace.host.name}] "
@@ -115,19 +208,22 @@ def main(argv: list[str] | None = None) -> int:
             )
         return 0
 
-    if command == "open":
+    if command == 'open':
         result = actions.open_workspace(args.target, focus_existing=not args.no_focus)
         print(result)
         return 0
 
-    if command == "kill":
+    if command == 'attach':
+        return actions.attach_workspace(args.target)
+
+    if command == 'kill':
         if not actions.kill_workspace(args.target):
-            print("session not found or could not be killed", file=sys.stderr)
+            print('session not found or could not be killed', file=sys.stderr)
             return 1
-        print("killed")
+        print('killed')
         return 0
 
-    if command == "command":
+    if command == 'command':
         workspace = actions.resolve_workspace(args.target)
         print(
             build_workspace_command(
@@ -141,5 +237,5 @@ def main(argv: list[str] | None = None) -> int:
     return 1
 
 
-if __name__ == "__main__":  # pragma: no cover
+if __name__ == '__main__':  # pragma: no cover
     raise SystemExit(main())

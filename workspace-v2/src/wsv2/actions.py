@@ -23,15 +23,27 @@ class WorkspaceStatus:
         return self.workspace.target
 
 
-def build_workspace_command(workspace: WorkspaceRecord, *, run_local: bool) -> str:
+def build_attach_command(
+    workspace: WorkspaceRecord,
+    *,
+    run_local: bool,
+    within_tmux: bool = False,
+) -> str:
     session_name = shlex.quote(workspace.id)
     work_dir = shlex.quote(workspace.path)
-    tmux_cmd = (
-        f"tmux attach-session -t {session_name} || "
-        f"tmux new-session -s {session_name} -c {work_dir}"
-    )
+
+    if run_local and within_tmux:
+        return (
+            f"tmux has-session -t {session_name} 2>/dev/null || "
+            f"tmux new-session -d -s {session_name} -c {work_dir}; "
+            f"tmux switch-client -t {session_name}"
+        )
+
     if run_local:
-        return tmux_cmd
+        return (
+            f"tmux attach-session -t {session_name} || "
+            f"tmux new-session -s {session_name} -c {work_dir}"
+        )
 
     ssh_target = shlex.quote(workspace.host.ssh or "")
     remote_tmux_cmd = (
@@ -42,6 +54,10 @@ def build_workspace_command(workspace: WorkspaceRecord, *, run_local: bool) -> s
         "ssh -t -o ServerAliveInterval=60 -o ServerAliveCountMax=3 "
         f"{ssh_target} {shlex.quote(remote_tmux_cmd)}"
     )
+
+
+def build_workspace_command(workspace: WorkspaceRecord, *, run_local: bool) -> str:
+    return build_attach_command(workspace, run_local=run_local, within_tmux=False)
 
 
 def build_terminal_command(terminal: str, inner_command: str, title: str) -> list[str]:
@@ -107,6 +123,14 @@ class WorkspaceActions:
             for workspace in self.config.workspaces
         ]
 
+    def workspace_command(self, target: str, *, within_tmux: bool = False) -> str:
+        workspace = self.resolve_workspace(target)
+        return build_attach_command(
+            workspace,
+            run_local=self.config.host_runs_local(workspace.host_id),
+            within_tmux=within_tmux,
+        )
+
     def open_workspace(self, target: str, focus_existing: bool = True) -> str:
         workspace = self.resolve_workspace(target)
         if focus_existing and self.focus_workspace_window(workspace.id):
@@ -114,13 +138,23 @@ class WorkspaceActions:
             return "focused"
 
         terminal = self._resolve_terminal()
-        command = build_workspace_command(
-            workspace,
-            run_local=self.config.host_runs_local(workspace.host_id),
-        )
+        command = self.workspace_command(target, within_tmux=False)
         subprocess.Popen(build_terminal_command(terminal, command, workspace.id))
         self.state.mark_recent(workspace.target)
         return "launched"
+
+    def attach_workspace(self, target: str, *, replace_process: bool = True) -> int:
+        workspace = self.resolve_workspace(target)
+        command = self.workspace_command(
+            target,
+            within_tmux=bool(os.environ.get("TMUX")) and self.config.host_runs_local(workspace.host_id),
+        )
+        self.state.mark_recent(workspace.target)
+        if replace_process:
+            os.execvp("bash", ["bash", "-lc", command])
+            raise AssertionError("os.execvp should not return")
+        result = subprocess.run(["bash", "-lc", command])
+        return result.returncode
 
     def kill_workspace(self, target: str) -> bool:
         workspace = self.resolve_workspace(target)

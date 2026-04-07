@@ -1,6 +1,6 @@
 # Workspace v2
 
-`workspace-v2` is a separate popup launcher for daily workspace switching. It does not replace the current GTK panel yet, and it does not modify the existing `workspace-switcher` behavior.
+`workspace-v2` is a separate launcher path for daily workspace switching. It does not replace the current GTK panel yet, and it does not modify the existing `workspace-switcher` behavior.
 
 ## What it solves
 
@@ -9,6 +9,7 @@
 - Gives you a keyboard-first popup that appears only when you need to switch
 - Keeps the old GTK switcher intact as fallback while v2 is evaluated
 - Adds a canonical host-explicit catalog so phase 2 no longer depends on ambiguous `local`
+- Adds a non-GUI fallback launcher path for tmux and plain TTY usage
 
 ## Current behavior
 
@@ -24,15 +25,17 @@ If that file is missing, it falls back to the legacy GTK catalog at:
 ~/ai-workflow/workspace-switcher/workspaces.json
 ```
 
-The launcher:
+The launcher can now choose the best available surface automatically when you run:
 
-- resolves a self host at runtime and decides when to use local tmux versus SSH
-- still reads the legacy catalog when needed, so the old GTK switcher is untouched
-- shows workspaces in a temporary popup with live filtering
-- displays host and active/offline state
-- prefers recently used workspaces when the search is empty
-- tries to focus an existing terminal window first
-- otherwise launches the configured terminal and attaches/creates the matching tmux session
+```bash
+./workspace-v2/scripts/wsv2 popup
+```
+
+Surface selection order:
+
+1. GTK popup when `DISPLAY` or `WAYLAND_DISPLAY` is present
+2. tmux popup when running inside tmux without a GUI display
+3. inline TUI when running on a normal TTY without tmux
 
 ## Canonical host model
 
@@ -42,7 +45,7 @@ Key ideas:
 
 - `local` is no longer the canonical host id in v2
 - every workspace belongs to an explicit host such as `vm10`, `vm9`, or `vm12`
-- the tool resolves which host is "self" at runtime, then treats that host as local tmux execution
+- the tool resolves which host is `self` at runtime, then treats that host as local tmux execution
 - other hosts are reached by SSH
 
 Self-host resolution order:
@@ -59,16 +62,35 @@ In the bundled catalog:
 
 ## Usage
 
-Run the popup directly:
-
-```bash
-./workspace-v2/scripts/wsv2
-```
-
-Explicit popup subcommand:
+Best available popup surface:
 
 ```bash
 ./workspace-v2/scripts/wsv2 popup
+```
+
+Explicit GUI-only window launcher:
+
+```bash
+./workspace-v2/scripts/wsv2 open vm10:mysql
+```
+
+Attach or switch in the current shell / tmux client:
+
+```bash
+./workspace-v2/scripts/wsv2 attach vm9:dbtools
+./workspace-v2/scripts/wsv2 attach mysql
+```
+
+Explicit tmux popup launcher:
+
+```bash
+./workspace-v2/scripts/wsv2 tmux-popup
+```
+
+Inline terminal selector:
+
+```bash
+./workspace-v2/scripts/wsv2 tui
 ```
 
 List workspaces and status from a shell:
@@ -77,12 +99,10 @@ List workspaces and status from a shell:
 ./workspace-v2/scripts/wsv2 list
 ```
 
-Open one workspace directly:
+Print the attach command for inspection:
 
 ```bash
-./workspace-v2/scripts/wsv2 open vm9:dbtools
-./workspace-v2/scripts/wsv2 open mysql
-./workspace-v2/scripts/wsv2 open vm10:mysql
+./workspace-v2/scripts/wsv2 command vm9:dbtools
 ```
 
 Kill a session:
@@ -90,6 +110,16 @@ Kill a session:
 ```bash
 ./workspace-v2/scripts/wsv2 kill vm9:dbtools
 ```
+
+## How 16.2 behaves
+
+When you run from a tmux shell on a fallback host:
+
+- `popup` opens a tmux popup selector instead of trying GTK
+- selecting a workspace closes the selector and switches/attaches from the current pane
+- for local-host workspaces inside tmux, the tool uses `tmux switch-client` rather than trying to nest tmux clients
+
+That gives you a usable failover control surface without depending on the KDE desktop on `10.1.0.10`.
 
 ## KDE Shortcut
 
@@ -106,23 +136,7 @@ Suggested flow:
 3. Press `Enter`
 4. The popup closes immediately and your target workspace is focused or launched
 
-That makes the launcher temporary instead of always occupying screen space.
-
 ## Troubleshooting
-
-If `popup` says there is no active display, that shell is not attached to a GUI session. This is common inside SSH/tmux shells on remote VMs.
-
-In that case:
-
-- run `popup` from a terminal that belongs to your KDE/XFCE desktop session
-- or keep using the non-GUI commands:
-
-```bash
-./workspace-v2/scripts/wsv2 list
-./workspace-v2/scripts/wsv2 open <target>
-```
-
-If the shell should have GUI access but tmux dropped the display variables, refresh tmux's GUI environment from a GUI terminal attached to the same tmux server, then retry.
 
 If runtime self-host detection picks the wrong machine, set it explicitly:
 
@@ -130,11 +144,18 @@ If runtime self-host detection picks the wrong machine, set it explicitly:
 export WSV2_SELF_HOST=vm10
 ```
 
+If `popup` says it could not find a usable launcher surface, use one of:
+
+```bash
+./workspace-v2/scripts/wsv2 attach <target>
+./workspace-v2/scripts/wsv2 list
+```
+
 ## Notes
 
-- The popup launcher solves the daily UI annoyance problem first.
-- Phase `16.1` is now about removing the ambiguous `local` host assumption from the v2 path.
-- It does not yet remove `10.1.0.10` as a control-plane dependency by itself; the non-GUI fallback launcher and outage drill remain later phase-2 work.
+- The popup launcher solved the daily UI annoyance problem first.
+- Phase `16.1` removed the ambiguous `local` host assumption from the v2 path.
+- Phase `16.2` adds a non-GUI fallback path, but the full outage drill and secondary-host rollout are still later work.
 - Recent workspace ordering is stored in `~/.local/state/ai-workflow/workspace-v2.json`.
 
 ## Verification
