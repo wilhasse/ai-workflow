@@ -77,5 +77,11 @@ export async function route(method, url, body) {
     return { status: 200, body: { ok: true, data: rows } }
   }
 
+  // Stats: GET /stats
+  if (method === 'GET' && path === '/stats') {
+    const stats = await queries.getStats()
+    return { status: 200, body: { ok: true, data: stats } }
+  }
+
   return { status: 404, body: { ok: false, error: 'Not found' } }
 }

@@ -191,3 +191,16 @@ export async function getSyncStatus() {
   `)
   return rows
 }
+
+export async function getStats() {
+  const pool = getPool()
+  const [[files]] = await pool.query('SELECT COUNT(*) as c FROM sync_state')
+  const [[sessions]] = await pool.query('SELECT COUNT(*) as c FROM agent_sessions')
+  const [[messages]] = await pool.query('SELECT COUNT(*) as c, SUM(LENGTH(content_text) - LENGTH(REPLACE(content_text, \' \', \'\')) + 1) as words FROM agent_messages WHERE content_text IS NOT NULL')
+  return {
+    files: Number(files.c) || 0,
+    sessions: Number(sessions.c) || 0,
+    messages: Number(messages.c) || 0,
+    words: Number(messages.words) || 0,
+  }
+}

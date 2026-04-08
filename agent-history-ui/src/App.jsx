@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { listSessions, searchMessages, getSession, getSyncStatus } from './api.js'
+import { listSessions, searchMessages, getSession, getSyncStatus, getStats } from './api.js'
 import SessionCard from './components/SessionCard.jsx'
 import SessionDetail from './components/SessionDetail.jsx'
 import SearchResults from './components/SearchResults.jsx'
@@ -38,6 +38,7 @@ export default function App() {
   const [offset, setOffset] = useState(0)
   const [hasMore, setHasMore] = useState(true)
   const [syncInfo, setSyncInfo] = useState(null)
+  const [stats, setStats] = useState(null)
   const [theme, setTheme] = useState(() => localStorage.getItem('ah-theme') || 'dark')
   const [font, setFont] = useState(() => localStorage.getItem('ah-font') || 'JetBrains Mono')
   const [fontSize, setFontSize] = useState(() => Number(localStorage.getItem('ah-fontsize')) || 14)
@@ -56,6 +57,7 @@ export default function App() {
 
   useEffect(() => {
     getSyncStatus().then(setSyncInfo).catch(() => {})
+    getStats().then(setStats).catch(() => {})
   }, [])
 
   // The core fetch — takes ALL filter values explicitly, uses fetchId to discard stale results
@@ -153,7 +155,8 @@ export default function App() {
     }
   }
 
-  const totalSessions = syncInfo?.reduce((sum, s) => sum + (s.file_count || 0), 0) || 0
+  const totalFiles = syncInfo?.reduce((sum, s) => sum + (s.file_count || 0), 0) || 0
+  const fmt = (n) => n >= 1e6 ? (n/1e6).toFixed(1) + 'M' : n >= 1e3 ? (n/1e3).toFixed(1) + 'k' : String(n)
 
   return (
     <div className="app">
@@ -161,7 +164,10 @@ export default function App() {
         <div className="app-title-row">
           <div className="app-title">
             Agent History
-            <span>{totalSessions > 0 && `${totalSessions} files synced`}</span>
+            <span>
+              {totalFiles > 0 && `${fmt(totalFiles)} files`}
+              {stats && ` · ${fmt(stats.sessions)} conversations · ${fmt(stats.messages)} messages · ${fmt(stats.words)} words`}
+            </span>
           </div>
           <div className="settings-row">
             <select className="filter-select" value={font} onChange={e => setFont(e.target.value)}>

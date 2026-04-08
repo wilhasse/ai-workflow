@@ -39,3 +39,7 @@ export function listHistory(filters = {}) {
 export function getSyncStatus() {
   return get('/sync/status')
 }
+
+export function getStats() {
+  return get('/stats')
+}
