@@ -165,8 +165,7 @@ export default function App() {
           <div className="app-title">
             Agent History
             <span>
-              {totalFiles > 0 && `${fmt(totalFiles)} files`}
-              {stats && ` · ${fmt(stats.sessions)} conversations · ${fmt(stats.messages)} messages · ${fmt(stats.words)} words`}
+              {stats && `${fmt(stats.sessions)} conversations · ${fmt(stats.messages)} messages · ${fmt(stats.words)} words`}
             </span>
           </div>
           <div className="settings-row">
