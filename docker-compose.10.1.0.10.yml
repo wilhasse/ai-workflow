@@ -1,0 +1,6 @@
+services:
+  nginx:
+    ports:
+      # Additional HTTPS publish for host 10.1.0.10.
+      # Access the UI at https://10.1.0.10:8448/
+      - "8448:443"

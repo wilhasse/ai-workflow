@@ -185,6 +185,21 @@ function App() {
     [workspaces, activeWorkspaceId]
   )
 
+  useEffect(() => {
+    if (workspacesLoading) {
+      return
+    }
+
+    if (activeWorkspaceId && workspaces.some((workspace) => workspace.id === activeWorkspaceId)) {
+      return
+    }
+
+    const fallbackWorkspaceId = activeWorkspaces[0]?.id ?? workspaces[0]?.id ?? null
+    if (fallbackWorkspaceId !== activeWorkspaceId) {
+      setActiveWorkspaceId(fallbackWorkspaceId)
+    }
+  }, [activeWorkspaceId, activeWorkspaces, workspaces, workspacesLoading])
+
   // Load windows when workspace changes
   useEffect(() => {
     if (!activeWorkspaceId) {
