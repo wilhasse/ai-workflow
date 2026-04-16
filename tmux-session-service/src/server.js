@@ -751,6 +751,10 @@ const handleTerminalSocket = async (ws, sessionIdRaw, searchParams) => {
   const sanitizedProjectId = sanitizeId(searchParams.get('projectId'))
   const windowIndexRaw = searchParams.get('windowIndex')
   const windowIndex = windowIndexRaw !== null ? Number.parseInt(windowIndexRaw, 10) : null
+  const initialColsRaw = searchParams.get('cols')
+  const initialRowsRaw = searchParams.get('rows')
+  const initialCols = initialColsRaw !== null ? Number.parseInt(initialColsRaw, 10) : null
+  const initialRows = initialRowsRaw !== null ? Number.parseInt(initialRowsRaw, 10) : null
   const monitorFlag = (searchParams.get('monitor') ?? '').toLowerCase()
   const monitorMode = monitorFlag === '1' || monitorFlag === 'true'
 
@@ -788,8 +792,14 @@ const handleTerminalSocket = async (ws, sessionIdRaw, searchParams) => {
     }
   }
 
-  const ptyCols = initialSize?.cols ?? 80
-  const ptyRows = initialSize?.rows ?? 24
+  const ptyCols =
+    !monitorMode && Number.isFinite(initialCols) && initialCols > 0
+      ? initialCols
+      : initialSize?.cols ?? 80
+  const ptyRows =
+    !monitorMode && Number.isFinite(initialRows) && initialRows > 0
+      ? initialRows
+      : initialSize?.rows ?? 24
 
   let ptyProcess
   try {

@@ -170,9 +170,21 @@ function TerminalViewer({
     termRef.current = term
     fitAddonRef.current = fitAddon
 
+    let initialWsUrl = wsUrl
+    if (!monitorMode) {
+      try {
+        const parsedUrl = new window.URL(wsUrl)
+        parsedUrl.searchParams.set('cols', String(term.cols))
+        parsedUrl.searchParams.set('rows', String(term.rows))
+        initialWsUrl = parsedUrl.toString()
+      } catch (error) {
+        console.warn('Failed to include initial terminal dimensions in websocket URL', error)
+      }
+    }
+
     let socket
     try {
-      socket = new window.WebSocket(wsUrl)
+      socket = new window.WebSocket(initialWsUrl)
       socketRef.current = socket
     } catch (error) {
       console.warn('Failed to open websocket', error)
