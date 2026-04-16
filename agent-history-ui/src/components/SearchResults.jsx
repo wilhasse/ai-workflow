@@ -23,13 +23,23 @@ function shortId(id) {
 }
 
 export default function SearchResults({ results, query, onSelectSession }) {
-  if (!results.length) {
+  const dedupedResults = []
+  const seen = new Set()
+
+  for (const result of results) {
+    const key = [result.message_id, result.session_id, result.vm_id, result.ts].join('::')
+    if (seen.has(key)) continue
+    seen.add(key)
+    dedupedResults.push(result)
+  }
+
+  if (!dedupedResults.length) {
     return <div className="empty-state">No results found</div>
   }
 
   return (
     <div className="session-list">
-      {results.map((r, i) => (
+      {dedupedResults.map((r, i) => (
         <div
           key={`${r.message_id}-${i}`}
           className="search-result"

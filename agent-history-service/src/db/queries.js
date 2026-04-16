@@ -99,25 +99,29 @@ export async function upsertSyncState(records) {
 }
 
 // Query helpers for the read API
-export async function searchMessages(q, { source, vm_id, from, to, limit = 50, offset = 0 } = {}) {
-  const pool = getPool()
+export function buildSearchMessagesSql(escape, q, { source, vm_id, from, to, limit = 50, offset = 0 } = {}) {
   // Split query on special chars into words, drop short tokens (tokenizer ignores them)
   const words = q.replace(/[._\-/\\]+/g, ' ').trim().split(/\s+/).filter(w => w.length >= 3).join(' ').replace(/'/g, "''")
   let where = `m.content_text MATCH_ALL '${words}'`
-  if (source) where += ` AND m.source = ${pool.escape(source)}`
-  if (vm_id) where += ` AND m.vm_id = ${pool.escape(vm_id)}`
-  if (from) where += ` AND m.ts >= ${pool.escape(from)}`
-  if (to) where += ` AND m.ts <= ${pool.escape(to + ' 23:59:59')}`
-  const sql = `
-    SELECT m.message_id, m.session_id, m.vm_id, m.source, m.msg_role,
+  if (source) where += ` AND m.source = ${escape(source)}`
+  if (vm_id) where += ` AND m.vm_id = ${escape(vm_id)}`
+  if (from) where += ` AND m.ts >= ${escape(from)}`
+  if (to) where += ` AND m.ts <= ${escape(to + ' 23:59:59')}`
+  return `
+    SELECT DISTINCT m.message_id, m.session_id, m.vm_id, m.source, m.msg_role,
            m.content_text, m.ts, m.seq_num,
-           s.project, s.display_text as session_display
+           NULL AS project,
+           NULL AS session_display
     FROM agent_messages m
-    LEFT JOIN agent_sessions s ON m.session_id = s.session_id AND m.vm_id = s.vm_id
     WHERE ${where}
     ORDER BY m.ts DESC
     LIMIT ${Number(limit)} OFFSET ${Number(offset)}
   `
+}
+
+export async function searchMessages(q, options = {}) {
+  const pool = getPool()
+  const sql = buildSearchMessagesSql(value => pool.escape(value), q, options)
   const [rows] = await pool.query(sql)
   return rows
 }
@@ -138,7 +142,7 @@ export async function listSessions({ source, vm_id, project, from, to, limit = 5
 
 export async function getSession(sessionId) {
   const pool = getPool()
-  const [rows] = await pool.query('SELECT * FROM agent_sessions WHERE session_id = ?', [sessionId])
+  const [rows] = await pool.query('SELECT * FROM agent_sessions WHERE session_id = ? ORDER BY started_at DESC LIMIT 1', [sessionId])
   return rows[0] ?? null
 }
 

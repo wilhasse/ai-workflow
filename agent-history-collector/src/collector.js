@@ -38,6 +38,7 @@ async function processJsonlFile(file, parser) {
   if (!isChanged(file, wm)) return 0
 
   const startLine = wm.lines
+  const allowSessionRows = startLine === 0
   let lineCount = startLine
   const sessionBatch = []
   const messageBatch = []
@@ -48,6 +49,7 @@ async function processJsonlFile(file, parser) {
     lineCount++
 
     if (record._table === 'sessions') {
+      if (!allowSessionRows) continue
       delete record._table
       sessionBatch.push(record)
     } else if (record._table === 'messages') {
