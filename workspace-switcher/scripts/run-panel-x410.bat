@@ -27,7 +27,7 @@ echo Display will be forwarded to this machine via X410 (auto-detected IP).
 echo.
 
 ssh -o ServerAliveInterval=30 %LINUX_USER%@%LINUX_HOST% ^
-    "export DISPLAY=$(echo $SSH_CLIENT ^| awk '{print $1}'):0.0; export GDK_BACKEND=x11; export NO_AT_BRIDGE=1; echo Using DISPLAY=$DISPLAY; python3 %PANEL_PATH%"
+    "export DISPLAY=$(echo $SSH_CLIENT ^| awk '{print $1}'):0.0; export GDK_BACKEND=x11; export NO_AT_BRIDGE=1; setxkbmap -layout br -variant abnt2; echo Using DISPLAY=$DISPLAY; python3 %PANEL_PATH%"
 
 if errorlevel 1 (
     echo.
