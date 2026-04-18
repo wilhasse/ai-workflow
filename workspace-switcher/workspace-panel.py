@@ -828,6 +828,158 @@ class HostTabBar(Gtk.Box):
         self._pulse_timeout_ids[host_id] = GLib.timeout_add(1500, reset_label)
 
 
+class TerminalSwitcherDialog(Gtk.Dialog):
+    """Keyboard switcher for tmux windows across all configured hosts."""
+
+    def __init__(self, parent, entries):
+        super().__init__(title="Terminal Switcher", transient_for=parent, flags=0)
+        self.parent = parent
+        self.all_entries = entries
+        self.filtered_entries = list(entries)
+        self.selected_entry = None
+        self.set_default_size(760, 560)
+        self.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL)
+
+        box = self.get_content_area()
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+        box.set_margin_top(12)
+        box.set_margin_bottom(12)
+        box.set_spacing(8)
+
+        title = Gtk.Label()
+        title.set_markup('<b>Jump to tmux window</b> <span foreground="#7f8c8d">Ctrl+Enter</span>')
+        title.set_xalign(0)
+        box.pack_start(title, False, False, 0)
+
+        self.search_entry = Gtk.Entry()
+        self.search_entry.set_placeholder_text('Search host, workspace, task name, or #window')
+        self.search_entry.connect('changed', self._on_search_changed)
+        self.search_entry.connect('activate', self._activate_selected)
+        box.pack_start(self.search_entry, False, False, 0)
+
+        self.store = Gtk.ListStore(str, str, str, str, str, object)
+        self.tree = Gtk.TreeView(model=self.store)
+        self.tree.set_headers_visible(True)
+        self.tree.connect('row-activated', self._on_row_activated)
+
+        columns = [
+            ('Host', 0, 110),
+            ('Workspace', 1, 170),
+            ('Tab', 2, 60),
+            ('Task / tmux window', 3, 230),
+            ('Recent', 4, 110),
+        ]
+        for label, index, width in columns:
+            renderer = Gtk.CellRendererText()
+            if index == 3:
+                renderer.set_property('ellipsize', Pango.EllipsizeMode.END)
+            column = Gtk.TreeViewColumn(label, renderer, text=index)
+            column.set_min_width(width)
+            column.set_resizable(True)
+            if index == 3:
+                column.set_expand(True)
+            self.tree.append_column(column)
+
+        selection = self.tree.get_selection()
+        selection.connect('changed', self._on_selection_changed)
+
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scrolled.add(self.tree)
+        box.pack_start(scrolled, True, True, 0)
+
+        action_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.rename_button = Gtk.Button(label='Rename tab')
+        self.rename_button.connect('clicked', self._rename_selected)
+        action_box.pack_start(self.rename_button, False, False, 0)
+
+        self.open_button = Gtk.Button(label='Open selected')
+        self.open_button.get_style_context().add_class('suggested-action')
+        self.open_button.connect('clicked', self._activate_selected)
+        action_box.pack_end(self.open_button, False, False, 0)
+        box.pack_start(action_box, False, False, 0)
+
+        hint = Gtk.Label()
+        hint.set_markup('<span size="small" foreground="#7f8c8d">Sorted by tmux activity first. Use ↑↓ and Enter to jump.</span>')
+        hint.set_xalign(0)
+        box.pack_start(hint, False, False, 0)
+
+        self.connect('key-press-event', self._on_key_press)
+        self._populate()
+        self.show_all()
+        self.search_entry.grab_focus()
+
+    def _relative_time(self, timestamp):
+        if not timestamp:
+            return 'never'
+        diff = max(0, int(time.time()) - int(timestamp))
+        if diff < 60:
+            return 'just now'
+        minutes = diff // 60
+        if minutes < 60:
+            return f'{minutes}m ago'
+        hours = minutes // 60
+        if hours < 24:
+            return f'{hours}h ago'
+        return f'{hours // 24}d ago'
+
+    def _populate(self):
+        self.store.clear()
+        for entry in self.filtered_entries:
+            host = entry.get('host_name', entry.get('host_id', 'local'))
+            workspace = entry.get('workspace_name') or entry['session_name']
+            tab = f"#{entry['window_index']}"
+            task = entry.get('window_name') or f"window-{entry['window_index']}"
+            if entry.get('discovered'):
+                workspace = f"{workspace} *"
+            recent = self._relative_time(entry.get('activity', 0))
+            self.store.append([host, workspace, tab, task, recent, entry])
+        if len(self.store) > 0:
+            first = self.store.get_iter_first()
+            self.tree.get_selection().select_iter(first)
+
+    def _on_search_changed(self, entry):
+        query = entry.get_text().strip().lower()
+        if query:
+            self.filtered_entries = [
+                item for item in self.all_entries
+                if query in item.get('search_text', '')
+            ]
+        else:
+            self.filtered_entries = list(self.all_entries)
+        self._populate()
+
+    def _on_selection_changed(self, selection):
+        model, tree_iter = selection.get_selected()
+        self.selected_entry = model[tree_iter][5] if tree_iter else None
+
+    def _on_row_activated(self, tree, path, column):
+        self._activate_selected()
+
+    def _activate_selected(self, *args):
+        if self.selected_entry:
+            self.response(Gtk.ResponseType.OK)
+
+    def _rename_selected(self, button):
+        if not self.selected_entry:
+            return
+        self.parent.rename_tmux_window_from_entry(self.selected_entry, self)
+        # Refresh entries after rename while keeping dialog open.
+        self.all_entries = self.parent.build_terminal_switcher_entries()
+        self._on_search_changed(self.search_entry)
+
+    def _on_key_press(self, widget, event):
+        keyval = event.keyval
+        if keyval == Gdk.KEY_Escape:
+            self.response(Gtk.ResponseType.CANCEL)
+            return True
+        if keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
+            self._activate_selected()
+            return True
+        return False
+
+
 class WorkspaceSwitcher(Gtk.Window):
     """Main workspace switcher panel window"""
 
@@ -965,8 +1117,228 @@ class WorkspaceSwitcher(Gtk.Window):
         self.health_checker.start()
         self.health_checker.check_all_now()
 
-        # Handle close
+        # Handle keyboard shortcuts and close
+        self.connect('key-press-event', self.on_key_press)
         self.connect('delete-event', self.on_close)
+
+    def on_key_press(self, widget, event):
+        """Open all-host terminal switcher with Ctrl+Enter."""
+        state = event.state & Gtk.accelerator_get_default_mod_mask()
+        if state & Gdk.ModifierType.CONTROL_MASK and event.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
+            self.open_terminal_switcher()
+            return True
+        return False
+
+    def open_terminal_switcher(self):
+        entries = self.build_terminal_switcher_entries()
+        dialog = TerminalSwitcherDialog(self, entries)
+        response = dialog.run()
+        selected = dialog.selected_entry
+        dialog.destroy()
+        if response == Gtk.ResponseType.OK and selected:
+            self.open_tmux_window_entry(selected)
+
+    def build_terminal_switcher_entries(self):
+        """Build all-host tmux window entries using the web UI row format."""
+        workspaces = self.config.get('workspaces', [])
+        workspace_by_host_session = {
+            (ws.get('host', 'local'), ws['id']): ws for ws in workspaces
+        }
+        workspace_by_session = {}
+        for ws in workspaces:
+            workspace_by_session.setdefault(ws['id'], ws)
+        entries = []
+
+        for host in self.hosts:
+            host_id = host.get('id', 'local')
+            host_name = host.get('name', host_id)
+            windows = self._get_windows_for_host(host_id, host)
+            for window in windows:
+                session_name = window['session_name']
+                workspace = workspace_by_host_session.get((host_id, session_name))
+                if workspace is None:
+                    workspace = workspace_by_session.get(session_name)
+                discovered = workspace is None
+                workspace_name = workspace.get('name') if workspace else self._format_discovered_workspace_name(session_name)
+                workspace_description = workspace.get('description', '') if workspace else 'Discovered tmux session'
+                entry = {
+                    **window,
+                    'host_id': host_id,
+                    'host_name': host_name,
+                    'host_info': host,
+                    'workspace_name': workspace_name,
+                    'workspace_description': workspace_description,
+                    'discovered': discovered,
+                }
+                entry['search_text'] = ' '.join([
+                    host_name,
+                    host_id,
+                    workspace_name,
+                    workspace_description,
+                    session_name,
+                    str(window['window_index']),
+                    f"#{window['window_index']}",
+                    window.get('window_name', ''),
+                ]).lower()
+                entries.append(entry)
+
+        return sorted(
+            entries,
+            key=lambda entry: (
+                -(entry.get('activity') or 0),
+                entry.get('host_name', ''),
+                entry.get('workspace_name', ''),
+                entry.get('window_index', 0),
+            )
+        )
+
+    def _format_discovered_workspace_name(self, session_name):
+        parts = [part for part in str(session_name).replace('_', '-').split('-') if part]
+        return ' '.join(part[:1].upper() + part[1:] for part in parts) or str(session_name)
+
+    def _get_windows_for_host(self, host_id, host_info):
+        """Return tmux windows for a host, local or SSH remote."""
+        format_string = '#{session_name}|#{window_index}|#{window_name}|#{window_active}|#{window_activity}|#{window_panes}'
+        if host_id == 'local' or not host_info or not host_info.get('ssh'):
+            cmd = ['tmux', 'list-windows', '-a', '-F', format_string]
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                env={**os.environ, 'TMUX': ''}
+            )
+        else:
+            ssh_target = host_info['ssh']
+            remote_cmd = f"tmux list-windows -a -F {shlex.quote(format_string)} 2>/dev/null"
+            result = subprocess.run(
+                ['ssh', '-o', 'ConnectTimeout=3', '-o', 'BatchMode=yes', ssh_target, remote_cmd],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if result.returncode in (0, 1):
+                self.health_checker.mark_reachable(host_id)
+
+        if result.returncode not in (0, 1):
+            return []
+
+        windows = []
+        for line in result.stdout.strip().split('\n'):
+            if not line or '|' not in line:
+                continue
+            parts = line.split('|')
+            if len(parts) < 6:
+                continue
+            session_name, index, name, active, activity, panes = parts[:6]
+            try:
+                window_index = int(index)
+            except ValueError:
+                continue
+            try:
+                activity_value = int(activity) if activity else 0
+            except ValueError:
+                activity_value = 0
+            try:
+                pane_count = int(panes) if panes else 0
+            except ValueError:
+                pane_count = 0
+            windows.append({
+                'session_name': session_name,
+                'window_index': window_index,
+                'window_name': name or f'window-{window_index}',
+                'window_active': active == '1',
+                'activity': activity_value,
+                'pane_count': pane_count,
+            })
+        return windows
+
+    def open_tmux_window_entry(self, entry):
+        """Select and open a tmux session/window entry from the switcher."""
+        host_id = entry.get('host_id', 'local')
+        host_info = entry.get('host_info')
+        session_name = entry['session_name']
+        window_index = entry['window_index']
+        session_target = f"{session_name}:{window_index}"
+
+        if host_id == 'local' or not host_info or not host_info.get('ssh'):
+            subprocess.run(['tmux', 'select-window', '-t', session_target], env={**os.environ, 'TMUX': ''})
+            if self._focus_existing_window(session_name):
+                return
+            cmd = f"tmux attach-session -t {shlex.quote(session_name)}"
+        else:
+            ssh_target = host_info['ssh']
+            remote_select = f"tmux select-window -t {shlex.quote(session_target)}"
+            subprocess.run(['ssh', '-o', 'ConnectTimeout=3', '-o', 'BatchMode=yes', ssh_target, remote_select], capture_output=True, timeout=6)
+            if self._focus_existing_window(session_name):
+                return
+            remote_attach = f"tmux select-window -t {shlex.quote(session_target)}; tmux attach -t {shlex.quote(session_name)}"
+            cmd = f"ssh -t -o ServerAliveInterval=60 -o ServerAliveCountMax=3 {ssh_target} {shlex.quote(remote_attach)}"
+
+        terminal = self._get_terminal()
+        subprocess.Popen([
+            terminal,
+            '-e', f"bash -c {shlex.quote(cmd + '; exec bash')}"
+        ])
+        self.remote_session_cache.invalidate(host_id)
+        GLib.timeout_add(1000, self._delayed_refresh)
+
+    def rename_tmux_window_from_entry(self, entry, dialog_parent=None):
+        """Rename a tmux window from the terminal switcher."""
+        rename_dialog = Gtk.Dialog(
+            title='Rename tmux tab',
+            transient_for=dialog_parent or self,
+            flags=0
+        )
+        rename_dialog.add_buttons(
+            Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+            Gtk.STOCK_OK, Gtk.ResponseType.OK
+        )
+        rename_dialog.set_default_size(360, 120)
+        box = rename_dialog.get_content_area()
+        box.set_margin_start(10)
+        box.set_margin_end(10)
+        box.set_margin_top(10)
+        box.set_margin_bottom(10)
+        label = Gtk.Label(label=f"{entry.get('host_name')} / {entry.get('workspace_name')} · #{entry['window_index']}")
+        label.set_xalign(0)
+        box.pack_start(label, False, False, 6)
+        name_entry = Gtk.Entry()
+        name_entry.set_text(entry.get('window_name', ''))
+        name_entry.select_region(0, -1)
+        name_entry.connect('activate', lambda _entry: rename_dialog.response(Gtk.ResponseType.OK))
+        box.pack_start(name_entry, False, False, 0)
+        rename_dialog.show_all()
+        response = rename_dialog.run()
+        new_name = name_entry.get_text().strip()
+        rename_dialog.destroy()
+        if response != Gtk.ResponseType.OK or not new_name:
+            return
+
+        session_target = f"{entry['session_name']}:{entry['window_index']}"
+        host_id = entry.get('host_id', 'local')
+        host_info = entry.get('host_info')
+        if host_id == 'local' or not host_info or not host_info.get('ssh'):
+            subprocess.run(['tmux', 'rename-window', '-t', session_target, new_name], env={**os.environ, 'TMUX': ''})
+        else:
+            remote_cmd = f"tmux rename-window -t {shlex.quote(session_target)} {shlex.quote(new_name)}"
+            subprocess.run(['ssh', '-o', 'ConnectTimeout=3', '-o', 'BatchMode=yes', host_info['ssh'], remote_cmd], capture_output=True, timeout=6)
+            self.remote_session_cache.invalidate(host_id)
+        self.refresh_workspaces()
+
+    def _focus_existing_window(self, search_term):
+        """Try to focus an existing terminal window whose title contains search_term."""
+        try:
+            result = subprocess.run(['wmctrl', '-l'], capture_output=True, text=True)
+            if result.returncode != 0:
+                return False
+            for line in result.stdout.strip().split('\n'):
+                if search_term in line:
+                    window_id = line.split()[0]
+                    subprocess.run(['wmctrl', '-i', '-a', window_id])
+                    return True
+        except FileNotFoundError:
+            return False
+        return False
 
     def _load_full_config(self):
         """Load full config file"""

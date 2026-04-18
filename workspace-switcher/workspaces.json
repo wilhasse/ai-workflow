@@ -14,6 +14,11 @@
       "id": "vm12",
       "name": "DB Server",
       "ssh": "cslog@10.1.0.12"
+    },
+    {
+      "id": "vm10",
+      "name": "Godev4",
+      "ssh": "cslog@10.1.0.10"
     }
   ],
   "workspaces": [
