@@ -49,6 +49,25 @@ export function useWorkspaces() {
     }
   }, [])
 
+  const renameWindow = useCallback(async (sessionId, windowIndex, name) => {
+    try {
+      const response = await fetch(`/api/sessions/${sessionId}/windows/${windowIndex}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ name }),
+      })
+      if (!response.ok) {
+        return null
+      }
+      const data = await response.json()
+      return data.windows || []
+    } catch {
+      return null
+    }
+  }, [])
+
   useEffect(() => {
     mountedRef.current = true
     fetchWorkspaces()
@@ -68,5 +87,6 @@ export function useWorkspaces() {
     error,
     refresh: fetchWorkspaces,
     fetchWindows,
+    renameWindow,
   }
 }

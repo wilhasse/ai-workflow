@@ -367,6 +367,28 @@ const tmuxSelectWindow = async (sessionId, windowIndex) => {
   return response.ok
 }
 
+const sanitizeWindowName = (value) => {
+  if (!value) {
+    return null
+  }
+  const normalized = String(value).replace(/\s+/g, ' ').trim()
+  if (!normalized) {
+    return null
+  }
+  return normalized.slice(0, 80)
+}
+
+const tmuxRenameWindow = async (sessionId, windowIndex, windowName) => {
+  const response = await runTmux(['rename-window', '-t', `${sessionId}:${windowIndex}`, windowName])
+  if (!response.ok) {
+    if (response.error?.code === 1) {
+      return false
+    }
+    throw response.error
+  }
+  return true
+}
+
 const tmuxGetWindowSize = async (sessionId, windowIndex = null) => {
   const target =
     windowIndex !== null && Number.isFinite(windowIndex)
@@ -663,6 +685,41 @@ const handleListWindows = async (res, sessionId) => {
   }
 }
 
+const handleRenameWindow = async (req, res, sessionId, windowIndexRaw) => {
+  const sanitizedId = sanitizeId(sessionId)
+  const windowIndex = Number.parseInt(windowIndexRaw, 10)
+  if (!sanitizedId || !Number.isFinite(windowIndex)) {
+    respond(res, 400, { error: 'Invalid session or window index' })
+    return
+  }
+
+  let body
+  try {
+    body = await readBody(req)
+  } catch (error) {
+    respond(res, 400, { error: error.message })
+    return
+  }
+
+  const windowName = sanitizeWindowName(body.name)
+  if (!windowName) {
+    respond(res, 400, { error: 'Window name is required' })
+    return
+  }
+
+  try {
+    const renamed = await tmuxRenameWindow(sanitizedId, windowIndex, windowName)
+    if (!renamed) {
+      respond(res, 404, { error: 'Window not found' })
+      return
+    }
+    const windows = await tmuxListWindows(sanitizedId)
+    respond(res, 200, { sessionId: sanitizedId, windows })
+  } catch (error) {
+    respond(res, 500, { error: error.message })
+  }
+}
+
 const notFound = (res) => respond(res, 404, { error: 'Not found' })
 
 const server = http.createServer(async (req, res) => {
@@ -728,6 +785,11 @@ const server = http.createServer(async (req, res) => {
   const windowsMatch = pathName.match(/^\/sessions\/([^/]+)\/windows$/)
   if (windowsMatch && method === 'GET') {
     await handleListWindows(res, windowsMatch[1])
+    return
+  }
+  const renameWindowMatch = pathName.match(/^\/sessions\/([^/]+)\/windows\/([^/]+)$/)
+  if (renameWindowMatch && method === 'PUT') {
+    await handleRenameWindow(req, res, renameWindowMatch[1], renameWindowMatch[2])
     return
   }
   const keepAliveMatch = pathName.match(/^\/sessions\/([^/]+)\/keepalive$/)

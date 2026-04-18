@@ -5,6 +5,7 @@ import './App.css'
 // Components
 import TerminalViewer from './components/terminal/TerminalViewer'
 import ConfirmDialog from './components/dialogs/ConfirmDialog'
+import TerminalSwitcherDialog from './components/dialogs/TerminalSwitcherDialog'
 import MobileLayout from './components/layout/MobileLayout'
 import WorkspaceSheet from './components/sheets/WorkspaceSheet'
 import WindowSheet from './components/sheets/WindowSheet'
@@ -23,6 +24,7 @@ const VOICE_SERVICE_STORAGE_KEY = 'terminal-dashboard-voice-service'
 const VOICE_LANGUAGE_STORAGE_KEY = 'terminal-dashboard-voice-language'
 const OVERVIEW_COLUMNS_STORAGE_KEY = 'terminal-dashboard-overview-columns'
 const OVERVIEW_HIDDEN_STORAGE_KEY = 'terminal-dashboard-overview-hidden'
+const WINDOW_USAGE_STORAGE_KEY = 'terminal-dashboard-window-usage'
 
 // Constants
 const FONT_SIZE_OPTIONS = [12, 14, 16, 18, 20, 22]
@@ -52,6 +54,21 @@ const detectApiBase = () => {
 }
 
 const API_BASE = detectApiBase()
+
+const loadWindowUsage = () => {
+  if (typeof window === 'undefined') {
+    return {}
+  }
+
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(WINDOW_USAGE_STORAGE_KEY) || '{}')
+    return stored && typeof stored === 'object' ? stored : {}
+  } catch {
+    return {}
+  }
+}
+
+const buildWindowUsageKey = (workspaceId, windowIndex) => `${workspaceId}:${windowIndex}`
 
 /**
  * Build WebSocket URL for workspace terminal connection
@@ -86,12 +103,14 @@ function App() {
     error: workspacesError,
     refresh: refreshWorkspaces,
     fetchWindows,
+    renameWindow,
   } = useWorkspaces()
 
   // Active workspace and window state
   const [activeWorkspaceId, setActiveWorkspaceId] = useState(null)
   const [activeWindowIndex, setActiveWindowIndex] = useState(null)
   const [windows, setWindows] = useState([])
+  const [windowsByWorkspace, setWindowsByWorkspace] = useState({})
   const [windowsLoading, setWindowsLoading] = useState(false)
 
   // Terminal state
@@ -152,9 +171,14 @@ function App() {
     message: '',
     onConfirm: null,
   })
+  const [windowUsage, setWindowUsage] = useState(() => loadWindowUsage())
+  const [isTerminalSwitcherOpen, setIsTerminalSwitcherOpen] = useState(false)
+  const [terminalSwitcherQuery, setTerminalSwitcherQuery] = useState('')
+  const [terminalSwitcherLoading, setTerminalSwitcherLoading] = useState(false)
 
   const activityTimersRef = useRef(new Map())
   const activityTimestampsRef = useRef(new Map())
+  const lastTrackedWindowKeyRef = useRef(null)
   const [workspaceActivity, setWorkspaceActivity] = useState({})
 
   const overviewReadOnly = overviewMode && canUseOverview
@@ -185,6 +209,29 @@ function App() {
     [workspaces, activeWorkspaceId]
   )
 
+  const applyWorkspaceWindows = useCallback((workspaceId, windowList) => {
+    setWindowsByWorkspace((prev) => ({
+      ...prev,
+      [workspaceId]: windowList,
+    }))
+
+    if (workspaceId !== activeWorkspaceId) {
+      return
+    }
+
+    setWindows(windowList)
+    setActiveWindowIndex((previousIndex) => {
+      if (!windowList.length) {
+        return null
+      }
+      if (Number.isFinite(previousIndex) && windowList.some((window) => window.index === previousIndex)) {
+        return previousIndex
+      }
+      const activeWindow = windowList.find((window) => window.active)
+      return activeWindow?.index ?? windowList[0].index
+    })
+  }, [activeWorkspaceId])
+
   useEffect(() => {
     if (workspacesLoading) {
       return
@@ -213,13 +260,8 @@ function App() {
       setWindowsLoading(true)
       const windowList = await fetchWindows(activeWorkspaceId)
       if (!cancelled) {
-        setWindows(windowList)
+        applyWorkspaceWindows(activeWorkspaceId, windowList)
         setWindowsLoading(false)
-        // Auto-select first window if none selected
-        if (windowList.length > 0 && activeWindowIndex === null) {
-          const activeWindow = windowList.find((w) => w.active)
-          setActiveWindowIndex(activeWindow?.index ?? windowList[0].index)
-        }
       }
     }
 
@@ -227,7 +269,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [activeWorkspaceId, fetchWindows])
+  }, [activeWorkspaceId, applyWorkspaceWindows, fetchWindows])
 
   useEffect(() => {
     if (!canUseOverview && overviewMode) {
@@ -296,9 +338,132 @@ function App() {
     if (!activeWorkspaceId) return
     setWindowsLoading(true)
     const windowList = await fetchWindows(activeWorkspaceId)
-    setWindows(windowList)
+    applyWorkspaceWindows(activeWorkspaceId, windowList)
     setWindowsLoading(false)
-  }, [activeWorkspaceId, fetchWindows])
+  }, [activeWorkspaceId, applyWorkspaceWindows, fetchWindows])
+
+  const recordWindowUsage = useCallback((workspaceId, windowIndex) => {
+    if (!workspaceId || !Number.isFinite(windowIndex)) {
+      return null
+    }
+
+    const usageKey = buildWindowUsageKey(workspaceId, windowIndex)
+    setWindowUsage((prev) => ({
+      ...prev,
+      [usageKey]: {
+        lastUsedAt: Date.now(),
+        useCount: (prev[usageKey]?.useCount ?? 0) + 1,
+      },
+    }))
+    return usageKey
+  }, [])
+
+  const closeTerminalSwitcher = useCallback(() => {
+    setIsTerminalSwitcherOpen(false)
+    setTerminalSwitcherQuery('')
+  }, [])
+
+  const openTerminalSwitcher = useCallback(async () => {
+    setIsTerminalSwitcherOpen(true)
+    setTerminalSwitcherQuery('')
+    if (!activeWorkspaces.length) {
+      return
+    }
+
+    setTerminalSwitcherLoading(true)
+    const windowEntries = await Promise.all(
+      activeWorkspaces.map(async (workspace) => ({
+        workspaceId: workspace.id,
+        windows: await fetchWindows(workspace.id),
+      })),
+    )
+
+    windowEntries.forEach(({ workspaceId, windows: workspaceWindows }) => {
+      applyWorkspaceWindows(workspaceId, workspaceWindows)
+    })
+    setTerminalSwitcherLoading(false)
+  }, [activeWorkspaces, applyWorkspaceWindows, fetchWindows])
+
+  const handleSelectTerminalEntry = useCallback((entry) => {
+    setActiveWorkspaceId(entry.workspaceId)
+    setActiveWindowIndex(entry.windowIndex)
+    lastTrackedWindowKeyRef.current = recordWindowUsage(entry.workspaceId, entry.windowIndex)
+    closeTerminalSwitcher()
+  }, [closeTerminalSwitcher, recordWindowUsage])
+
+  const handleRenameWindowEntry = useCallback(async (entry) => {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    const nextName = window.prompt(
+      'Rename tmux tab #' + entry.windowIndex + ' in ' + entry.workspaceName,
+      entry.windowName,
+    )
+    if (nextName === null) {
+      return
+    }
+
+    const trimmedName = nextName.trim()
+    if (!trimmedName || trimmedName === entry.windowName) {
+      return
+    }
+
+    const renamedWindows = await renameWindow(entry.workspaceId, entry.windowIndex, trimmedName)
+    if (!renamedWindows) {
+      window.alert('Unable to rename the tmux tab.')
+      return
+    }
+
+    applyWorkspaceWindows(entry.workspaceId, renamedWindows)
+  }, [applyWorkspaceWindows, renameWindow])
+
+  const terminalSwitcherEntries = useMemo(() => {
+    const query = terminalSwitcherQuery.trim().toLowerCase()
+    const entries = activeWorkspaces.flatMap((workspace) => {
+      const workspaceWindows = windowsByWorkspace[workspace.id] ?? (workspace.id === activeWorkspaceId ? windows : [])
+      return workspaceWindows.map((windowItem) => {
+        const usage = windowUsage[buildWindowUsageKey(workspace.id, windowItem.index)] ?? {}
+        return {
+          id: workspace.id + ':' + windowItem.index,
+          workspaceId: workspace.id,
+          workspaceName: workspace.name,
+          workspaceDescription: workspace.description || '',
+          workspaceActive: workspace.active,
+          windowIndex: windowItem.index,
+          windowName: windowItem.name,
+          windowActive: windowItem.active,
+          useCount: usage.useCount ?? 0,
+          lastUsedAt: usage.lastUsedAt ?? 0,
+          searchText: [
+            workspace.name,
+            workspace.description || '',
+            String(windowItem.index),
+            '#' + windowItem.index,
+            windowItem.name,
+          ].join(' ').toLowerCase(),
+        }
+      })
+    })
+
+    const filteredEntries = query
+      ? entries.filter((entry) => entry.searchText.includes(query))
+      : entries
+
+    return filteredEntries.sort((left, right) => {
+      if (right.lastUsedAt !== left.lastUsedAt) {
+        return right.lastUsedAt - left.lastUsedAt
+      }
+      if (right.useCount !== left.useCount) {
+        return right.useCount - left.useCount
+      }
+      const workspaceComparison = left.workspaceName.localeCompare(right.workspaceName)
+      if (workspaceComparison !== 0) {
+        return workspaceComparison
+      }
+      return left.windowIndex - right.windowIndex
+    })
+  }, [activeWorkspaceId, activeWorkspaces, terminalSwitcherQuery, windowUsage, windows, windowsByWorkspace])
 
   // Persist font size
   useEffect(() => {
@@ -321,6 +486,41 @@ function App() {
     if (typeof window === 'undefined') return
     window.localStorage.setItem(OVERVIEW_COLUMNS_STORAGE_KEY, String(overviewColumns))
   }, [overviewColumns])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(WINDOW_USAGE_STORAGE_KEY, JSON.stringify(windowUsage))
+  }, [windowUsage])
+
+  useEffect(() => {
+    if (!activeWorkspaceId || !activeWorkspace?.active || !Number.isFinite(activeWindowIndex)) {
+      lastTrackedWindowKeyRef.current = null
+      return
+    }
+
+    const usageKey = buildWindowUsageKey(activeWorkspaceId, activeWindowIndex)
+    if (lastTrackedWindowKeyRef.current === usageKey) {
+      return
+    }
+
+    lastTrackedWindowKeyRef.current = recordWindowUsage(activeWorkspaceId, activeWindowIndex)
+  }, [activeWindowIndex, activeWorkspace?.active, activeWorkspaceId, recordWindowUsage])
+
+  useEffect(() => {
+    if (isMobile) {
+      return undefined
+    }
+
+    const handleKeyDown = (event) => {
+      if (event.ctrlKey && event.key === 'Enter') {
+        event.preventDefault()
+        openTerminalSwitcher()
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown, true)
+    return () => window.removeEventListener('keydown', handleKeyDown, true)
+  }, [isMobile, openTerminalSwitcher])
 
   // Voice transcription functions
   const waitForTerminalConnection = async (timeoutMs = 1500) => {
@@ -938,6 +1138,19 @@ function App() {
           onProjectViewModeChange={() => {}}
         />
 
+        {!isMobile && (
+          <TerminalSwitcherDialog
+            isOpen={isTerminalSwitcherOpen}
+            onClose={closeTerminalSwitcher}
+            entries={terminalSwitcherEntries}
+            loading={terminalSwitcherLoading}
+            query={terminalSwitcherQuery}
+            onQueryChange={setTerminalSwitcherQuery}
+            onSelectEntry={handleSelectTerminalEntry}
+            onRenameEntry={handleRenameWindowEntry}
+          />
+        )}
+
         <ConfirmDialog
           isOpen={confirmDialog.isOpen}
           message={confirmDialog.message}
@@ -979,6 +1192,14 @@ function App() {
         </div>
 
         <div className="header-right">
+          <button
+            type="button"
+            className="secondary switcher-btn"
+            onClick={openTerminalSwitcher}
+            title="Jump between terminals and tmux tabs (Ctrl+Enter)"
+          >
+            Jump
+          </button>
           {canUseOverview && (
             <button
               type="button"
@@ -1037,6 +1258,17 @@ function App() {
           )}
         </div>
       )}
+
+      <TerminalSwitcherDialog
+        isOpen={isTerminalSwitcherOpen}
+        onClose={closeTerminalSwitcher}
+        entries={terminalSwitcherEntries}
+        loading={terminalSwitcherLoading}
+        query={terminalSwitcherQuery}
+        onQueryChange={setTerminalSwitcherQuery}
+        onSelectEntry={handleSelectTerminalEntry}
+        onRenameEntry={handleRenameWindowEntry}
+      />
 
       <ConfirmDialog
         isOpen={confirmDialog.isOpen}
