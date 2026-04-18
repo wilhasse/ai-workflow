@@ -391,6 +391,13 @@ function App() {
     closeTerminalSwitcher()
   }, [closeTerminalSwitcher, recordWindowUsage])
 
+  const handleSelectWindow = useCallback((windowIndex) => {
+    setActiveWindowIndex(windowIndex)
+    if (activeWorkspaceId) {
+      lastTrackedWindowKeyRef.current = recordWindowUsage(activeWorkspaceId, windowIndex)
+    }
+  }, [activeWorkspaceId, recordWindowUsage])
+
   const handleRenameWindowEntry = useCallback(async (entry) => {
     if (typeof window === 'undefined') {
       return
@@ -435,6 +442,8 @@ function App() {
           windowActive: windowItem.active,
           useCount: usage.useCount ?? 0,
           lastUsedAt: usage.lastUsedAt ?? 0,
+          lastActivityAt: windowItem.lastActivityAt ?? 0,
+          paneCount: windowItem.paneCount ?? 0,
           searchText: [
             workspace.name,
             workspace.description || '',
@@ -451,6 +460,9 @@ function App() {
       : entries
 
     return filteredEntries.sort((left, right) => {
+      if (right.lastActivityAt !== left.lastActivityAt) {
+        return right.lastActivityAt - left.lastActivityAt
+      }
       if (right.lastUsedAt !== left.lastUsedAt) {
         return right.lastUsedAt - left.lastUsedAt
       }
@@ -492,19 +504,6 @@ function App() {
     window.localStorage.setItem(WINDOW_USAGE_STORAGE_KEY, JSON.stringify(windowUsage))
   }, [windowUsage])
 
-  useEffect(() => {
-    if (!activeWorkspaceId || !activeWorkspace?.active || !Number.isFinite(activeWindowIndex)) {
-      lastTrackedWindowKeyRef.current = null
-      return
-    }
-
-    const usageKey = buildWindowUsageKey(activeWorkspaceId, activeWindowIndex)
-    if (lastTrackedWindowKeyRef.current === usageKey) {
-      return
-    }
-
-    lastTrackedWindowKeyRef.current = recordWindowUsage(activeWorkspaceId, activeWindowIndex)
-  }, [activeWindowIndex, activeWorkspace?.active, activeWorkspaceId, recordWindowUsage])
 
   useEffect(() => {
     if (isMobile) {
@@ -1035,7 +1034,7 @@ function App() {
           <WindowTabs
             windows={windows}
             activeWindowIndex={activeWindowIndex}
-            onSelectWindow={setActiveWindowIndex}
+            onSelectWindow={handleSelectWindow}
             onRefresh={handleRefreshWindows}
             loading={windowsLoading}
           />
@@ -1083,7 +1082,7 @@ function App() {
           onClose={() => setActiveSheet(null)}
           windows={windows}
           activeWindowIndex={activeWindowIndex}
-          onSelectWindow={setActiveWindowIndex}
+          onSelectWindow={handleSelectWindow}
           workspaceName={activeWorkspace?.name}
           loading={windowsLoading}
           onRefresh={handleRefreshWindows}

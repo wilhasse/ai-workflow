@@ -154,7 +154,7 @@ function TerminalSwitcherDialog({
                   </div>
                   <div className="terminal-switcher-item-meta">
                     {entry.workspaceDescription ? `${entry.workspaceDescription} · ` : ''}
-                    {entry.windowActive ? 'active tab' : 'background tab'} · {entry.useCount}x · {formatRelativeTime(entry.lastUsedAt)}
+                    {entry.windowActive ? 'active tab' : 'background tab'} · activity {formatRelativeTime(entry.lastActivityAt)} · selected {entry.useCount}x
                   </div>
                 </button>
                 <button

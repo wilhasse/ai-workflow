@@ -114,6 +114,13 @@ const serializeUser = (user) => ({
   projects: Array.isArray(user.projects) ? user.projects : [],
 })
 
+const formatDiscoveredWorkspaceName = (sessionId) =>
+  String(sessionId)
+    .split(/[-_]+/g)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ') || String(sessionId)
+
 const persistUsers = async () => {
   await ensureDataDir()
   const payload = {}
@@ -341,7 +348,7 @@ const tmuxListWindows = async (sessionId) => {
   const response = await runTmux([
     'list-windows',
     '-t', sessionId,
-    '-F', '#{window_index}|#{window_name}|#{window_active}',
+    '-F', '#{window_index}|#{window_name}|#{window_active}|#{window_activity}|#{window_panes}',
   ])
   if (!response.ok) {
     if (response.error?.code === 1) {
@@ -353,11 +360,15 @@ const tmuxListWindows = async (sessionId) => {
     .split('\n')
     .filter(Boolean)
     .map((line) => {
-      const [index, name, active] = line.split('|')
+      const [index, name, active, activity, panes] = line.split('|')
+      const activitySeconds = Number.parseInt(activity, 10)
+      const paneCount = Number.parseInt(panes, 10)
       return {
         index: Number.parseInt(index, 10),
         name: name || `window-${index}`,
         active: active === '1',
+        lastActivityAt: Number.isFinite(activitySeconds) ? activitySeconds * 1000 : 0,
+        paneCount: Number.isFinite(paneCount) ? paneCount : 0,
       }
     })
 }
@@ -651,10 +662,25 @@ const handleGetWorkspaces = async (res) => {
     const activeSessions = await tmuxListSessions()
     const activeSet = new Set(activeSessions)
 
-    const workspaces = (workspacesData.workspaces || []).map((ws) => ({
+    const configuredWorkspaces = workspacesData.workspaces || []
+    const configuredIds = new Set(configuredWorkspaces.map((workspace) => workspace.id))
+    const workspaces = configuredWorkspaces.map((ws) => ({
       ...ws,
       active: activeSet.has(ws.id),
     }))
+
+    activeSessions.forEach((sessionId) => {
+      if (configuredIds.has(sessionId)) {
+        return
+      }
+      workspaces.push({
+        id: sessionId,
+        name: formatDiscoveredWorkspaceName(sessionId),
+        description: 'Discovered tmux session',
+        active: true,
+        discovered: true,
+      })
+    })
 
     respond(res, 200, { workspaces, settings: workspacesData.settings || {} })
   } catch (error) {
