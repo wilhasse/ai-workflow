@@ -18,6 +18,7 @@ import signal
 import sys
 import threading
 import time
+import socket
 
 CONFIG_FILE = os.path.expanduser("~/ai-workflow/workspace-switcher/workspaces.json")
 REFRESH_INTERVAL = 2000  # ms
@@ -1011,7 +1012,7 @@ class WorkspaceSwitcher(Gtk.Window):
 
         # SSH health checker
         self.health_checker = SSHHealthChecker(self._on_host_health_changed)
-        self.health_checker.set_hosts(self.hosts)
+        self.health_checker.set_hosts(self._remote_health_hosts())
 
         # Main container
         main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
@@ -1065,7 +1066,7 @@ class WorkspaceSwitcher(Gtk.Window):
         main_box.pack_start(Gtk.Separator(), False, False, 4)
 
         # Host tab bar
-        self.host_tab_bar = HostTabBar(self.hosts, self._on_host_tab_selected)
+        self.host_tab_bar = HostTabBar(self._display_hosts(), self._on_host_tab_selected)
         main_box.pack_start(self.host_tab_bar, False, False, 0)
 
         # Separator
@@ -1121,6 +1122,106 @@ class WorkspaceSwitcher(Gtk.Window):
         self.connect('key-press-event', self.on_key_press)
         self.connect('delete-event', self.on_close)
 
+    def _extract_ssh_hostname(self, ssh_target):
+        if not ssh_target:
+            return None
+        target = str(ssh_target).strip().split()[0]
+        if '@' in target:
+            target = target.rsplit('@', 1)[1]
+        if ':' in target and target.count(':') == 1:
+            target = target.split(':', 1)[0]
+        return target.strip('[]') or None
+
+    def _local_host_tokens(self):
+        tokens = {'localhost', '127.0.0.1', '::1'}
+        for value in (socket.gethostname(), socket.getfqdn()):
+            if value:
+                tokens.add(value)
+                tokens.add(value.split('.')[0])
+        try:
+            result = subprocess.run(['hostname', '-I'], capture_output=True, text=True, timeout=2)
+            if result.returncode == 0:
+                tokens.update(item for item in result.stdout.split() if item)
+        except Exception:
+            pass
+        return tokens
+
+    def _host_points_to_local(self, host):
+        hostname = self._extract_ssh_hostname(host.get('ssh'))
+        if not hostname:
+            return False
+        if hostname in self._local_host_tokens():
+            return True
+        try:
+            resolved = socket.gethostbyname_ex(hostname)
+            return any(address in self._local_host_tokens() for address in resolved[2])
+        except Exception:
+            return False
+
+    def _display_hosts(self):
+        """Hosts shown in the UI, with self SSH aliases folded into Local."""
+        display_hosts = []
+        local_name = self._local_display_host_name()
+        for host in self.hosts:
+            host_id = host.get('id', 'local')
+            if host_id != 'local' and host.get('ssh') and self._host_points_to_local(host):
+                continue
+            if host_id == 'local':
+                visible_host = dict(host)
+                visible_host['name'] = local_name
+                display_hosts.append(visible_host)
+            else:
+                display_hosts.append(host)
+        return display_hosts
+
+    def _remote_health_hosts(self):
+        """Remote hosts to health-check; self aliases do not need SSH checks."""
+        return [
+            host for host in self.hosts
+            if host.get('ssh') and not self._host_points_to_local(host)
+        ]
+
+    def _self_host_ids(self):
+        return {
+            host.get('id') for host in self.hosts
+            if host.get('id') != 'local' and host.get('ssh') and self._host_points_to_local(host)
+        }
+
+    def _workspace_matches_host(self, workspace, host_id):
+        workspace_host = workspace.get('host', 'local')
+        if workspace_host == host_id:
+            return True
+        if host_id == 'local' and workspace_host in self._self_host_ids():
+            return True
+        if host_id == 'local' and workspace_host == 'local' and not self._self_host_ids():
+            return True
+        return False
+
+    def _workspaces_for_host(self, host_id):
+        return [
+            workspace for workspace in self.config.get('workspaces', [])
+            if self._workspace_matches_host(workspace, host_id)
+        ]
+
+    def _workspace_for_session(self, host_id, session_name):
+        workspaces = self.config.get('workspaces', [])
+        for workspace in workspaces:
+            if self._workspace_matches_host(workspace, host_id) and workspace.get('id') == session_name:
+                return workspace
+        for workspace in workspaces:
+            if workspace.get('id') == session_name:
+                return workspace
+        return None
+
+    def _local_display_host_name(self):
+        for host in self.hosts:
+            if host.get('id') == 'local':
+                continue
+            if host.get('ssh') and self._host_points_to_local(host):
+                return host.get('name') or host.get('id') or 'Local'
+        local_host = next((host for host in self.hosts if host.get('id') == 'local'), None)
+        return (local_host or {}).get('name') or 'Local'
+
     def on_key_press(self, widget, event):
         """Open all-host terminal switcher with Ctrl+Enter."""
         state = event.state & Gtk.accelerator_get_default_mod_mask()
@@ -1140,24 +1241,15 @@ class WorkspaceSwitcher(Gtk.Window):
 
     def build_terminal_switcher_entries(self):
         """Build all-host tmux window entries using the web UI row format."""
-        workspaces = self.config.get('workspaces', [])
-        workspace_by_host_session = {
-            (ws.get('host', 'local'), ws['id']): ws for ws in workspaces
-        }
-        workspace_by_session = {}
-        for ws in workspaces:
-            workspace_by_session.setdefault(ws['id'], ws)
         entries = []
 
-        for host in self.hosts:
+        for host in self._display_hosts():
             host_id = host.get('id', 'local')
             host_name = host.get('name', host_id)
             windows = self._get_windows_for_host(host_id, host)
             for window in windows:
                 session_name = window['session_name']
-                workspace = workspace_by_host_session.get((host_id, session_name))
-                if workspace is None:
-                    workspace = workspace_by_session.get(session_name)
+                workspace = self._workspace_for_session(host_id, session_name)
                 discovered = workspace is None
                 workspace_name = workspace.get('name') if workspace else self._format_discovered_workspace_name(session_name)
                 workspace_description = workspace.get('description', '') if workspace else 'Discovered tmux session'
@@ -1368,15 +1460,14 @@ class WorkspaceSwitcher(Gtk.Window):
         self.host_tab_bar.update_health(host_id, reachable)
 
     def _update_host_workspace_counts(self):
-        """Update workspace count badges on host tabs"""
-        workspaces = self.config.get('workspaces', [])
-        counts = {}
-        for ws in workspaces:
-            host = ws.get('host', 'local')
-            counts[host] = counts.get(host, 0) + 1
-
-        for host in self.hosts:
-            self.host_tab_bar.update_workspace_count(host['id'], counts.get(host['id'], 0))
+        """Update workspace count badges on host tabs."""
+        for host in self._display_hosts():
+            host_id = host.get('id', 'local')
+            configured = self._workspaces_for_host(host_id)
+            configured_ids = {workspace['id'] for workspace in configured}
+            sessions = self._get_sessions_for_host(host_id, host)
+            discovered_count = len([name for name in sessions if name not in configured_ids])
+            self.host_tab_bar.update_workspace_count(host_id, len(configured) + discovered_count)
 
     def on_settings_clicked(self, button):
         """Show settings dialog"""
@@ -1391,8 +1482,8 @@ class WorkspaceSwitcher(Gtk.Window):
 
             # Reload hosts
             self.hosts = self.config['hosts']
-            self.host_tab_bar.update_hosts(self.hosts)
-            self.health_checker.set_hosts(self.hosts)
+            self.host_tab_bar.update_hosts(self._display_hosts())
+            self.health_checker.set_hosts(self._remote_health_hosts())
             self._update_host_workspace_counts()
 
         dialog.destroy()
@@ -1544,16 +1635,35 @@ class WorkspaceSwitcher(Gtk.Window):
 
         # Load config
         self.config = self._load_full_config()
-        workspaces = self.config.get('workspaces', [])
-
-        # Filter by current host
-        workspaces = [ws for ws in workspaces if ws.get('host', 'local') == self._current_host]
+        visible_hosts = self._display_hosts()
+        visible_host_ids = {host.get('id', 'local') for host in visible_hosts}
+        if self._current_host not in visible_host_ids:
+            self._current_host = 'local'
+            self.host_tab_bar._active_host = 'local'
+            self.host_tab_bar._update_active_style()
 
         # Get host info
-        host_info = next((h for h in self.hosts if h['id'] == self._current_host), None)
+        host_info = next((h for h in visible_hosts if h['id'] == self._current_host), None)
 
         # Get tmux session info
         sessions = self._get_sessions_for_host(self._current_host, host_info)
+
+        # Configured workspaces plus active discovered tmux sessions for this host.
+        workspaces = list(self._workspaces_for_host(self._current_host))
+        configured_ids = {workspace['id'] for workspace in workspaces}
+        for session_name, session_info in sorted(sessions.items()):
+            if session_name in configured_ids:
+                continue
+            workspaces.append({
+                'id': session_name,
+                'name': self._format_discovered_workspace_name(session_name),
+                'path': '~',
+                'color': '#95a5a6',
+                'icon': 'terminal',
+                'description': 'Discovered tmux session',
+                'host': self._current_host,
+                'discovered': True,
+            })
         current_host_activities = self.last_host_activity.get(self._current_host, {})
         current_host_fingerprints = self.last_host_fingerprint.get(self._current_host, {})
         self.last_session_activity = {

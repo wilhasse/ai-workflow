@@ -38,7 +38,7 @@
       "color": "#3498db",
       "icon": "folder",
       "description": "",
-      "host": "local"
+      "host": "vm10"
     },
     {
       "id": "olos",
@@ -47,7 +47,7 @@
       "color": "#3498db",
       "icon": "folder",
       "description": "",
-      "host": "local"
+      "host": "vm10"
     },
     {
       "id": "fusion",
@@ -65,7 +65,7 @@
       "color": "#3498db",
       "icon": "folder",
       "description": "",
-      "host": "local"
+      "host": "vm10"
     },
     {
       "id": "cslog-crm",
@@ -74,7 +74,7 @@
       "color": "#3498db",
       "icon": "folder",
       "description": "",
-      "host": "local"
+      "host": "vm10"
     },
     {
       "id": "doris-rust",
@@ -92,7 +92,7 @@
       "color": "#3498db",
       "icon": "folder",
       "description": "",
-      "host": "local"
+      "host": "vm10"
     },
     {
       "id": "aspect",
@@ -101,7 +101,7 @@
       "color": "#3498db",
       "icon": "folder",
       "description": "",
-      "host": "local"
+      "host": "vm10"
     },
     {
       "id": "cslog-db",
@@ -146,7 +146,7 @@
       "color": "#3498db",
       "icon": "folder",
       "description": "",
-      "host": "local"
+      "host": "vm10"
     }
   ],
   "settings": {
