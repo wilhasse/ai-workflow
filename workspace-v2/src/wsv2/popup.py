@@ -10,7 +10,7 @@ gi.require_version("Gdk", "3.0")
 
 from gi.repository import Gdk, GLib, Gtk, Pango
 
-from .actions import WorkspaceActions, WorkspaceStatus
+from .actions import TerminalStatus, WorkspaceActions
 
 
 PROGRAM_CLASS = "workspace-v2-popup"
@@ -20,7 +20,7 @@ WINDOW_TITLE = "Workspace Launcher"
 
 @dataclass(slots=True)
 class PopupItem:
-    status: WorkspaceStatus
+    status: TerminalStatus
     recent_score: float
 
 
@@ -29,10 +29,7 @@ class WorkspacePopup(Gtk.Window):
         super().__init__(title=WINDOW_TITLE)
         self.actions = actions
         self.recent_scores = self.actions.state.recent_scores()
-        self.statuses = [
-            WorkspaceStatus(workspace=workspace, active=False, reachable=None)
-            for workspace in self.actions.config.workspaces
-        ]
+        self.statuses = self.actions.list_terminal_statuses()
         self.filtered_items: list[PopupItem] = []
 
         self.set_role(WINDOW_ROLE)
@@ -112,12 +109,12 @@ class WorkspacePopup(Gtk.Window):
 
     def _load_statuses_async(self) -> None:
         def worker() -> None:
-            statuses = self.actions.list_workspace_statuses()
+            statuses = self.actions.list_terminal_statuses()
             GLib.idle_add(self._apply_statuses, statuses)
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _apply_statuses(self, statuses: list[WorkspaceStatus]) -> bool:
+    def _apply_statuses(self, statuses: list[TerminalStatus]) -> bool:
         self.statuses = statuses
         self._refresh_rows()
         return False
@@ -160,21 +157,24 @@ class WorkspacePopup(Gtk.Window):
             for item in items:
                 haystack = " ".join(
                     [
-                        item.status.workspace.id,
-                        item.status.workspace.name,
-                        item.status.workspace.host.name,
-                        item.status.workspace.host_id,
-                        item.status.workspace.display_path,
+                        item.status.session_id,
+                        item.status.workspace_name,
+                        item.status.host.name,
+                        item.status.host_id,
+                        str(item.status.window_index),
+                        f"#{item.status.window_index}",
+                        item.status.window_name,
+                        item.status.display_path,
                     ]
                 ).lower()
                 if query not in haystack:
                     continue
-                workspace = item.status.workspace
-                if workspace.id == query or workspace.name.lower() == query:
+                status = item.status
+                if status.session_id == query or status.workspace_name.lower() == query or str(status.window_index) == query:
                     rank = 0
-                elif workspace.id.startswith(query) or workspace.name.lower().startswith(query):
+                elif status.session_id.startswith(query) or status.workspace_name.lower().startswith(query) or status.window_name.lower().startswith(query):
                     rank = 1
-                elif workspace.host_id.startswith(query) or workspace.host.name.lower().startswith(query):
+                elif status.host_id.startswith(query) or status.host.name.lower().startswith(query):
                     rank = 2
                 else:
                     rank = 3
@@ -184,25 +184,28 @@ class WorkspacePopup(Gtk.Window):
                 key=lambda pair: (
                     pair[0],
                     -pair[1].recent_score,
+                    -(pair[1].status.activity or 0),
                     not pair[1].status.active,
-                    pair[1].status.workspace.name.lower(),
+                    pair[1].status.workspace_name.lower(),
                 )
             )
             return [item for _, item in scored]
 
         items.sort(
             key=lambda item: (
+                -(item.status.activity or 0),
                 -item.recent_score,
                 not item.status.active,
-                item.status.workspace.host_id,
-                item.status.workspace.name.lower(),
+                item.status.host_id,
+                item.status.workspace_name.lower(),
+                item.status.window_index,
             )
         )
         return items
 
     def _build_row(self, item: PopupItem) -> Gtk.ListBoxRow:
         row = Gtk.ListBoxRow()
-        row.workspace_target = item.status.workspace.target
+        row.workspace_target = item.status.target
 
         wrapper = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
 
@@ -212,9 +215,11 @@ class WorkspacePopup(Gtk.Window):
         top.pack_start(dot, False, False, 0)
 
         title = Gtk.Label()
-        workspace = item.status.workspace
+        status = item.status
         title.set_markup(
-            f'<span foreground="#f9fafb"><b>{GLib.markup_escape_text(workspace.name)}</b></span>'
+            f'<span foreground="#f9fafb"><b>{GLib.markup_escape_text(status.workspace_name)}</b></span>'
+            f' <span foreground="#f59e0b">#{status.window_index}</span>'
+            f' <span foreground="#d1d5db">{GLib.markup_escape_text(status.window_name)}</span>'
         )
         title.set_xalign(0)
         title.set_ellipsize(Pango.EllipsizeMode.END)
@@ -222,15 +227,19 @@ class WorkspacePopup(Gtk.Window):
 
         host = Gtk.Label()
         host.set_markup(
-            f'<span foreground="#93c5fd">{GLib.markup_escape_text(workspace.host.name)}</span>'
+            f'<span foreground="#93c5fd">{GLib.markup_escape_text(status.host.name)}</span>'
         )
         host.set_xalign(1)
         top.pack_end(host, False, False, 0)
         wrapper.pack_start(top, False, False, 0)
 
         detail = Gtk.Label()
-        detail_parts = [workspace.id, workspace.display_path]
-        if item.recent_score:
+        detail_parts = [status.session_id, status.display_path]
+        if status.discovered:
+            detail_parts.insert(0, "discovered")
+        if status.activity:
+            detail_parts.insert(0, "tmux-active")
+        elif item.recent_score:
             detail_parts.insert(0, "recent")
         detail.set_markup(
             '<span foreground="#9ca3af" size="small">'

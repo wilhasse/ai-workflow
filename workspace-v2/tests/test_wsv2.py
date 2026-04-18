@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from wsv2.actions import build_attach_command, build_terminal_command, build_workspace_command
+from wsv2.actions import TerminalStatus, build_attach_command, build_terminal_command, build_workspace_command
 from wsv2.catalog import WorkspaceConfigError, load_config
 from wsv2.cli import build_popup_unavailable_message, can_launch_gui_popup, detect_popup_surface
 from wsv2.state import LauncherState
@@ -215,14 +215,30 @@ class TuiFilterTests(unittest.TestCase):
         items = build_tui_items([
             status for status in []
         ])
+        mysql = config.resolve_workspace('mysql')
+        dbtools = config.resolve_workspace('vm9:dbtools')
         statuses = [
-            type('Status', (), {'workspace': config.resolve_workspace('mysql'), 'active': False, 'reachable': True})(),
-            type('Status', (), {'workspace': config.resolve_workspace('vm9:dbtools'), 'active': True, 'reachable': True})(),
+            TerminalStatus(
+                host_id=mysql.host_id,
+                host=mysql.host,
+                session_id=mysql.id,
+                window_index=1,
+                window_name='bash',
+                workspace=mysql,
+            ),
+            TerminalStatus(
+                host_id=dbtools.host_id,
+                host=dbtools.host,
+                session_id=dbtools.id,
+                window_index=2,
+                window_name='task-api',
+                workspace=dbtools,
+            ),
         ]
         items = build_tui_items(statuses)
         filtered = filter_tui_items(items, 'db')
         self.assertEqual(len(filtered), 1)
-        self.assertEqual(filtered[0].status.workspace.id, 'dbtools')
+        self.assertEqual(filtered[0].status.session_id, 'dbtools')
 
 
 class OutageDrillTests(unittest.TestCase):

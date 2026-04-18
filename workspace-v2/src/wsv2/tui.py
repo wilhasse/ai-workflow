@@ -5,70 +5,81 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from .actions import WorkspaceActions, WorkspaceStatus
+from .actions import TerminalStatus, WorkspaceActions
 
 
 @dataclass(slots=True)
 class TuiItem:
-    status: WorkspaceStatus
+    status: TerminalStatus
     searchable_text: str
 
 
-def build_tui_items(statuses: Iterable[WorkspaceStatus]) -> list[TuiItem]:
+def build_tui_items(statuses: Iterable[TerminalStatus]) -> list[TuiItem]:
     items = []
     for status in statuses:
-        workspace = status.workspace
-        searchable = " ".join(
-            [
-                workspace.id,
-                workspace.name,
-                workspace.host_id,
-                workspace.host.name,
-                workspace.display_path,
-            ]
-        ).lower()
+        searchable = status.searchable_text
         items.append(TuiItem(status=status, searchable_text=searchable))
     return items
 
 
 def filter_tui_items(items: list[TuiItem], query: str) -> list[TuiItem]:
     if not query:
-        return items
+        return sorted(items, key=_sort_key)
     normalized = query.lower()
     ranked: list[tuple[int, TuiItem]] = []
     for item in items:
-        workspace = item.status.workspace
+        status = item.status
         if normalized not in item.searchable_text:
             continue
-        if workspace.id == normalized or workspace.name.lower() == normalized:
+        if normalized in {status.session_id.lower(), status.workspace_name.lower(), str(status.window_index)}:
             rank = 0
-        elif workspace.id.startswith(normalized) or workspace.name.lower().startswith(normalized):
+        elif (
+            status.session_id.lower().startswith(normalized)
+            or status.workspace_name.lower().startswith(normalized)
+            or status.window_name.lower().startswith(normalized)
+        ):
             rank = 1
-        elif workspace.host_id.startswith(normalized) or workspace.host.name.lower().startswith(normalized):
+        elif status.host_id.lower().startswith(normalized) or status.host.name.lower().startswith(normalized):
             rank = 2
         else:
             rank = 3
         ranked.append((rank, item))
-    ranked.sort(key=lambda pair: (pair[0], not pair[1].status.active, pair[1].status.workspace.name.lower()))
+    ranked.sort(key=lambda pair: (pair[0], _sort_key(pair[1])))
     return [item for _, item in ranked]
 
 
-def format_tui_row(status: WorkspaceStatus, width: int) -> str:
-    workspace = status.workspace
+def _sort_key(item: TuiItem):
+    status = item.status
+    return (
+        -(status.activity or 0),
+        not status.active,
+        status.host.name.lower(),
+        status.workspace_name.lower(),
+        status.window_index,
+    )
+
+
+def format_tui_row(status: TerminalStatus, width: int) -> str:
     if status.reachable is False:
         dot = '!'
     elif status.active:
         dot = '*'
     else:
         dot = '.'
-    row = f"{dot} {workspace.name} [{workspace.host.name}] {workspace.id} {workspace.display_path}"
+    tab = f"#{status.window_index}" if status.window_index > 0 else "--"
+    discovered = " *" if status.discovered else ""
+    activity = "active" if status.activity else "inactive"
+    row = (
+        f"{dot} {status.host.name} / {status.workspace_name}{discovered} "
+        f"· {tab} {status.window_name} [{activity}]"
+    )
     return row[: max(0, width - 1)]
 
 
 class WorkspaceTui:
     def __init__(self, actions: WorkspaceActions) -> None:
         self.actions = actions
-        self.items = build_tui_items(actions.list_workspace_statuses())
+        self.items = build_tui_items(actions.list_terminal_statuses())
         self.query = ''
         self.index = 0
         self.scroll = 0
@@ -91,7 +102,7 @@ class WorkspaceTui:
                 return None
             if key in (curses.KEY_ENTER, 10, 13):
                 if filtered:
-                    return filtered[self.index].status.workspace.target
+                    return filtered[self.index].status.target
                 continue
             if key == curses.KEY_UP:
                 self.index = max(0, self.index - 1)
@@ -130,7 +141,7 @@ class WorkspaceTui:
         stdscr.addnstr(1, 0, f'Search: {self.query}', width - 1)
 
         if not filtered:
-            stdscr.addnstr(list_top, 0, 'No matching workspaces', width - 1)
+            stdscr.addnstr(list_top, 0, 'No matching tmux windows', width - 1)
         else:
             for row_offset, item in enumerate(filtered[self.scroll:self.scroll + visible_rows]):
                 row = list_top + row_offset

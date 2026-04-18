@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tempfile
 
-from .actions import WorkspaceActions, build_workspace_command
+from .actions import WorkspaceActions
 from .tui import select_workspace_tui, write_selected_target
 
 
@@ -175,18 +175,23 @@ def main(argv: list[str] | None = None) -> int:
         return run_tui(actions, select_only=args.select_only, output_path=args.output)
 
     if command == 'list':
-        statuses = actions.list_workspace_statuses()
+        statuses = actions.list_terminal_statuses()
         if args.json:
             payload = [
                 {
-                    'id': status.workspace.id,
-                    'name': status.workspace.name,
-                    'host': status.workspace.host_id,
-                    'hostName': status.workspace.host.name,
-                    'path': status.workspace.path,
+                    'session': status.session_id,
+                    'workspaceName': status.workspace_name,
+                    'host': status.host_id,
+                    'hostName': status.host.name,
+                    'windowIndex': status.window_index,
+                    'windowName': status.window_name,
+                    'windowActive': status.window_active,
+                    'activity': status.activity,
+                    'paneCount': status.pane_count,
                     'active': status.active,
                     'reachable': status.reachable,
-                    'target': status.workspace.target,
+                    'discovered': status.discovered,
+                    'target': status.target,
                 }
                 for status in statuses
             ]
@@ -200,11 +205,12 @@ def main(argv: list[str] | None = None) -> int:
                 dot = '*'
             else:
                 dot = '.'
+            tab = f"#{status.window_index}" if status.window_index > 0 else '--'
+            discovered = ' *' if status.discovered else ''
             print(
-                f"{dot} {status.workspace.name:<18} "
-                f"[{status.workspace.host.name}] "
-                f"{status.workspace.id:<18} "
-                f"{status.workspace.display_path}"
+                f"{dot} {status.host.name:<14} / {status.workspace_name:<18}{discovered} "
+                f"{tab:<4} {status.window_name:<18} "
+                f"{status.target}"
             )
         return 0
 
@@ -224,13 +230,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if command == 'command':
-        workspace = actions.resolve_workspace(args.target)
-        print(
-            build_workspace_command(
-                workspace,
-                run_local=actions.config.host_runs_local(workspace.host_id),
-            )
-        )
+        print(actions.workspace_command(args.target, within_tmux=False))
         return 0
 
     parser.print_help()

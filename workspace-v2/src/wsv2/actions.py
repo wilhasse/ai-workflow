@@ -8,7 +8,7 @@ import shutil
 import subprocess
 from typing import Iterable
 
-from .catalog import WorkspaceConfigError, WorkspaceRecord, load_config
+from .catalog import HostRecord, WorkspaceConfigError, WorkspaceRecord, load_config
 from .state import LauncherState
 
 
@@ -21,6 +21,94 @@ class WorkspaceStatus:
     @property
     def recent_key(self) -> str:
         return self.workspace.target
+
+
+@dataclass(slots=True, frozen=True)
+class TerminalStatus:
+    host_id: str
+    host: HostRecord
+    session_id: str
+    window_index: int
+    window_name: str
+    window_active: bool = False
+    activity: int = 0
+    pane_count: int = 0
+    reachable: bool | None = True
+    workspace: WorkspaceRecord | None = None
+
+    @property
+    def discovered(self) -> bool:
+        return self.workspace is None
+
+    @property
+    def workspace_name(self) -> str:
+        if self.workspace:
+            return self.workspace.name
+        return _format_discovered_name(self.session_id)
+
+    @property
+    def display_path(self) -> str:
+        if self.workspace:
+            return self.workspace.display_path
+        return "Discovered tmux session"
+
+    @property
+    def active(self) -> bool:
+        return self.reachable is not False and self.window_index > 0
+
+    @property
+    def target(self) -> str:
+        if self.window_index <= 0 and self.workspace:
+            return self.workspace.target
+        return f"{self.host_id}:{self.session_id}#{self.window_index}"
+
+    @property
+    def recent_key(self) -> str:
+        return self.target
+
+    @property
+    def searchable_text(self) -> str:
+        return " ".join(
+            [
+                self.host_id,
+                self.host.name,
+                self.session_id,
+                self.workspace_name,
+                str(self.window_index),
+                f"#{self.window_index}",
+                self.window_name,
+                self.display_path,
+            ]
+        ).lower()
+
+
+@dataclass(slots=True, frozen=True)
+class TerminalTarget:
+    host_id: str | None
+    session_id: str
+    window_index: int | None
+
+
+def _format_discovered_name(session_id: str) -> str:
+    parts = [part for part in str(session_id).replace("_", "-").split("-") if part]
+    return " ".join(part[:1].upper() + part[1:] for part in parts) or str(session_id)
+
+
+def parse_terminal_target(target: str) -> TerminalTarget | None:
+    if "#" not in target:
+        return None
+    left, window_raw = target.rsplit("#", 1)
+    try:
+        window_index = int(window_raw)
+    except ValueError:
+        return None
+    host_id = None
+    session_id = left
+    if ":" in left:
+        host_id, session_id = left.split(":", 1)
+    if not session_id:
+        return None
+    return TerminalTarget(host_id=host_id or None, session_id=session_id, window_index=window_index)
 
 
 def build_attach_command(
@@ -49,6 +137,41 @@ def build_attach_command(
     remote_tmux_cmd = (
         f"tmux attach -t {session_name} || "
         f"tmux new -s {session_name} -c {work_dir}"
+    )
+    return (
+        "ssh -t -o ServerAliveInterval=60 -o ServerAliveCountMax=3 "
+        f"{ssh_target} {shlex.quote(remote_tmux_cmd)}"
+    )
+
+
+def build_terminal_attach_command(
+    host: HostRecord,
+    *,
+    session_id: str,
+    window_index: int | None = None,
+    run_local: bool,
+    within_tmux: bool = False,
+) -> str:
+    session_name = shlex.quote(session_id)
+    target = shlex.quote(f"{session_id}:{window_index}") if window_index is not None else session_name
+
+    if run_local and within_tmux:
+        return (
+            f"tmux has-session -t {session_name} 2>/dev/null || "
+            f"tmux new-session -d -s {session_name}; "
+            f"tmux switch-client -t {target}"
+        )
+
+    if run_local:
+        return (
+            f"tmux select-window -t {target} 2>/dev/null || true; "
+            f"tmux attach-session -t {session_name}"
+        )
+
+    ssh_target = shlex.quote(host.ssh or "")
+    remote_tmux_cmd = (
+        f"tmux select-window -t {target} 2>/dev/null || true; "
+        f"tmux attach -t {session_name}"
     )
     return (
         "ssh -t -o ServerAliveInterval=60 -o ServerAliveCountMax=3 "
@@ -123,7 +246,98 @@ class WorkspaceActions:
             for workspace in self.config.workspaces
         ]
 
+    def list_terminal_statuses(self) -> list[TerminalStatus]:
+        statuses: list[TerminalStatus] = []
+        workspace_lookup = {(workspace.host_id, workspace.id): workspace for workspace in self.config.workspaces}
+        workspace_by_session: dict[str, WorkspaceRecord] = {}
+        for workspace in self.config.workspaces:
+            workspace_by_session.setdefault(workspace.id, workspace)
+
+        for host in self.config.hosts:
+            if self.config.host_runs_local(host):
+                windows, reachable = self._list_local_windows(), True
+            else:
+                windows, reachable = self._list_remote_windows(host.ssh or "")
+            if reachable is False:
+                for workspace in [item for item in self.config.workspaces if item.host_id == host.id]:
+                    statuses.append(
+                        TerminalStatus(
+                            host_id=host.id,
+                            host=host,
+                            session_id=workspace.id,
+                            window_index=0,
+                            window_name=workspace.name,
+                            reachable=False,
+                            workspace=workspace,
+                        )
+                    )
+                continue
+
+            seen_configured: set[str] = set()
+            for window in windows:
+                workspace = workspace_lookup.get((host.id, window["session_id"]))
+                if workspace is None:
+                    workspace = workspace_by_session.get(window["session_id"])
+                if workspace:
+                    seen_configured.add(workspace.id)
+                statuses.append(
+                    TerminalStatus(
+                        host_id=host.id,
+                        host=host,
+                        session_id=window["session_id"],
+                        window_index=window["window_index"],
+                        window_name=window["window_name"],
+                        window_active=window["window_active"],
+                        activity=window["activity"],
+                        pane_count=window["pane_count"],
+                        reachable=True,
+                        workspace=workspace,
+                    )
+                )
+
+            # Keep inactive configured workspaces visible for launch/create behavior.
+            active_sessions = {window["session_id"] for window in windows}
+            for workspace in [item for item in self.config.workspaces if item.host_id == host.id]:
+                if workspace.id in active_sessions:
+                    continue
+                statuses.append(
+                    TerminalStatus(
+                        host_id=host.id,
+                        host=host,
+                        session_id=workspace.id,
+                        window_index=0,
+                        window_name=workspace.name,
+                        reachable=True,
+                        workspace=workspace,
+                    )
+                )
+
+        return sorted(
+            statuses,
+            key=lambda status: (
+                -(status.activity or 0),
+                not status.window_active,
+                status.host.name.lower(),
+                status.workspace_name.lower(),
+                status.window_index,
+            ),
+        )
+
     def workspace_command(self, target: str, *, within_tmux: bool = False) -> str:
+        terminal_target = parse_terminal_target(target)
+        if terminal_target:
+            host_id = self.config.normalize_host_id(terminal_target.host_id) or self.config.self_host_id
+            if not host_id:
+                raise WorkspaceConfigError(f"Host is required for terminal target: {target}")
+            host = self.config.get_host(host_id)
+            return build_terminal_attach_command(
+                host,
+                session_id=terminal_target.session_id,
+                window_index=terminal_target.window_index,
+                run_local=self.config.host_runs_local(host_id),
+                within_tmux=within_tmux,
+            )
+
         workspace = self.resolve_workspace(target)
         return build_attach_command(
             workspace,
@@ -132,6 +346,21 @@ class WorkspaceActions:
         )
 
     def open_workspace(self, target: str, focus_existing: bool = True) -> str:
+        terminal_target = parse_terminal_target(target)
+        if terminal_target:
+            host_id = self.config.normalize_host_id(terminal_target.host_id) or self.config.self_host_id
+            if not host_id:
+                raise WorkspaceConfigError(f"Host is required for terminal target: {target}")
+            title = f"{terminal_target.session_id}:{terminal_target.window_index}"
+            if focus_existing and self.focus_workspace_window(terminal_target.session_id):
+                self.state.mark_recent(target)
+                return "focused"
+            terminal = self._resolve_terminal()
+            command = self.workspace_command(target, within_tmux=False)
+            subprocess.Popen(build_terminal_command(terminal, command, title))
+            self.state.mark_recent(target)
+            return "launched"
+
         workspace = self.resolve_workspace(target)
         if focus_existing and self.focus_workspace_window(workspace.id):
             self.state.mark_recent(workspace.target)
@@ -144,12 +373,20 @@ class WorkspaceActions:
         return "launched"
 
     def attach_workspace(self, target: str, *, replace_process: bool = True) -> int:
-        workspace = self.resolve_workspace(target)
-        command = self.workspace_command(
-            target,
-            within_tmux=bool(os.environ.get("TMUX")) and self.config.host_runs_local(workspace.host_id),
-        )
-        self.state.mark_recent(workspace.target)
+        terminal_target = parse_terminal_target(target)
+        if terminal_target:
+            command = self.workspace_command(
+                target,
+                within_tmux=bool(os.environ.get("TMUX")),
+            )
+            self.state.mark_recent(target)
+        else:
+            workspace = self.resolve_workspace(target)
+            command = self.workspace_command(
+                target,
+                within_tmux=bool(os.environ.get("TMUX")) and self.config.host_runs_local(workspace.host_id),
+            )
+            self.state.mark_recent(workspace.target)
         if replace_process:
             os.execvp("bash", ["bash", "-lc", command])
             raise AssertionError("os.execvp should not return")
@@ -255,6 +492,80 @@ class WorkspaceActions:
             return set(), False
         return _parse_session_names(result.stdout.splitlines()), True
 
+    def _list_local_windows(self) -> list[dict]:
+        try:
+            result = subprocess.run(
+                ["tmux", "list-windows", "-a", "-F", _WINDOW_FORMAT],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                env={**os.environ, "TMUX": ""},
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            return []
+        if result.returncode not in (0, 1):
+            return []
+        return _parse_windows(result.stdout.splitlines())
+
+    def _list_remote_windows(self, ssh_target: str) -> tuple[list[dict], bool]:
+        try:
+            result = subprocess.run(
+                [
+                    "ssh",
+                    "-o",
+                    "ConnectTimeout=2",
+                    "-o",
+                    "BatchMode=yes",
+                    ssh_target,
+                    f"tmux list-windows -a -F {shlex.quote(_WINDOW_FORMAT)} 2>/dev/null || true",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=8,
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            return [], False
+        if result.returncode != 0:
+            return [], False
+        return _parse_windows(result.stdout.splitlines()), True
+
+
+_WINDOW_FORMAT = "#{session_name}|#{window_index}|#{window_name}|#{window_active}|#{window_activity}|#{window_panes}"
+
 
 def _parse_session_names(lines: Iterable[str]) -> set[str]:
     return {line.strip() for line in lines if line.strip()}
+
+
+def _parse_windows(lines: Iterable[str]) -> list[dict]:
+    windows = []
+    for line in lines:
+        if not line.strip() or "|" not in line:
+            continue
+        parts = line.split("|")
+        if len(parts) < 6:
+            continue
+        session_id, index, name, active, activity, panes = parts[:6]
+        try:
+            window_index = int(index)
+        except ValueError:
+            continue
+        try:
+            activity_value = int(activity) if activity else 0
+        except ValueError:
+            activity_value = 0
+        try:
+            pane_count = int(panes) if panes else 0
+        except ValueError:
+            pane_count = 0
+        windows.append(
+            {
+                "session_id": session_id,
+                "window_index": window_index,
+                "window_name": name or f"window-{window_index}",
+                "window_active": active == "1",
+                "activity": activity_value,
+                "pane_count": pane_count,
+            }
+        )
+    return windows
