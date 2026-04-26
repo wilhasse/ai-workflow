@@ -19,11 +19,22 @@ const DEFAULT_SHORTCUTS = [
   { id: 'ctrl-d', label: 'C-d', keys: '\x04', description: 'EOF (Ctrl+D)' },
   { id: 'ctrl-z', label: 'C-z', keys: '\x1a', description: 'Suspend (Ctrl+Z)' },
   { id: 'ctrl-l', label: 'C-l', keys: '\x0c', description: 'Clear (Ctrl+L)' },
+  { id: 'enter', label: 'Enter', keys: '\r', description: 'Enter / Return' },
+  { id: 'space', label: 'Space', keys: ' ', description: 'Space' },
+  { id: 'backspace', label: '⌫', keys: '\x7f', description: 'Backspace' },
   { id: 'tab', label: 'Tab', keys: '\t', description: 'Tab / Autocomplete' },
   { id: 'esc', label: 'Esc', keys: '\x1b', description: 'Escape' },
   { id: 'up', label: '↑', keys: '\x1b[A', description: 'Arrow Up' },
   { id: 'down', label: '↓', keys: '\x1b[B', description: 'Arrow Down' },
 ]
+
+const mergeDefaultShortcuts = (shortcuts) => {
+  const ids = new Set(shortcuts.map((shortcut) => shortcut.id))
+  return [
+    ...shortcuts,
+    ...DEFAULT_SHORTCUTS.filter((shortcut) => !ids.has(shortcut.id)),
+  ]
+}
 
 const loadShortcuts = () => {
   if (typeof window === 'undefined') return DEFAULT_SHORTCUTS
@@ -32,7 +43,7 @@ const loadShortcuts = () => {
     if (stored) {
       const parsed = JSON.parse(stored)
       if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed
+        return mergeDefaultShortcuts(parsed)
       }
     }
   } catch (e) {
@@ -67,6 +78,19 @@ const hasRenderableOutput = (value) => {
 const resolveFontSize = (value) => {
   const nextValue = Number(value)
   return Number.isFinite(nextValue) && nextValue >= MIN_FONT_SIZE ? nextValue : DEFAULT_FONT_SIZE
+}
+
+const configureMobileTextarea = (term, container) => {
+  const helperTextarea = term.textarea || container.querySelector('.xterm-helper-textarea')
+  if (!helperTextarea) {
+    return
+  }
+  helperTextarea.setAttribute('autocomplete', 'off')
+  helperTextarea.setAttribute('autocorrect', 'off')
+  helperTextarea.setAttribute('autocapitalize', 'off')
+  helperTextarea.setAttribute('spellcheck', 'false')
+  helperTextarea.setAttribute('enterkeyhint', 'enter')
+  helperTextarea.setAttribute('inputmode', 'text')
 }
 
 function TerminalViewer({
@@ -170,8 +194,10 @@ function TerminalViewer({
     term.loadAddon(fitAddon)
     term.loadAddon(webLinksAddon)
     term.open(container)
+    configureMobileTextarea(term, container)
     let resizeFrame = null
     let resizeRetry = null
+    let textareaConfigRetry = null
 
     const fitTerminal = () => {
       if (monitorMode) {
@@ -211,6 +237,9 @@ function TerminalViewer({
     if (!monitorMode) {
       scheduleFit()
       term.focus()
+      textareaConfigRetry = window.setTimeout(() => {
+        configureMobileTextarea(term, container)
+      }, 200)
     }
     termRef.current = term
     fitAddonRef.current = fitAddon
@@ -318,6 +347,17 @@ function TerminalViewer({
         })
 
     let cleanupResize = () => {}
+    const focusTerminal = () => {
+      if (monitorMode) {
+        return
+      }
+      configureMobileTextarea(term, container)
+      term.focus()
+    }
+    container.addEventListener('click', focusTerminal)
+    container.addEventListener('pointerdown', focusTerminal)
+    container.addEventListener('touchstart', focusTerminal, { passive: true })
+
     if (typeof window !== 'undefined' && 'ResizeObserver' in window) {
       const observer = new window.ResizeObserver(() => {
         if (monitorMode) {
@@ -347,6 +387,12 @@ function TerminalViewer({
       if (resizeRetry) {
         window.clearTimeout(resizeRetry)
       }
+      if (textareaConfigRetry) {
+        window.clearTimeout(textareaConfigRetry)
+      }
+      container.removeEventListener('click', focusTerminal)
+      container.removeEventListener('pointerdown', focusTerminal)
+      container.removeEventListener('touchstart', focusTerminal)
       dataDisposable.dispose()
       cleanupResize()
       if (

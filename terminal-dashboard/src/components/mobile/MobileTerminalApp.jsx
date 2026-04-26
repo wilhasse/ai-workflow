@@ -12,6 +12,14 @@ const VOICE_SERVICES = {
   DEEPGRAM: 'deepgram',
 }
 const DEEPGRAM_API_KEY = import.meta.env.VITE_DEEPGRAM_API_KEY || ''
+const RECORDER_MIME_TYPES = [
+  'audio/webm;codecs=opus',
+  'audio/webm',
+  'audio/mp4',
+  'audio/aac',
+  'audio/ogg;codecs=opus',
+  'audio/ogg',
+]
 
 const resolveStoredFontSize = () => {
   if (typeof window === 'undefined') return DEFAULT_FONT_SIZE
@@ -28,6 +36,44 @@ const detectVoiceApiBase = () => {
     return `${protocol}//${hostname}:8000`
   }
   return `${origin}/api/whisper`
+}
+
+const getSpeechRecognitionConstructor = () => {
+  if (typeof window === 'undefined') return null
+  return window.SpeechRecognition || window.webkitSpeechRecognition || null
+}
+
+const normalizeWhisperLanguage = (language) => {
+  if (!language) return ''
+  return language.split('-')[0].toLowerCase()
+}
+
+const pickRecorderMimeType = () => {
+  if (typeof window === 'undefined' || typeof window.MediaRecorder === 'undefined') {
+    return ''
+  }
+  if (typeof window.MediaRecorder.isTypeSupported !== 'function') {
+    return ''
+  }
+  return RECORDER_MIME_TYPES.find((mimeType) => window.MediaRecorder.isTypeSupported(mimeType)) || ''
+}
+
+const extensionForMimeType = (mimeType) => {
+  if (mimeType.includes('mp4')) return 'm4a'
+  if (mimeType.includes('aac')) return 'aac'
+  if (mimeType.includes('ogg')) return 'ogg'
+  return 'webm'
+}
+
+const formatRecordingDetails = ({ recordingMs, size } = {}) => {
+  const details = []
+  if (Number.isFinite(recordingMs) && recordingMs > 0) {
+    details.push(`${Math.round(recordingMs / 100) / 10}s`)
+  }
+  if (Number.isFinite(size) && size > 0) {
+    details.push(`${Math.max(1, Math.round(size / 1024))} KB`)
+  }
+  return details.length ? ` (${details.join(', ')})` : ''
 }
 
 const buildMobileSocketUrl = (workspace, windowIndex) => {
@@ -246,8 +292,10 @@ function MobileTerminalApp() {
   const [voicePending, setVoicePending] = useState(false)
   const terminalBridgeRef = useRef(null)
   const voiceRecorderRef = useRef(null)
+  const voiceRecognitionRef = useRef(null)
   const voiceStreamRef = useRef(null)
   const voiceChunksRef = useRef([])
+  const voiceRecordingStartedAtRef = useRef(0)
 
   const workspaces = useMemo(() => hosts.flatMap((host) => host.workspaces || []), [hosts])
   const selectedWorkspace = useMemo(
@@ -312,6 +360,18 @@ function MobileTerminalApp() {
   }, [isTablet])
 
   const cleanupVoiceResources = useCallback(() => {
+    if (voiceRecognitionRef.current) {
+      const recognition = voiceRecognitionRef.current
+      recognition.onresult = null
+      recognition.onerror = null
+      recognition.onend = null
+      try {
+        recognition.abort()
+      } catch {
+        // ignore
+      }
+      voiceRecognitionRef.current = null
+    }
     if (voiceRecorderRef.current) {
       try {
         voiceRecorderRef.current.stop()
@@ -325,14 +385,16 @@ function MobileTerminalApp() {
       voiceStreamRef.current = null
     }
     voiceChunksRef.current = []
+    voiceRecordingStartedAtRef.current = 0
   }, [])
 
-  const sendVoiceFileForTranscription = useCallback(async (blob) => {
+  const sendVoiceFileForTranscription = useCallback(async (blob, recordingMeta = {}) => {
     setVoicePending(true)
     setVoiceStatus('Transcribing...')
     setVoiceError('')
     try {
       let transcriptText = ''
+      const audioType = blob.type || 'audio/webm'
       if (voiceService === VOICE_SERVICES.DEEPGRAM && DEEPGRAM_API_KEY) {
         const deepgramResponse = await fetch(
           `https://api.deepgram.com/v1/listen?model=nova-2&language=${voiceLanguage}&punctuate=true`,
@@ -340,7 +402,7 @@ function MobileTerminalApp() {
             method: 'POST',
             headers: {
               Authorization: `Token ${DEEPGRAM_API_KEY}`,
-              'Content-Type': 'audio/webm',
+              'Content-Type': audioType,
             },
             body: blob,
           },
@@ -352,23 +414,33 @@ function MobileTerminalApp() {
         transcriptText = deepgramData.results?.channels?.[0]?.alternatives?.[0]?.transcript ?? ''
       } else {
         const formData = new FormData()
-        formData.append('file', blob, 'recording.webm')
-        formData.append('language', voiceLanguage)
+        formData.append('file', blob, `recording.${extensionForMimeType(audioType)}`)
+        const whisperLanguage = normalizeWhisperLanguage(voiceLanguage)
+        if (whisperLanguage) {
+          formData.append('language', whisperLanguage)
+        }
         formData.append('translate', 'false')
+        formData.append('vad_filter', 'false')
         const base = detectVoiceApiBase().replace(/\/$/, '')
         const response = await fetch(`${base}/transcribe`, {
           method: 'POST',
           body: formData,
         })
         if (!response.ok) {
-          throw new Error('Transcription service unavailable')
+          const message = await response.text()
+          throw new Error(message || `Transcription service unavailable (${response.status})`)
         }
         const data = await response.json()
         transcriptText = data.text ?? ''
       }
 
-      setVoiceTranscript(transcriptText)
-      setVoiceStatus(transcriptText.trim() ? 'Ready to send' : 'No speech detected')
+      const trimmedTranscript = transcriptText.trim()
+      setVoiceTranscript(trimmedTranscript)
+      setVoiceStatus(
+        trimmedTranscript
+          ? 'Ready to send'
+          : `No speech detected${formatRecordingDetails({ ...recordingMeta, size: blob.size })}`,
+      )
     } catch (transcriptionError) {
       setVoiceError(transcriptionError.message || 'Transcription failed')
       setVoiceStatus('')
@@ -377,12 +449,77 @@ function MobileTerminalApp() {
     }
   }, [voiceLanguage, voiceService])
 
+  const startBrowserSpeechRecognition = useCallback(() => {
+    const Recognition = getSpeechRecognitionConstructor()
+    if (!Recognition) {
+      return false
+    }
+
+    const recognition = new Recognition()
+    let finalTranscript = ''
+    let interimTranscript = ''
+    recognition.lang = voiceLanguage || 'pt-BR'
+    recognition.continuous = false
+    recognition.interimResults = true
+    recognition.maxAlternatives = 1
+    recognition.onresult = (event) => {
+      interimTranscript = ''
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
+        const text = event.results[index]?.[0]?.transcript ?? ''
+        if (event.results[index].isFinal) {
+          finalTranscript += text
+        } else {
+          interimTranscript += text
+        }
+      }
+      const visibleTranscript = `${finalTranscript} ${interimTranscript}`.trim()
+      setVoiceTranscript(visibleTranscript)
+      setVoiceStatus(visibleTranscript ? 'Listening...' : 'Listening for speech...')
+    }
+    recognition.onerror = (event) => {
+      voiceRecognitionRef.current = null
+      setVoiceRecording(false)
+      setVoicePending(false)
+      setVoiceError(`Speech recognition failed: ${event.error || 'unknown error'}`)
+      setVoiceStatus('')
+    }
+    recognition.onend = () => {
+      if (voiceRecognitionRef.current === recognition) {
+        voiceRecognitionRef.current = null
+      }
+      setVoiceRecording(false)
+      const transcript = `${finalTranscript} ${interimTranscript}`.trim()
+      setVoiceTranscript(transcript)
+      setVoiceStatus(transcript ? 'Ready to send' : 'No speech detected by browser')
+    }
+
+    try {
+      voiceRecognitionRef.current = recognition
+      setVoiceTranscript('')
+      setVoiceError('')
+      setVoicePending(false)
+      setVoiceRecording(true)
+      setVoiceStatus('Listening for speech...')
+      recognition.start()
+      return true
+    } catch (error) {
+      voiceRecognitionRef.current = null
+      setVoiceRecording(false)
+      setVoiceError(error.message || 'Unable to start browser speech recognition.')
+      setVoiceStatus('')
+      return true
+    }
+  }, [voiceLanguage])
+
   const startRecording = useCallback(async () => {
     if (!isSecureContext) {
       setVoiceError('Microphone requires HTTPS or localhost.')
       return
     }
     cleanupVoiceResources()
+    if (startBrowserSpeechRecognition()) {
+      return
+    }
     try {
       setVoiceError('')
       setVoiceTranscript('')
@@ -391,7 +528,10 @@ function MobileTerminalApp() {
       if (typeof window.MediaRecorder === 'undefined') {
         throw new Error('MediaRecorder is not supported in this browser.')
       }
-      const recorder = new window.MediaRecorder(stream, { mimeType: 'audio/webm' })
+      const mimeType = pickRecorderMimeType()
+      const recorder = mimeType
+        ? new window.MediaRecorder(stream, { mimeType })
+        : new window.MediaRecorder(stream)
       voiceChunksRef.current = []
       recorder.addEventListener('dataavailable', (event) => {
         if (event.data.size > 0) {
@@ -399,19 +539,24 @@ function MobileTerminalApp() {
         }
       })
       recorder.addEventListener('start', () => {
+        voiceRecordingStartedAtRef.current = Date.now()
         setVoiceRecording(true)
         setVoiceStatus('Recording...')
       })
       recorder.addEventListener('stop', async () => {
         setVoiceRecording(false)
-        const blobData = new Blob(voiceChunksRef.current, { type: 'audio/webm' })
+        const recordingMs = voiceRecordingStartedAtRef.current
+          ? Date.now() - voiceRecordingStartedAtRef.current
+          : 0
+        const audioType = recorder.mimeType || mimeType || 'audio/webm'
+        const blobData = new Blob(voiceChunksRef.current, { type: audioType })
         cleanupVoiceResources()
         if (!blobData.size) {
           setVoiceError('No audio captured.')
           setVoiceStatus('')
           return
         }
-        await sendVoiceFileForTranscription(blobData)
+        await sendVoiceFileForTranscription(blobData, { recordingMs })
       })
       recorder.start()
       voiceRecorderRef.current = recorder
@@ -419,9 +564,17 @@ function MobileTerminalApp() {
       setVoiceError(recordError.message || 'Unable to access microphone.')
       cleanupVoiceResources()
     }
-  }, [cleanupVoiceResources, isSecureContext, sendVoiceFileForTranscription])
+  }, [cleanupVoiceResources, isSecureContext, sendVoiceFileForTranscription, startBrowserSpeechRecognition])
 
   const stopRecording = useCallback(() => {
+    if (voiceRecognitionRef.current) {
+      try {
+        voiceRecognitionRef.current.stop()
+      } catch {
+        cleanupVoiceResources()
+      }
+      return
+    }
     if (voiceRecorderRef.current && voiceRecorderRef.current.state !== 'inactive') {
       voiceRecorderRef.current.stop()
       return
