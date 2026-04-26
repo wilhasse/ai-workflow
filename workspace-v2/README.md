@@ -157,7 +157,7 @@ If `popup` says it could not find a usable launcher surface, use one of:
 - Phase `16.1` removed the ambiguous `local` host assumption from the v2 path.
 - Phase `16.2` adds a non-GUI fallback path for tmux and TTY usage.
 - Phase `16.3` adds first-class control-host bootstrap and sync/install helpers.
-- Recent workspace ordering is stored in `~/.local/state/ai-workflow/workspace-v2.json`.
+- Recent ordering uses the newer of tmux `window_activity` and launcher selection time. Launcher selection time is stored in `~/.local/state/ai-workflow/workspace-v2.json`.
 
 ## Phase 16.3 Control-Host Bootstrap
 

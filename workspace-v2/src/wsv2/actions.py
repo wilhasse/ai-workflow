@@ -89,6 +89,35 @@ class TerminalTarget:
     window_index: int | None
 
 
+def terminal_selected_score(status: TerminalStatus, recent_scores: dict[str, float] | None = None) -> float:
+    recent_scores = recent_scores or {}
+    keys = [
+        status.recent_key,
+        status.target,
+        f"{status.host_id}:{status.session_id}",
+        status.session_id,
+    ]
+    if status.workspace:
+        keys.extend([status.workspace.target, status.workspace.id])
+    return max((float(recent_scores.get(key, 0.0)) for key in keys), default=0.0)
+
+
+def terminal_recent_score(status: TerminalStatus, recent_scores: dict[str, float] | None = None) -> float:
+    return max(float(status.activity or 0), terminal_selected_score(status, recent_scores))
+
+
+def terminal_sort_key(status: TerminalStatus, recent_scores: dict[str, float] | None = None):
+    return (
+        -terminal_recent_score(status, recent_scores),
+        not status.active,
+        not status.window_active,
+        -(status.activity or 0),
+        status.host.name.lower(),
+        status.workspace_name.lower(),
+        status.window_index,
+    )
+
+
 def _format_discovered_name(session_id: str) -> str:
     parts = [part for part in str(session_id).replace("_", "-").split("-") if part]
     return " ".join(part[:1].upper() + part[1:] for part in parts) or str(session_id)
@@ -312,16 +341,8 @@ class WorkspaceActions:
                     )
                 )
 
-        return sorted(
-            statuses,
-            key=lambda status: (
-                -(status.activity or 0),
-                not status.window_active,
-                status.host.name.lower(),
-                status.workspace_name.lower(),
-                status.window_index,
-            ),
-        )
+        recent_scores = self.state.recent_scores()
+        return sorted(statuses, key=lambda status: terminal_sort_key(status, recent_scores))
 
     def workspace_command(self, target: str, *, within_tmux: bool = False) -> str:
         terminal_target = parse_terminal_target(target)

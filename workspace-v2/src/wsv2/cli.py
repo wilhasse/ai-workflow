@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tempfile
 
-from .actions import WorkspaceActions
+from .actions import WorkspaceActions, terminal_recent_score
 from .tui import select_workspace_tui, write_selected_target
 
 
@@ -176,6 +176,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if command == 'list':
         statuses = actions.list_terminal_statuses()
+        recent_scores = actions.state.recent_scores()
         if args.json:
             payload = [
                 {
@@ -187,6 +188,7 @@ def main(argv: list[str] | None = None) -> int:
                     'windowName': status.window_name,
                     'windowActive': status.window_active,
                     'activity': status.activity,
+                    'recentAt': terminal_recent_score(status, recent_scores),
                     'paneCount': status.pane_count,
                     'active': status.active,
                     'reachable': status.reachable,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import threading
+import time
 
 import gi
 
@@ -10,7 +11,7 @@ gi.require_version("Gdk", "3.0")
 
 from gi.repository import Gdk, GLib, Gtk, Pango
 
-from .actions import TerminalStatus, WorkspaceActions
+from .actions import TerminalStatus, WorkspaceActions, terminal_recent_score, terminal_sort_key
 
 
 PROGRAM_CLASS = "workspace-v2-popup"
@@ -148,7 +149,7 @@ class WorkspacePopup(Gtk.Window):
 
     def _sorted_items(self, query: str) -> list[PopupItem]:
         items = [
-            PopupItem(status=status, recent_score=self.recent_scores.get(status.recent_key, 0.0))
+            PopupItem(status=status, recent_score=terminal_recent_score(status, self.recent_scores))
             for status in self.statuses
         ]
 
@@ -183,24 +184,13 @@ class WorkspacePopup(Gtk.Window):
             scored.sort(
                 key=lambda pair: (
                     pair[0],
-                    -pair[1].recent_score,
-                    -(pair[1].status.activity or 0),
-                    not pair[1].status.active,
+                    terminal_sort_key(pair[1].status, self.recent_scores),
                     pair[1].status.workspace_name.lower(),
                 )
             )
             return [item for _, item in scored]
 
-        items.sort(
-            key=lambda item: (
-                -(item.status.activity or 0),
-                -item.recent_score,
-                not item.status.active,
-                item.status.host_id,
-                item.status.workspace_name.lower(),
-                item.status.window_index,
-            )
-        )
+        items.sort(key=lambda item: terminal_sort_key(item.status, self.recent_scores))
         return items
 
     def _build_row(self, item: PopupItem) -> Gtk.ListBoxRow:
@@ -237,10 +227,8 @@ class WorkspacePopup(Gtk.Window):
         detail_parts = [status.session_id, status.display_path]
         if status.discovered:
             detail_parts.insert(0, "discovered")
-        if status.activity:
-            detail_parts.insert(0, "tmux-active")
-        elif item.recent_score:
-            detail_parts.insert(0, "recent")
+        if item.recent_score:
+            detail_parts.insert(0, f"recent {self._relative_time(item.recent_score)}")
         detail.set_markup(
             '<span foreground="#9ca3af" size="small">'
             + GLib.markup_escape_text("   ".join(detail_parts))
@@ -252,6 +240,20 @@ class WorkspacePopup(Gtk.Window):
 
         row.add(wrapper)
         return row
+
+    def _relative_time(self, timestamp: float) -> str:
+        if not timestamp:
+            return "never"
+        diff = max(0, int(time.time()) - int(timestamp))
+        if diff < 60:
+            return "just now"
+        minutes = diff // 60
+        if minutes < 60:
+            return f"{minutes}m ago"
+        hours = minutes // 60
+        if hours < 24:
+            return f"{hours}h ago"
+        return f"{hours // 24}d ago"
 
     def _status_dot_markup(self, status: WorkspaceStatus) -> str:
         if status.reachable is False:

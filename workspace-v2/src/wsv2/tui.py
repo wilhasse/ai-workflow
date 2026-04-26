@@ -5,20 +5,30 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from .actions import TerminalStatus, WorkspaceActions
+from .actions import TerminalStatus, WorkspaceActions, terminal_recent_score
 
 
 @dataclass(slots=True)
 class TuiItem:
     status: TerminalStatus
     searchable_text: str
+    recent_score: float = 0.0
 
 
-def build_tui_items(statuses: Iterable[TerminalStatus]) -> list[TuiItem]:
+def build_tui_items(
+    statuses: Iterable[TerminalStatus],
+    recent_scores: dict[str, float] | None = None,
+) -> list[TuiItem]:
     items = []
     for status in statuses:
         searchable = status.searchable_text
-        items.append(TuiItem(status=status, searchable_text=searchable))
+        items.append(
+            TuiItem(
+                status=status,
+                searchable_text=searchable,
+                recent_score=terminal_recent_score(status, recent_scores),
+            )
+        )
     return items
 
 
@@ -51,8 +61,10 @@ def filter_tui_items(items: list[TuiItem], query: str) -> list[TuiItem]:
 def _sort_key(item: TuiItem):
     status = item.status
     return (
-        -(status.activity or 0),
+        -item.recent_score,
         not status.active,
+        not status.window_active,
+        -(status.activity or 0),
         status.host.name.lower(),
         status.workspace_name.lower(),
         status.window_index,
@@ -79,7 +91,8 @@ def format_tui_row(status: TerminalStatus, width: int) -> str:
 class WorkspaceTui:
     def __init__(self, actions: WorkspaceActions) -> None:
         self.actions = actions
-        self.items = build_tui_items(actions.list_terminal_statuses())
+        self.recent_scores = actions.state.recent_scores()
+        self.items = build_tui_items(actions.list_terminal_statuses(), self.recent_scores)
         self.query = ''
         self.index = 0
         self.scroll = 0

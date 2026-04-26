@@ -21,9 +21,55 @@ import time
 import socket
 
 CONFIG_FILE = os.path.expanduser("~/ai-workflow/workspace-switcher/workspaces.json")
+LAUNCHER_STATE_FILE = os.path.expanduser("~/.local/state/ai-workflow/workspace-v2.json")
 REFRESH_INTERVAL = 2000  # ms
 SSH_HEALTH_INTERVAL = 30  # seconds
 SSH_CACHE_TTL = 1  # seconds - short TTL for responsive activity detection
+
+
+def load_recent_scores():
+    try:
+        with open(LAUNCHER_STATE_FILE, 'r') as f:
+            payload = json.load(f)
+        recent = payload.get('recent') or {}
+        return {str(key): float(value) for key, value in recent.items()}
+    except (FileNotFoundError, json.JSONDecodeError, TypeError, ValueError):
+        return {}
+
+
+def save_recent_score(target):
+    payload = {'recent': {}}
+    try:
+        with open(LAUNCHER_STATE_FILE, 'r') as f:
+            payload = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    recent = payload.setdefault('recent', {})
+    recent[str(target)] = time.time()
+    os.makedirs(os.path.dirname(LAUNCHER_STATE_FILE), exist_ok=True)
+    with open(LAUNCHER_STATE_FILE, 'w') as f:
+        json.dump(payload, f, indent=2, sort_keys=True)
+
+
+def terminal_recent_score(entry, recent_scores=None):
+    recent_scores = recent_scores or {}
+    host_id = entry.get('host_id', 'local')
+    state_host_id = entry.get('state_host_id') or host_id
+    session_name = entry.get('session_name', '')
+    window_index = entry.get('window_index')
+    keys = [
+        entry.get('target'),
+        f"{state_host_id}:{session_name}#{window_index}",
+        f"{host_id}:{session_name}#{window_index}",
+        f"{state_host_id}:{session_name}",
+        f"{host_id}:{session_name}",
+        session_name,
+    ]
+    selected_at = max(
+        (float(recent_scores.get(key, 0.0)) for key in keys if key),
+        default=0.0
+    )
+    return max(float(entry.get('activity') or 0), selected_at)
 
 
 class SSHHealthChecker:
@@ -934,7 +980,7 @@ class TerminalSwitcherDialog(Gtk.Dialog):
             task = entry.get('window_name') or f"window-{entry['window_index']}"
             if entry.get('discovered'):
                 workspace = f"{workspace} *"
-            recent = self._relative_time(entry.get('activity', 0))
+            recent = self._relative_time(entry.get('recent_at', entry.get('activity', 0)))
             self.store.append([host, workspace, tab, task, recent, entry])
         if len(self.store) > 0:
             first = self.store.get_iter_first()
@@ -1187,6 +1233,14 @@ class WorkspaceSwitcher(Gtk.Window):
             if host.get('id') != 'local' and host.get('ssh') and self._host_points_to_local(host)
         }
 
+    def _state_host_id(self, host_id):
+        if host_id != 'local':
+            return host_id
+        self_host_ids = sorted(host_id for host_id in self._self_host_ids() if host_id)
+        if len(self_host_ids) == 1:
+            return self_host_ids[0]
+        return 'local'
+
     def _workspace_matches_host(self, workspace, host_id):
         workspace_host = workspace.get('host', 'local')
         if workspace_host == host_id:
@@ -1242,9 +1296,11 @@ class WorkspaceSwitcher(Gtk.Window):
     def build_terminal_switcher_entries(self):
         """Build all-host tmux window entries using the web UI row format."""
         entries = []
+        recent_scores = load_recent_scores()
 
         for host in self._display_hosts():
             host_id = host.get('id', 'local')
+            state_host_id = self._state_host_id(host_id)
             host_name = host.get('name', host_id)
             windows = self._get_windows_for_host(host_id, host)
             for window in windows:
@@ -1256,15 +1312,19 @@ class WorkspaceSwitcher(Gtk.Window):
                 entry = {
                     **window,
                     'host_id': host_id,
+                    'state_host_id': state_host_id,
                     'host_name': host_name,
                     'host_info': host,
                     'workspace_name': workspace_name,
                     'workspace_description': workspace_description,
                     'discovered': discovered,
                 }
+                entry['target'] = f"{state_host_id}:{session_name}#{window['window_index']}"
+                entry['recent_at'] = terminal_recent_score(entry, recent_scores)
                 entry['search_text'] = ' '.join([
                     host_name,
                     host_id,
+                    state_host_id,
                     workspace_name,
                     workspace_description,
                     session_name,
@@ -1277,6 +1337,8 @@ class WorkspaceSwitcher(Gtk.Window):
         return sorted(
             entries,
             key=lambda entry: (
+                -(entry.get('recent_at') or 0),
+                not entry.get('window_active'),
                 -(entry.get('activity') or 0),
                 entry.get('host_name', ''),
                 entry.get('workspace_name', ''),
@@ -1346,6 +1408,9 @@ class WorkspaceSwitcher(Gtk.Window):
 
     def open_tmux_window_entry(self, entry):
         """Select and open a tmux session/window entry from the switcher."""
+        if entry.get('target'):
+            save_recent_score(entry['target'])
+
         host_id = entry.get('host_id', 'local')
         host_info = entry.get('host_info')
         session_name = entry['session_name']

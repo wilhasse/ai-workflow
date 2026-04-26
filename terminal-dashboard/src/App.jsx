@@ -431,6 +431,8 @@ function App() {
       const workspaceWindows = windowsByWorkspace[workspace.id] ?? (workspace.id === activeWorkspaceId ? windows : [])
       return workspaceWindows.map((windowItem) => {
         const usage = windowUsage[buildWindowUsageKey(workspace.id, windowItem.index)] ?? {}
+        const lastUsedAt = usage.lastUsedAt ?? 0
+        const lastActivityAt = windowItem.lastActivityAt ?? 0
         return {
           id: workspace.id + ':' + windowItem.index,
           workspaceId: workspace.id,
@@ -441,8 +443,9 @@ function App() {
           windowName: windowItem.name,
           windowActive: windowItem.active,
           useCount: usage.useCount ?? 0,
-          lastUsedAt: usage.lastUsedAt ?? 0,
-          lastActivityAt: windowItem.lastActivityAt ?? 0,
+          lastUsedAt,
+          lastActivityAt,
+          recentAt: Math.max(lastActivityAt, lastUsedAt),
           paneCount: windowItem.paneCount ?? 0,
           searchText: [
             workspace.name,
@@ -460,11 +463,11 @@ function App() {
       : entries
 
     return filteredEntries.sort((left, right) => {
+      if (right.recentAt !== left.recentAt) {
+        return right.recentAt - left.recentAt
+      }
       if (right.lastActivityAt !== left.lastActivityAt) {
         return right.lastActivityAt - left.lastActivityAt
-      }
-      if (right.lastUsedAt !== left.lastUsedAt) {
-        return right.lastUsedAt - left.lastUsedAt
       }
       if (right.useCount !== left.useCount) {
         return right.useCount - left.useCount
