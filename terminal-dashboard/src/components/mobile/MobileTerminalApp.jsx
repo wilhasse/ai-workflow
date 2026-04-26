@@ -267,6 +267,56 @@ function VoicePanel({
   )
 }
 
+function MobileInputDock({
+  value,
+  disabled,
+  error,
+  onChange,
+  onSend,
+  onEnter,
+  onSpace,
+  onBackspace,
+  onClear,
+}) {
+  return (
+    <form
+      className="mobile-input-dock"
+      onSubmit={(event) => {
+        event.preventDefault()
+        onSend()
+      }}
+    >
+      <textarea
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault()
+            onEnter()
+          }
+        }}
+        rows={1}
+        placeholder="Type here"
+        autoComplete="off"
+        autoCorrect="off"
+        autoCapitalize="none"
+        spellCheck="false"
+        inputMode="text"
+        enterKeyHint="enter"
+        disabled={disabled}
+      />
+      <div className="mobile-input-actions">
+        <button type="submit" disabled={disabled || !value}>Send</button>
+        <button type="button" onClick={onEnter} disabled={disabled}>Enter</button>
+        <button type="button" onClick={onSpace} disabled={disabled}>Space</button>
+        <button type="button" onClick={onBackspace} disabled={disabled}>Bksp</button>
+        <button type="button" onClick={onClear} disabled={disabled || !value}>Clear</button>
+      </div>
+      {error && <p className="mobile-input-error">{error}</p>}
+    </form>
+  )
+}
+
 function MobileTerminalApp() {
   const isTablet = useMediaQuery('(min-width: 820px)')
   const [hosts, setHosts] = useState([])
@@ -290,6 +340,8 @@ function MobileTerminalApp() {
   const [voiceError, setVoiceError] = useState('')
   const [voiceRecording, setVoiceRecording] = useState(false)
   const [voicePending, setVoicePending] = useState(false)
+  const [terminalDraft, setTerminalDraft] = useState('')
+  const [terminalInputError, setTerminalInputError] = useState('')
   const terminalBridgeRef = useRef(null)
   const voiceRecorderRef = useRef(null)
   const voiceRecognitionRef = useRef(null)
@@ -313,6 +365,27 @@ function MobileTerminalApp() {
   const canShowTerminal = !!(selectedWorkspace && selectedWindow && wsUrl)
   const isSecureContext = typeof window !== 'undefined' &&
     (window.isSecureContext || window.location.protocol === 'https:')
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    const root = window.document.documentElement
+    const updateHeight = () => {
+      const height = window.visualViewport?.height || window.innerHeight
+      if (height > 0) {
+        root.style.setProperty('--mobile-terminal-height', `${height}px`)
+      }
+    }
+    updateHeight()
+    window.addEventListener('resize', updateHeight)
+    window.visualViewport?.addEventListener('resize', updateHeight)
+    window.visualViewport?.addEventListener('scroll', updateHeight)
+    return () => {
+      window.removeEventListener('resize', updateHeight)
+      window.visualViewport?.removeEventListener('resize', updateHeight)
+      window.visualViewport?.removeEventListener('scroll', updateHeight)
+      root.style.removeProperty('--mobile-terminal-height')
+    }
+  }, [])
 
   const loadInventory = useCallback(async () => {
     setLoading(true)
@@ -591,20 +664,63 @@ function MobileTerminalApp() {
     }
   }, [startRecording, stopRecording, voicePending, voiceRecording])
 
+  const sendTerminalInput = useCallback((payload) => {
+    if (!payload) {
+      return true
+    }
+    const bridge = terminalBridgeRef.current
+    if (!bridge?.sendInput?.(payload)) {
+      setTerminalInputError('Terminal connection is not ready.')
+      return false
+    }
+    setTerminalInputError('')
+    return true
+  }, [])
+
+  const sendTerminalDraft = useCallback(() => {
+    const text = terminalDraft
+    if (!text) {
+      return
+    }
+    if (sendTerminalInput(text)) {
+      setTerminalDraft('')
+    }
+  }, [sendTerminalInput, terminalDraft])
+
+  const sendTerminalEnter = useCallback(() => {
+    const payload = terminalDraft ? `${terminalDraft}\r` : '\r'
+    if (sendTerminalInput(payload)) {
+      setTerminalDraft('')
+    }
+  }, [sendTerminalInput, terminalDraft])
+
+  const appendTerminalSpace = useCallback(() => {
+    setTerminalDraft((current) => `${current} `)
+  }, [])
+
+  const handleTerminalBackspace = useCallback(() => {
+    setTerminalDraft((current) => {
+      if (current.length > 0) {
+        return current.slice(0, -1)
+      }
+      sendTerminalInput('\x7f')
+      return current
+    })
+  }, [sendTerminalInput])
+
   const sendTranscript = useCallback(() => {
     const text = voiceTranscript.trim()
     if (!text) {
       return
     }
-    const bridge = terminalBridgeRef.current
-    if (!bridge?.sendInput?.(`${text}\n`)) {
+    if (!sendTerminalInput(`${text}\r`)) {
       setVoiceError('Terminal connection is not ready.')
       return
     }
     setVoiceTranscript('')
     setVoiceError('')
     setVoiceStatus('Sent')
-  }, [voiceTranscript])
+  }, [sendTerminalInput, voiceTranscript])
 
   const copyTranscript = useCallback(async () => {
     const text = voiceTranscript.trim()
@@ -663,6 +779,8 @@ function MobileTerminalApp() {
           key={`${selectedWorkspace.key}-${selectedWindowIndex}`}
           wsUrl={wsUrl}
           fontSize={terminalFontSize}
+          showShortcutBar={false}
+          disableKeyboardInput
           onBridgeReady={(bridge) => {
             terminalBridgeRef.current = bridge
           }}
@@ -672,6 +790,20 @@ function MobileTerminalApp() {
           <strong>Select a tmux window</strong>
           <p>Pick a workspace, then choose one of its tabs to open the terminal.</p>
         </div>
+      )}
+
+      {canShowTerminal && (
+        <MobileInputDock
+          value={terminalDraft}
+          disabled={!canShowTerminal}
+          error={terminalInputError}
+          onChange={setTerminalDraft}
+          onSend={sendTerminalDraft}
+          onEnter={sendTerminalEnter}
+          onSpace={appendTerminalSpace}
+          onBackspace={handleTerminalBackspace}
+          onClear={() => setTerminalDraft('')}
+        />
       )}
 
       <VoicePanel

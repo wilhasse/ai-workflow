@@ -3103,8 +3103,12 @@ button.danger:hover:not(:disabled) {
    ============================================================================ */
 
 .mobile-terminal-app {
-  min-height: 100dvh;
-  height: 100dvh;
+  position: fixed;
+  top: 0;
+  right: 0;
+  left: 0;
+  min-height: 0;
+  height: var(--mobile-terminal-height, 100dvh);
   color: var(--color-text-primary);
   background:
     radial-gradient(circle at 10% 0%, rgba(20, 184, 166, 0.14), transparent 28rem),
@@ -3114,7 +3118,8 @@ button.danger:hover:not(:disabled) {
 
 .mobile-terminal-app button,
 .mobile-terminal-app input,
-.mobile-terminal-app select {
+.mobile-terminal-app select,
+.mobile-terminal-app textarea {
   font: inherit;
 }
 
@@ -3381,7 +3386,7 @@ button.danger:hover:not(:disabled) {
   min-height: 0;
   height: 100%;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
   background: #020617;
 }
 
@@ -3452,13 +3457,83 @@ button.danger:hover:not(:disabled) {
 
 .mobile-terminal-panel .terminal-surface {
   border-radius: 0;
+  touch-action: none;
+}
+
+.mobile-terminal-panel .terminal-surface .xterm-viewport {
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+  touch-action: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.mobile-terminal-panel .terminal-surface .xterm,
+.mobile-terminal-panel .terminal-surface .xterm-screen,
+.mobile-terminal-panel .terminal-surface .xterm-rows {
+  touch-action: none;
+}
+
+.mobile-input-dock {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0.5rem 0.65rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(2, 6, 23, 0.96);
+}
+
+.mobile-input-dock textarea {
+  display: block;
+  width: 100%;
+  resize: none;
+  min-height: 2.25rem;
+  max-height: 4.8rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 0.9rem;
+  background: rgba(15, 23, 42, 0.92);
+  color: var(--color-text-primary);
+  padding: 0.55rem 0.7rem;
+  line-height: 1.35;
+  overflow-y: auto;
+}
+
+.mobile-input-actions {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.4rem;
+}
+
+.mobile-input-actions button {
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 0.75rem;
+  background: rgba(30, 41, 59, 0.9);
+  color: var(--color-text-primary);
+  min-height: 2.15rem;
+  padding: 0.35rem 0.25rem;
+}
+
+.mobile-input-actions button[type="submit"],
+.mobile-input-actions button:nth-child(2) {
+  border-color: rgba(20, 184, 166, 0.38);
+  background: rgba(20, 184, 166, 0.14);
+}
+
+.mobile-input-actions button:disabled {
+  opacity: 0.45;
+}
+
+.mobile-input-error {
+  margin: 0;
+  color: #fecaca;
+  font-size: 0.78rem;
 }
 
 .mobile-voice-panel {
   position: absolute;
   left: 0.75rem;
   right: 0.75rem;
-  bottom: 0.75rem;
+  bottom: 6.35rem;
   z-index: 5;
   border: 1px solid rgba(20, 184, 166, 0.32);
   border-radius: 1rem;

@@ -99,6 +99,7 @@ function TerminalViewer({
   onBridgeReady,
   showShortcutBar = true,
   monitorMode = false,
+  disableKeyboardInput = false,
   onActivity,
 }) {
   const containerRef = useRef(null)
@@ -236,7 +237,9 @@ function TerminalViewer({
 
     if (!monitorMode) {
       scheduleFit()
-      term.focus()
+      if (!disableKeyboardInput) {
+        term.focus()
+      }
       textareaConfigRetry = window.setTimeout(() => {
         configureMobileTextarea(term, container)
       }, 200)
@@ -340,7 +343,7 @@ function TerminalViewer({
       }
     })
 
-    const dataDisposable = monitorMode
+    const dataDisposable = monitorMode || disableKeyboardInput
       ? { dispose: () => {} }
       : term.onData((chunk) => {
           sendMessage({ type: 'input', payload: chunk })
@@ -352,11 +355,74 @@ function TerminalViewer({
         return
       }
       configureMobileTextarea(term, container)
-      term.focus()
+      if (!disableKeyboardInput) {
+        term.focus()
+      }
     }
+    let touchScrollY = null
+    let touchScrollRemainder = 0
+    const getViewport = () => container.querySelector('.xterm-viewport')
+    const getCellHeight = () => {
+      const dimensions = term?._core?._renderService?.dimensions
+      if (dimensions?.actualCellHeight) {
+        return dimensions.actualCellHeight
+      }
+      const screen = container.querySelector('.xterm-screen')
+      const screenHeight = screen?.getBoundingClientRect().height
+      if (screenHeight && term.rows > 0) {
+        return screenHeight / term.rows
+      }
+      return 16
+    }
+    const handleScrollTouchStart = (event) => {
+      if (!disableKeyboardInput || monitorMode || event.touches.length !== 1) {
+        touchScrollY = null
+        touchScrollRemainder = 0
+        return
+      }
+      touchScrollY = event.touches[0].clientY
+      touchScrollRemainder = 0
+    }
+    const handleScrollTouchMove = (event) => {
+      if (!disableKeyboardInput || monitorMode || touchScrollY === null || event.touches.length !== 1) {
+        return
+      }
+      const viewport = getViewport()
+      if (!viewport) {
+        return
+      }
+      const nextY = event.touches[0].clientY
+      const deltaY = touchScrollY - nextY
+      if (Math.abs(deltaY) < 1) {
+        return
+      }
+      touchScrollRemainder += deltaY
+      const cellHeight = getCellHeight()
+      const lines = Math.trunc(touchScrollRemainder / cellHeight)
+      if (lines !== 0) {
+        if (typeof term.scrollLines === 'function') {
+          term.scrollLines(lines)
+        } else {
+          const maxScrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight)
+          viewport.scrollTop = Math.min(maxScrollTop, Math.max(0, viewport.scrollTop + deltaY))
+        }
+        touchScrollRemainder -= lines * cellHeight
+        event.preventDefault()
+      }
+      touchScrollY = nextY
+    }
+    const handleScrollTouchEnd = () => {
+      touchScrollY = null
+      touchScrollRemainder = 0
+    }
+    const touchScrollOptions = { passive: false, capture: true }
     container.addEventListener('click', focusTerminal)
     container.addEventListener('pointerdown', focusTerminal)
     container.addEventListener('touchstart', focusTerminal, { passive: true })
+    container.addEventListener('touchstart', handleScrollTouchStart, touchScrollOptions)
+    container.addEventListener('touchmove', handleScrollTouchMove, touchScrollOptions)
+    container.addEventListener('touchend', handleScrollTouchEnd, true)
+    container.addEventListener('touchcancel', handleScrollTouchEnd, true)
 
     if (typeof window !== 'undefined' && 'ResizeObserver' in window) {
       const observer = new window.ResizeObserver(() => {
@@ -393,6 +459,10 @@ function TerminalViewer({
       container.removeEventListener('click', focusTerminal)
       container.removeEventListener('pointerdown', focusTerminal)
       container.removeEventListener('touchstart', focusTerminal)
+      container.removeEventListener('touchstart', handleScrollTouchStart, touchScrollOptions)
+      container.removeEventListener('touchmove', handleScrollTouchMove, touchScrollOptions)
+      container.removeEventListener('touchend', handleScrollTouchEnd, true)
+      container.removeEventListener('touchcancel', handleScrollTouchEnd, true)
       dataDisposable.dispose()
       cleanupResize()
       if (
@@ -406,7 +476,7 @@ function TerminalViewer({
       termRef.current = null
       fitAddonRef.current = null
     }
-  }, [wsUrl, monitorMode, updateMonitorScale])
+  }, [wsUrl, monitorMode, disableKeyboardInput, updateMonitorScale])
 
   useEffect(() => {
     if (typeof onBridgeReady !== 'function') {
