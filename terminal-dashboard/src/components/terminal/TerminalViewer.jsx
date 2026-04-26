@@ -361,7 +361,6 @@ function TerminalViewer({
     }
     let touchScrollY = null
     let touchScrollRemainder = 0
-    const getViewport = () => container.querySelector('.xterm-viewport')
     const getCellHeight = () => {
       const dimensions = term?._core?._renderService?.dimensions
       if (dimensions?.actualCellHeight) {
@@ -387,10 +386,6 @@ function TerminalViewer({
       if (!disableKeyboardInput || monitorMode || touchScrollY === null || event.touches.length !== 1) {
         return
       }
-      const viewport = getViewport()
-      if (!viewport) {
-        return
-      }
       const nextY = event.touches[0].clientY
       const deltaY = touchScrollY - nextY
       if (Math.abs(deltaY) < 1) {
@@ -400,12 +395,7 @@ function TerminalViewer({
       const cellHeight = getCellHeight()
       const lines = Math.trunc(touchScrollRemainder / cellHeight)
       if (lines !== 0) {
-        if (typeof term.scrollLines === 'function') {
-          term.scrollLines(lines)
-        } else {
-          const maxScrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight)
-          viewport.scrollTop = Math.min(maxScrollTop, Math.max(0, viewport.scrollTop + deltaY))
-        }
+        sendMessage({ type: 'scroll', lines: -lines })
         touchScrollRemainder -= lines * cellHeight
         event.preventDefault()
       }

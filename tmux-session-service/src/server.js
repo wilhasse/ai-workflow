@@ -23,6 +23,8 @@ const config = {
   mobileWorkspacesConfig: process.env.MOBILE_WORKSPACES_CONFIG ?? path.join(os.homedir(), 'ai-workflow', 'workspace-v2', 'catalog', 'workspaces.v2.json'),
   mobileSelfHostId: process.env.MOBILE_SELF_HOST_ID ?? process.env.WSV2_SELF_HOST ?? 'vm10',
 }
+const DEFAULT_HISTORY_LINES = 1000
+const MAX_HISTORY_LINES = 20000
 const storeFile = path.join(config.dataDir, 'sessions.json')
 const userStoreFile = path.join(config.dataDir, 'users.json')
 const sessionStore = new Map()
@@ -273,9 +275,9 @@ const loadStore = async () => {
   }
 }
 
-const runTmux = async (args) => {
+const runTmux = async (args, options = {}) => {
   try {
-    const result = await execFileAsync(config.tmuxBin, args)
+    const result = await execFileAsync(config.tmuxBin, args, options)
     return { ok: true, stdout: result.stdout }
   } catch (error) {
     return { ok: false, error }
@@ -447,7 +449,7 @@ const tmuxListAllWindows = async () => {
   return parseTmuxWindowRows(response.stdout)
 }
 
-const runSsh = async (sshTarget, remoteCommand, timeout = 8000) => {
+const runSsh = async (sshTarget, remoteCommand, timeout = 8000, options = {}) => {
   try {
     const result = await execFileAsync(
       'ssh',
@@ -459,7 +461,7 @@ const runSsh = async (sshTarget, remoteCommand, timeout = 8000) => {
         sshTarget,
         remoteCommand,
       ],
-      { timeout, maxBuffer: 1024 * 1024 },
+      { timeout, maxBuffer: 1024 * 1024, ...options },
     )
     return { ok: true, stdout: result.stdout }
   } catch (error) {
@@ -479,6 +481,136 @@ const remoteListAllWindows = async (host) => {
     throw response.error
   }
   return parseTmuxWindowRows(response.stdout)
+}
+
+const parseHistoryLines = (value) => {
+  const parsed = Number.parseInt(value, 10)
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_HISTORY_LINES
+  }
+  return Math.min(MAX_HISTORY_LINES, Math.max(100, parsed))
+}
+
+const buildTmuxWindowTarget = (sessionId, windowIndex) =>
+  Number.isFinite(windowIndex) ? `${sessionId}:${windowIndex}` : sessionId
+
+const tmuxCapturePaneHistory = async (sessionId, windowIndex, lines, { includeVisible = true } = {}) => {
+  const target = buildTmuxWindowTarget(sessionId, windowIndex)
+  const response = await runTmux(
+    [
+      'capture-pane',
+      '-p',
+      '-J',
+      '-S',
+      `-${lines}`,
+      '-E',
+      includeVisible ? '-' : '-1',
+      '-t',
+      target,
+    ],
+    { maxBuffer: 8 * 1024 * 1024 },
+  )
+  if (!response.ok) {
+    throw response.error
+  }
+  return response.stdout
+}
+
+const remoteCapturePaneHistory = async (host, sessionId, windowIndex, lines, { includeVisible = true } = {}) => {
+  if (!host?.ssh) {
+    throw new Error('Host has no SSH target')
+  }
+  const target = buildTmuxWindowTarget(sessionId, windowIndex)
+  const command = [
+    config.tmuxBin,
+    'capture-pane',
+    '-p',
+    '-J',
+    '-S',
+    shellQuote(`-${lines}`),
+    '-E',
+    shellQuote(includeVisible ? '-' : '-1'),
+    '-t',
+    shellQuote(target),
+  ].join(' ')
+  const response = await runSsh(host.ssh, command, 10000, { maxBuffer: 8 * 1024 * 1024 })
+  if (!response.ok) {
+    throw response.error
+  }
+  return response.stdout
+}
+
+const normalizeScrollLines = (value) => {
+  const parsed = Number.parseInt(value, 10)
+  if (!Number.isFinite(parsed) || parsed === 0) {
+    return 0
+  }
+  const bounded = Math.min(80, Math.max(-80, parsed))
+  return bounded
+}
+
+const tmuxScrollPane = async (sessionId, windowIndex, lines) => {
+  const normalizedLines = normalizeScrollLines(lines)
+  if (!normalizedLines) {
+    return false
+  }
+  const target = buildTmuxWindowTarget(sessionId, windowIndex)
+  const count = Math.abs(normalizedLines)
+  const command = normalizedLines > 0 ? 'scroll-up' : 'scroll-down'
+  const copyMode = await runTmux(['copy-mode', '-t', target])
+  if (!copyMode.ok && copyMode.error?.code !== 1) {
+    throw copyMode.error
+  }
+  const scroll = await runTmux(['send-keys', '-X', '-N', String(count), '-t', target, command])
+  if (!scroll.ok && scroll.error?.code !== 1) {
+    throw scroll.error
+  }
+  return scroll.ok
+}
+
+const tmuxCancelCopyMode = async (sessionId, windowIndex) => {
+  const target = buildTmuxWindowTarget(sessionId, windowIndex)
+  const response = await runTmux(['send-keys', '-X', '-t', target, 'cancel'])
+  if (!response.ok && response.error?.code !== 1) {
+    throw response.error
+  }
+}
+
+const remoteRunTmux = async (host, command, timeout = 8000) => {
+  if (!host?.ssh) {
+    throw new Error('Host has no SSH target')
+  }
+  const response = await runSsh(host.ssh, command, timeout)
+  if (!response.ok) {
+    throw response.error
+  }
+  return response
+}
+
+const remoteScrollPane = async (host, sessionId, windowIndex, lines) => {
+  const normalizedLines = normalizeScrollLines(lines)
+  if (!normalizedLines) {
+    return false
+  }
+  const target = buildTmuxWindowTarget(sessionId, windowIndex)
+  const count = Math.abs(normalizedLines)
+  const command = normalizedLines > 0 ? 'scroll-up' : 'scroll-down'
+  await remoteRunTmux(
+    host,
+    [
+      `${config.tmuxBin} copy-mode -t ${shellQuote(target)} 2>/dev/null || true`,
+      `${config.tmuxBin} send-keys -X -N ${count} -t ${shellQuote(target)} ${shellQuote(command)} 2>/dev/null || true`,
+    ].join('; '),
+  )
+  return true
+}
+
+const remoteCancelCopyMode = async (host, sessionId, windowIndex) => {
+  const target = buildTmuxWindowTarget(sessionId, windowIndex)
+  await remoteRunTmux(
+    host,
+    `${config.tmuxBin} send-keys -X -t ${shellQuote(target)} cancel 2>/dev/null || true`,
+  )
 }
 
 const tmuxSelectWindow = async (sessionId, windowIndex) => {
@@ -735,6 +867,49 @@ const handleMobileWorkspaces = async (res) => {
     })
   } catch (error) {
     respond(res, 500, { error: safeErrorMessage(error), hosts: [], workspaces: [] })
+  }
+}
+
+const handleMobileHistory = async (res, hostIdRaw, sessionIdRaw, searchParams) => {
+  const sanitizedSessionId = sanitizeId(sessionIdRaw)
+  const windowIndexRaw = searchParams.get('windowIndex')
+  const windowIndex = windowIndexRaw !== null ? Number.parseInt(windowIndexRaw, 10) : null
+  const lines = parseHistoryLines(searchParams.get('lines'))
+  const includeVisible = ['1', 'true', 'yes'].includes(
+    (searchParams.get('includeVisible') ?? '').toLowerCase(),
+  )
+  const host = await findMobileHost(hostIdRaw)
+
+  if (!host) {
+    respond(res, 404, { error: 'Host not found' })
+    return
+  }
+  if (!sanitizedSessionId) {
+    respond(res, 400, { error: 'Invalid session id' })
+    return
+  }
+  if (windowIndexRaw !== null && !Number.isFinite(windowIndex)) {
+    respond(res, 400, { error: 'Invalid window index' })
+    return
+  }
+
+  try {
+    const text = isHostLocal(host)
+      ? await tmuxCapturePaneHistory(sanitizedSessionId, windowIndex, lines, { includeVisible })
+      : await remoteCapturePaneHistory(host, sanitizedSessionId, windowIndex, lines, { includeVisible })
+
+    respond(res, 200, {
+      hostId: host.id,
+      hostName: host.name,
+      sessionId: sanitizedSessionId,
+      windowIndex,
+      lines,
+      includeVisible,
+      text,
+      capturedAt: new Date().toISOString(),
+    })
+  } catch (error) {
+    respond(res, 500, { error: safeErrorMessage(error) })
   }
 }
 
@@ -1086,6 +1261,11 @@ const server = http.createServer(async (req, res) => {
     await handleMobileWorkspaces(res)
     return
   }
+  const mobileHistoryMatch = pathName.match(/^\/mobile\/history\/([^/]+)\/([^/]+)$/)
+  if (mobileHistoryMatch && method === 'GET') {
+    await handleMobileHistory(res, mobileHistoryMatch[1], mobileHistoryMatch[2], parsed.searchParams)
+    return
+  }
   if (method === 'GET' && pathName === '/sessions') {
     await handleListSessions(res)
     return
@@ -1191,6 +1371,7 @@ const handleTerminalSocket = async (ws, sessionIdRaw, searchParams) => {
       : initialSize?.rows ?? 24
 
   let ptyProcess
+  let copyModeActive = false
   try {
     ptyProcess = pty.spawn(
       config.tmuxBin,
@@ -1234,6 +1415,27 @@ const handleTerminalSocket = async (ws, sessionIdRaw, searchParams) => {
     cleanup()
   })
 
+  const writeInput = async (payload) => {
+    if (copyModeActive) {
+      copyModeActive = false
+      try {
+        await tmuxCancelCopyMode(sanitizedSessionId, windowIndex)
+      } catch (error) {
+        console.warn('Failed to leave tmux copy mode', safeErrorMessage(error))
+      }
+    }
+    ptyProcess?.write(payload)
+  }
+
+  const scrollPane = async (lines) => {
+    try {
+      const scrolled = await tmuxScrollPane(sanitizedSessionId, windowIndex, lines)
+      copyModeActive = copyModeActive || scrolled
+    } catch (error) {
+      console.warn('Failed to scroll tmux pane', safeErrorMessage(error))
+    }
+  }
+
   ws.on('message', (raw) => {
     let incoming
     try {
@@ -1245,7 +1447,13 @@ const handleTerminalSocket = async (ws, sessionIdRaw, searchParams) => {
       if (monitorMode) {
         return
       }
-      ptyProcess?.write(incoming.payload)
+      writeInput(incoming.payload)
+      return
+    }
+    if (incoming.type === 'scroll') {
+      if (!monitorMode) {
+        scrollPane(incoming.lines)
+      }
       return
     }
     if (incoming.type === 'resize') {
@@ -1328,6 +1536,7 @@ const handleRemoteTerminalSocket = async (ws, hostIdRaw, sessionIdRaw, searchPar
   const ptyCols = !monitorMode && Number.isFinite(initialCols) && initialCols > 0 ? initialCols : 80
   const ptyRows = !monitorMode && Number.isFinite(initialRows) && initialRows > 0 ? initialRows : 24
   let ptyProcess
+  let copyModeActive = false
 
   try {
     ptyProcess = pty.spawn(
@@ -1380,6 +1589,27 @@ const handleRemoteTerminalSocket = async (ws, hostIdRaw, sessionIdRaw, searchPar
     cleanup()
   })
 
+  const writeInput = async (payload) => {
+    if (copyModeActive) {
+      copyModeActive = false
+      try {
+        await remoteCancelCopyMode(host, sanitizedSessionId, windowIndex)
+      } catch (error) {
+        console.warn('Failed to leave remote tmux copy mode', safeErrorMessage(error))
+      }
+    }
+    ptyProcess?.write(payload)
+  }
+
+  const scrollPane = async (lines) => {
+    try {
+      const scrolled = await remoteScrollPane(host, sanitizedSessionId, windowIndex, lines)
+      copyModeActive = copyModeActive || scrolled
+    } catch (error) {
+      console.warn('Failed to scroll remote tmux pane', safeErrorMessage(error))
+    }
+  }
+
   ws.on('message', (raw) => {
     let incoming
     try {
@@ -1389,7 +1619,13 @@ const handleRemoteTerminalSocket = async (ws, hostIdRaw, sessionIdRaw, searchPar
     }
     if (incoming.type === 'input' && typeof incoming.payload === 'string') {
       if (!monitorMode) {
-        ptyProcess?.write(incoming.payload)
+        writeInput(incoming.payload)
+      }
+      return
+    }
+    if (incoming.type === 'scroll') {
+      if (!monitorMode) {
+        scrollPane(incoming.lines)
       }
       return
     }
