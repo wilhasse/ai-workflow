@@ -464,8 +464,10 @@ def format_archive_records(records: Iterable[dict[str, Any]], *, limit: int | No
             tmux_label = f"{tmux_data.get('session')}#{tmux_data.get('windowIndex')}"
         title = _compact_title(str(record.get("title") or ""), limit=54)
         cwd = str(record.get("cwd") or "")
+        resume_id = str(record.get("resumeId") or "")
         lines.append(
             f"{active} {record.get('id', ''):<14} {record.get('kind', ''):<6} "
+            f"resume={resume_id:<36} "
             f"{record.get('hostName') or record.get('hostId'):<14} {tmux_label:<20} "
             f"{title:<54} {cwd}"
         )

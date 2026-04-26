@@ -20,6 +20,7 @@ from wsv2.cli import build_popup_unavailable_message, can_launch_gui_popup, dete
 from wsv2.session_archive import (
     build_record_command,
     build_records_for_pane,
+    format_archive_records,
     merge_snapshots,
 )
 from wsv2.state import LauncherState
@@ -490,6 +491,26 @@ class SessionArchiveTests(unittest.TestCase):
         self.assertIn('cslog@10.1.0.9', command)
         self.assertIn('tmux new-window', command)
         self.assertIn('codex resume thread-1', command)
+
+    def test_archive_list_output_includes_raw_resume_id(self) -> None:
+        output = format_archive_records(
+            [
+                {
+                    'id': 'cx-short',
+                    'kind': 'codex',
+                    'resumeId': '019d8215-10f6-7471-b88b-a32f42e71b12',
+                    'hostName': 'Supersaber',
+                    'cwd': '/home/cslog/ai-workflow',
+                    'title': 'Recoverable Codex work',
+                    'active': True,
+                    'tmux': {'session': 'harness', 'windowIndex': 2},
+                }
+            ]
+        )
+
+        self.assertIn('cx-short', output)
+        self.assertIn('resume=019d8215-10f6-7471-b88b-a32f42e71b12', output)
+        self.assertIn('harness#2', output)
 
 
 if __name__ == '__main__':
