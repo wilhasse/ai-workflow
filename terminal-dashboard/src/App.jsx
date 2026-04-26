@@ -6,6 +6,7 @@ import './App.css'
 import TerminalViewer from './components/terminal/TerminalViewer'
 import ConfirmDialog from './components/dialogs/ConfirmDialog'
 import TerminalSwitcherDialog from './components/dialogs/TerminalSwitcherDialog'
+import MobileTerminalApp from './components/mobile/MobileTerminalApp'
 import MobileLayout from './components/layout/MobileLayout'
 import WorkspaceSheet from './components/sheets/WorkspaceSheet'
 import WindowSheet from './components/sheets/WindowSheet'
@@ -91,7 +92,7 @@ const buildWorkspaceSocketUrl = (workspaceId, windowIndex = null, options = {}) 
   return url
 }
 
-function App() {
+function DashboardApp() {
   const isMobile = useIsMobile()
   const isLargeScreen = useMediaQuery('(min-width: 1280px)')
   const canUseOverview = !isMobile && isLargeScreen
@@ -289,10 +290,12 @@ function App() {
   }, [overviewHiddenIds])
 
   useEffect(() => {
+    const activityTimers = activityTimersRef.current
+    const activityTimestamps = activityTimestampsRef.current
     return () => {
-      activityTimersRef.current.forEach((timeoutId) => clearTimeout(timeoutId))
-      activityTimersRef.current.clear()
-      activityTimestampsRef.current.clear()
+      activityTimers.forEach((timeoutId) => clearTimeout(timeoutId))
+      activityTimers.clear()
+      activityTimestamps.clear()
     }
   }, [])
 
@@ -1280,6 +1283,11 @@ function App() {
       />
     </div>
   )
+}
+
+function App() {
+  const mobilePath = typeof window !== 'undefined' && window.location.pathname.startsWith('/mobile')
+  return mobilePath ? <MobileTerminalApp /> : <DashboardApp />
 }
 
 export default App

@@ -3097,3 +3097,399 @@ button.danger:hover:not(:disabled) {
   color: #7e8a99;
   font-size: 0.8rem;
 }
+
+/* ============================================================================
+   DEDICATED PHONE / TABLET TERMINAL MODE (/mobile)
+   ============================================================================ */
+
+.mobile-terminal-app {
+  min-height: 100dvh;
+  height: 100dvh;
+  color: var(--color-text-primary);
+  background:
+    radial-gradient(circle at 10% 0%, rgba(20, 184, 166, 0.14), transparent 28rem),
+    linear-gradient(155deg, #020617 0%, #0b1120 45%, #111827 100%);
+  overflow: hidden;
+}
+
+.mobile-terminal-app button,
+.mobile-terminal-app input,
+.mobile-terminal-app select {
+  font: inherit;
+}
+
+.mobile-terminal-app.phone {
+  display: flex;
+  flex-direction: column;
+}
+
+.mobile-terminal-app.tablet {
+  display: grid;
+  grid-template-columns: minmax(19rem, 24rem) minmax(0, 1fr);
+}
+
+.mobile-phone-header,
+.mobile-terminal-toolbar,
+.mobile-panel-header,
+.mobile-app-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.mobile-phone-header {
+  flex: 0 0 auto;
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(2, 6, 23, 0.86);
+  backdrop-filter: blur(18px);
+}
+
+.mobile-phone-header strong,
+.mobile-app-title strong {
+  display: block;
+  font-size: 1.05rem;
+  letter-spacing: -0.02em;
+}
+
+.mobile-phone-header span,
+.mobile-app-title span {
+  display: block;
+  color: var(--color-text-secondary);
+  font-size: 0.8rem;
+}
+
+.mobile-tablet-sidebar {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1.15fr) minmax(12rem, 0.85fr);
+  gap: 0.75rem;
+  padding: 0.85rem;
+  border-right: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(2, 6, 23, 0.74);
+}
+
+.mobile-workspace-list,
+.mobile-window-list {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.85rem;
+  overflow: hidden;
+}
+
+.phone .mobile-workspace-list,
+.phone .mobile-window-list {
+  flex: 1 1 auto;
+}
+
+.mobile-search-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem;
+}
+
+.mobile-search-row input {
+  min-width: 0;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.78);
+  color: var(--color-text-primary);
+  padding: 0.8rem 1rem;
+}
+
+.mobile-search-row button,
+.mobile-ghost-btn,
+.mobile-record-btn,
+.mobile-voice-actions button {
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 999px;
+  background: rgba(30, 41, 59, 0.84);
+  color: var(--color-text-primary);
+  padding: 0.7rem 0.9rem;
+  min-height: 2.7rem;
+}
+
+.mobile-search-row button:disabled,
+.mobile-record-btn:disabled {
+  opacity: 0.48;
+}
+
+.mobile-host-groups,
+.mobile-window-buttons {
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding-right: 0.15rem;
+}
+
+.mobile-host-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.mobile-host-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem 0.15rem;
+  color: var(--color-text-secondary);
+  background: rgba(2, 6, 23, 0.92);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.mobile-host-error,
+.mobile-global-error,
+.mobile-voice-error {
+  margin: 0;
+  color: #fecaca;
+  background: rgba(127, 29, 29, 0.38);
+  border: 1px solid rgba(248, 113, 113, 0.26);
+  border-radius: 0.75rem;
+  padding: 0.65rem 0.8rem;
+  font-size: 0.82rem;
+}
+
+.mobile-global-error {
+  margin: 0.75rem 0.85rem 0;
+}
+
+.mobile-workspace-button,
+.mobile-window-button {
+  width: 100%;
+  display: grid;
+  align-items: center;
+  gap: 0.7rem;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 1rem;
+  background: rgba(15, 23, 42, 0.78);
+  color: var(--color-text-primary);
+  text-align: left;
+  padding: 0.85rem;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
+}
+
+.mobile-workspace-button {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.mobile-window-button {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.mobile-workspace-button.selected,
+.mobile-window-button.selected {
+  border-color: rgba(20, 184, 166, 0.55);
+  background: rgba(20, 184, 166, 0.12);
+}
+
+.mobile-workspace-button:disabled {
+  opacity: 0.45;
+}
+
+.mobile-workspace-dot {
+  width: 0.68rem;
+  height: 0.68rem;
+  border-radius: 999px;
+  background: var(--color-text-tertiary);
+}
+
+.mobile-workspace-dot.active {
+  background: var(--color-success);
+  box-shadow: 0 0 18px rgba(20, 184, 166, 0.7);
+}
+
+.mobile-workspace-main,
+.mobile-workspace-meta,
+.mobile-terminal-title {
+  min-width: 0;
+}
+
+.mobile-workspace-main strong,
+.mobile-workspace-main small,
+.mobile-workspace-meta span,
+.mobile-workspace-meta small,
+.mobile-window-name,
+.mobile-window-meta {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-workspace-main small,
+.mobile-workspace-meta small,
+.mobile-window-meta,
+.mobile-panel-header p,
+.mobile-terminal-title small {
+  color: var(--color-text-secondary);
+  font-size: 0.78rem;
+}
+
+.mobile-workspace-meta {
+  text-align: right;
+  color: var(--color-text-secondary);
+  font-size: 0.78rem;
+}
+
+.mobile-panel-header {
+  flex: 0 0 auto;
+}
+
+.mobile-panel-header h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.mobile-panel-header p {
+  margin: 0.15rem 0 0;
+}
+
+.mobile-window-index {
+  display: inline-flex;
+  justify-content: center;
+  min-width: 2.5rem;
+  color: var(--color-accent-primary);
+  font-weight: 700;
+}
+
+.mobile-window-name {
+  font-weight: 650;
+}
+
+.mobile-empty-card,
+.mobile-terminal-empty {
+  border: 1px dashed rgba(148, 163, 184, 0.28);
+  border-radius: 1.1rem;
+  padding: 1.25rem;
+  color: var(--color-text-secondary);
+  background: rgba(15, 23, 42, 0.48);
+}
+
+.mobile-terminal-panel {
+  position: relative;
+  min-height: 0;
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  background: #020617;
+}
+
+.phone .mobile-terminal-panel {
+  flex: 1 1 auto;
+}
+
+.mobile-terminal-toolbar {
+  padding: 0.7rem 0.75rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(2, 6, 23, 0.92);
+}
+
+.mobile-terminal-title strong,
+.mobile-terminal-title small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-font-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--color-text-secondary);
+  font-size: 0.78rem;
+}
+
+.mobile-font-control select {
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.92);
+  color: var(--color-text-primary);
+  padding: 0.45rem 0.55rem;
+}
+
+.mobile-record-btn {
+  border-color: rgba(20, 184, 166, 0.42);
+}
+
+.mobile-record-btn.recording {
+  color: #fecaca;
+  border-color: rgba(248, 113, 113, 0.55);
+  background: rgba(127, 29, 29, 0.42);
+}
+
+.mobile-terminal-panel .terminal-frame {
+  min-height: 0;
+  height: 100%;
+  border-radius: 0;
+  border: 0;
+  box-shadow: none;
+}
+
+.mobile-terminal-panel .terminal-shortcut-bar {
+  gap: 0.5rem;
+  padding: 0.45rem;
+  overflow-x: auto;
+}
+
+.mobile-terminal-panel .shortcut-btn,
+.mobile-terminal-panel .shortcut-config-btn {
+  min-height: 2.5rem;
+  min-width: 3rem;
+  font-size: 0.9rem;
+}
+
+.mobile-terminal-panel .terminal-surface {
+  border-radius: 0;
+}
+
+.mobile-voice-panel {
+  position: absolute;
+  left: 0.75rem;
+  right: 0.75rem;
+  bottom: 0.75rem;
+  z-index: 5;
+  border: 1px solid rgba(20, 184, 166, 0.32);
+  border-radius: 1rem;
+  background: rgba(2, 6, 23, 0.94);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+  padding: 0.85rem;
+}
+
+.mobile-voice-panel p {
+  margin: 0;
+  max-height: 7rem;
+  overflow: auto;
+}
+
+.mobile-voice-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+@media (max-width: 520px) {
+  .mobile-terminal-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .mobile-font-control span {
+    display: none;
+  }
+
+  .mobile-record-btn,
+  .mobile-ghost-btn {
+    padding-inline: 0.75rem;
+  }
+}

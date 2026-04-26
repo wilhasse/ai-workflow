@@ -20,6 +20,8 @@ const config = {
   defaultShell: process.env.SHELL_CMD ?? process.env.SHELL ?? '/bin/bash',
   dataDir: process.env.DATA_DIR ?? path.join(projectRoot, 'data'),
   workspacesConfig: process.env.WORKSPACES_CONFIG ?? path.join(os.homedir(), 'ai-workflow', 'workspace-switcher', 'workspaces.json'),
+  mobileWorkspacesConfig: process.env.MOBILE_WORKSPACES_CONFIG ?? path.join(os.homedir(), 'ai-workflow', 'workspace-v2', 'catalog', 'workspaces.v2.json'),
+  mobileSelfHostId: process.env.MOBILE_SELF_HOST_ID ?? process.env.WSV2_SELF_HOST ?? 'vm10',
 }
 const storeFile = path.join(config.dataDir, 'sessions.json')
 const userStoreFile = path.join(config.dataDir, 'users.json')
@@ -120,6 +122,19 @@ const formatDiscoveredWorkspaceName = (sessionId) =>
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(' ') || String(sessionId)
+
+const shellQuote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`
+
+const normalizePath = (value) => {
+  if (!value) {
+    return ''
+  }
+  return String(value).replace(/^~(?=$|\/)/, os.homedir()).replace(/\/+$/, '') || '/'
+}
+
+const isHostLocal = (host) => host?.id === config.mobileSelfHostId || host?.id === 'local'
+
+const safeErrorMessage = (error) => error?.message ?? String(error)
 
 const persistUsers = async () => {
   await ensureDataDir()
@@ -373,6 +388,99 @@ const tmuxListWindows = async (sessionId) => {
     })
 }
 
+const parseTmuxWindowRows = (stdout) =>
+  stdout
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      const [sessionId, index, name, active, activity, panes] = line.split('|')
+      const windowIndex = Number.parseInt(index, 10)
+      const activitySeconds = Number.parseInt(activity, 10)
+      const paneCount = Number.parseInt(panes, 10)
+      if (!sessionId || !Number.isFinite(windowIndex)) {
+        return null
+      }
+      return {
+        sessionId,
+        index: windowIndex,
+        name: name || `window-${index}`,
+        active: active === '1',
+        lastActivityAt: Number.isFinite(activitySeconds) ? activitySeconds * 1000 : 0,
+        paneCount: Number.isFinite(paneCount) ? paneCount : 0,
+      }
+    })
+    .filter(Boolean)
+
+const groupWindowsBySession = (windows) => {
+  const grouped = new Map()
+  windows.forEach((window) => {
+    if (!grouped.has(window.sessionId)) {
+      grouped.set(window.sessionId, [])
+    }
+    grouped.get(window.sessionId).push({
+      index: window.index,
+      name: window.name,
+      active: window.active,
+      lastActivityAt: window.lastActivityAt,
+      paneCount: window.paneCount,
+    })
+  })
+  grouped.forEach((items) => {
+    items.sort((left, right) => left.index - right.index)
+  })
+  return grouped
+}
+
+const tmuxListAllWindows = async () => {
+  const response = await runTmux([
+    'list-windows',
+    '-a',
+    '-F',
+    '#{session_name}|#{window_index}|#{window_name}|#{window_active}|#{window_activity}|#{window_panes}',
+  ])
+  if (!response.ok) {
+    if (response.error?.code === 1) {
+      return []
+    }
+    throw response.error
+  }
+  return parseTmuxWindowRows(response.stdout)
+}
+
+const runSsh = async (sshTarget, remoteCommand, timeout = 8000) => {
+  try {
+    const result = await execFileAsync(
+      'ssh',
+      [
+        '-o',
+        'ConnectTimeout=3',
+        '-o',
+        'BatchMode=yes',
+        sshTarget,
+        remoteCommand,
+      ],
+      { timeout, maxBuffer: 1024 * 1024 },
+    )
+    return { ok: true, stdout: result.stdout }
+  } catch (error) {
+    return { ok: false, error }
+  }
+}
+
+const remoteListAllWindows = async (host) => {
+  if (!host?.ssh) {
+    throw new Error('Host has no SSH target')
+  }
+  const response = await runSsh(
+    host.ssh,
+    `${config.tmuxBin} list-windows -a -F ${shellQuote('#{session_name}|#{window_index}|#{window_name}|#{window_active}|#{window_activity}|#{window_panes}')} 2>/dev/null || true`,
+  )
+  if (!response.ok) {
+    throw response.error
+  }
+  return parseTmuxWindowRows(response.stdout)
+}
+
 const tmuxSelectWindow = async (sessionId, windowIndex) => {
   const response = await runTmux(['select-window', '-t', `${sessionId}:${windowIndex}`])
   return response.ok
@@ -445,6 +553,189 @@ const ensureTmuxSession = async ({ sessionId, projectId, command }) => {
     await tmuxCreateSession(sessionId, command ?? config.defaultShell)
   }
   return ensureMetadata(sessionId, { projectId, command })
+}
+
+const loadMobileCatalog = async () => {
+  const raw = await fs.readFile(config.mobileWorkspacesConfig, 'utf8')
+  const payload = JSON.parse(raw)
+  const hosts = Array.isArray(payload.hosts)
+    ? payload.hosts
+        .map((host) => ({
+          id: sanitizeId(host.id) ?? 'local',
+          name: String(host.name || host.id || 'Local'),
+          ssh: host.ssh ? String(host.ssh) : null,
+          hostnames: Array.isArray(host.hostnames) ? host.hostnames : [],
+          legacyIds: Array.isArray(host.legacy_ids) ? host.legacy_ids : [],
+        }))
+        .filter((host) => host.id)
+    : [{ id: 'local', name: 'Local', ssh: null, hostnames: [], legacyIds: [] }]
+  const hostLookup = new Map(hosts.map((host) => [host.id, host]))
+  const workspaces = Array.isArray(payload.workspaces)
+    ? payload.workspaces
+        .map((workspace) => {
+          const hostId = sanitizeId(workspace.host) ?? config.mobileSelfHostId ?? 'local'
+          const host = hostLookup.get(hostId) ?? hostLookup.get('local') ?? hosts[0]
+          const id = sanitizeId(workspace.id)
+          if (!id || !host) {
+            return null
+          }
+          return {
+            id,
+            name: String(workspace.name || workspace.id),
+            description: String(workspace.description || ''),
+            path: normalizePath(workspace.path || ''),
+            color: String(workspace.color || '#3498db'),
+            icon: String(workspace.icon || 'folder'),
+            hostId: host.id,
+            source: 'configured',
+          }
+        })
+        .filter(Boolean)
+    : []
+
+  return { hosts, workspaces }
+}
+
+const decorateMobileWorkspace = ({ workspace, host, windows, active }) => {
+  const lastActivityAt = windows.reduce(
+    (latest, window) => Math.max(latest, window.lastActivityAt || 0),
+    0,
+  )
+  return {
+    ...workspace,
+    key: `${host.id}:${workspace.id}`,
+    hostId: host.id,
+    hostName: host.name,
+    local: isHostLocal(host),
+    active,
+    reachable: true,
+    windows,
+    windowCount: windows.length,
+    lastActivityAt,
+    connection: {
+      type: isHostLocal(host) ? 'local' : 'remote',
+      hostId: host.id,
+      sessionId: workspace.id,
+    },
+  }
+}
+
+const buildHostMobileInventory = async (host, configuredWorkspaces) => {
+  const windowRows = isHostLocal(host)
+    ? await tmuxListAllWindows()
+    : await remoteListAllWindows(host)
+  const windowsBySession = groupWindowsBySession(windowRows)
+  const activeSessionIds = new Set(windowsBySession.keys())
+  const configuredIds = new Set(configuredWorkspaces.map((workspace) => workspace.id))
+  const workspaces = configuredWorkspaces.map((workspace) =>
+    decorateMobileWorkspace({
+      workspace,
+      host,
+      windows: windowsBySession.get(workspace.id) ?? [],
+      active: activeSessionIds.has(workspace.id),
+    }),
+  )
+
+  activeSessionIds.forEach((sessionId) => {
+    if (configuredIds.has(sessionId)) {
+      return
+    }
+    workspaces.push(
+      decorateMobileWorkspace({
+        workspace: {
+          id: sessionId,
+          name: formatDiscoveredWorkspaceName(sessionId),
+          description: 'Discovered tmux session',
+          path: '',
+          color: '#64748b',
+          icon: 'terminal',
+          hostId: host.id,
+          source: 'discovered',
+          discovered: true,
+        },
+        host,
+        windows: windowsBySession.get(sessionId) ?? [],
+        active: true,
+      }),
+    )
+  })
+
+  workspaces.sort((left, right) => {
+    if (left.active !== right.active) {
+      return left.active ? -1 : 1
+    }
+    if (right.lastActivityAt !== left.lastActivityAt) {
+      return right.lastActivityAt - left.lastActivityAt
+    }
+    return left.name.localeCompare(right.name)
+  })
+
+  return {
+    id: host.id,
+    name: host.name,
+    local: isHostLocal(host),
+    reachable: true,
+    workspaceCount: workspaces.length,
+    activeWorkspaceCount: workspaces.filter((workspace) => workspace.active).length,
+    workspaces,
+  }
+}
+
+const handleMobileWorkspaces = async (res) => {
+  try {
+    const catalog = await loadMobileCatalog()
+    const workspacesByHost = new Map()
+    catalog.hosts.forEach((host) => workspacesByHost.set(host.id, []))
+    catalog.workspaces.forEach((workspace) => {
+      if (!workspacesByHost.has(workspace.hostId)) {
+        workspacesByHost.set(workspace.hostId, [])
+      }
+      workspacesByHost.get(workspace.hostId).push(workspace)
+    })
+
+    const hosts = []
+    for (const host of catalog.hosts) {
+      try {
+        hosts.push(await buildHostMobileInventory(host, workspacesByHost.get(host.id) ?? []))
+      } catch (error) {
+        hosts.push({
+          id: host.id,
+          name: host.name,
+          local: isHostLocal(host),
+          reachable: false,
+          error: safeErrorMessage(error),
+          workspaceCount: (workspacesByHost.get(host.id) ?? []).length,
+          activeWorkspaceCount: 0,
+          workspaces: (workspacesByHost.get(host.id) ?? []).map((workspace) => ({
+            ...workspace,
+            key: `${host.id}:${workspace.id}`,
+            hostName: host.name,
+            local: isHostLocal(host),
+            active: false,
+            reachable: false,
+            windows: [],
+            windowCount: 0,
+            lastActivityAt: 0,
+            connection: {
+              type: isHostLocal(host) ? 'local' : 'remote',
+              hostId: host.id,
+              sessionId: workspace.id,
+            },
+          })),
+        })
+      }
+    }
+
+    const flatWorkspaces = hosts.flatMap((host) => host.workspaces)
+    respond(res, 200, {
+      selfHostId: config.mobileSelfHostId,
+      scannedAt: new Date().toISOString(),
+      hosts,
+      workspaces: flatWorkspaces,
+    })
+  } catch (error) {
+    respond(res, 500, { error: safeErrorMessage(error), hosts: [], workspaces: [] })
+  }
 }
 
 const handleHealth = async (res) => {
@@ -791,6 +1082,10 @@ const server = http.createServer(async (req, res) => {
     await handleGetWorkspaces(res)
     return
   }
+  if (method === 'GET' && pathName === '/mobile/workspaces') {
+    await handleMobileWorkspaces(res)
+    return
+  }
   if (method === 'GET' && pathName === '/sessions') {
     await handleListSessions(res)
     return
@@ -834,17 +1129,23 @@ const sendWsMessage = (ws, payload) => {
   }
 }
 
+const parseTerminalSocketOptions = (searchParams) => {
+  const windowIndexRaw = searchParams.get('windowIndex')
+  const initialColsRaw = searchParams.get('cols')
+  const initialRowsRaw = searchParams.get('rows')
+  const monitorFlag = (searchParams.get('monitor') ?? '').toLowerCase()
+  return {
+    windowIndex: windowIndexRaw !== null ? Number.parseInt(windowIndexRaw, 10) : null,
+    initialCols: initialColsRaw !== null ? Number.parseInt(initialColsRaw, 10) : null,
+    initialRows: initialRowsRaw !== null ? Number.parseInt(initialRowsRaw, 10) : null,
+    monitorMode: monitorFlag === '1' || monitorFlag === 'true',
+  }
+}
+
 const handleTerminalSocket = async (ws, sessionIdRaw, searchParams) => {
   const sanitizedSessionId = sanitizeId(sessionIdRaw)
   const sanitizedProjectId = sanitizeId(searchParams.get('projectId'))
-  const windowIndexRaw = searchParams.get('windowIndex')
-  const windowIndex = windowIndexRaw !== null ? Number.parseInt(windowIndexRaw, 10) : null
-  const initialColsRaw = searchParams.get('cols')
-  const initialRowsRaw = searchParams.get('rows')
-  const initialCols = initialColsRaw !== null ? Number.parseInt(initialColsRaw, 10) : null
-  const initialRows = initialRowsRaw !== null ? Number.parseInt(initialRowsRaw, 10) : null
-  const monitorFlag = (searchParams.get('monitor') ?? '').toLowerCase()
-  const monitorMode = monitorFlag === '1' || monitorFlag === 'true'
+  const { windowIndex, initialCols, initialRows, monitorMode } = parseTerminalSocketOptions(searchParams)
 
   if (!sanitizedSessionId) {
     sendWsMessage(ws, { type: 'error', message: 'Invalid session id' })
@@ -987,16 +1288,165 @@ const handleTerminalSocket = async (ws, sessionIdRaw, searchParams) => {
   })
 }
 
+const findMobileHost = async (hostId) => {
+  const sanitizedHostId = sanitizeId(hostId)
+  if (!sanitizedHostId) {
+    return null
+  }
+  const catalog = await loadMobileCatalog()
+  return catalog.hosts.find((host) => host.id === sanitizedHostId) ?? null
+}
+
+const buildRemoteAttachCommand = ({ sessionId, windowIndex }) => {
+  const sessionTarget = shellQuote(sessionId)
+  const commands = [
+    `${config.tmuxBin} has-session -t ${sessionTarget} 2>/dev/null || ${config.tmuxBin} new-session -d -s ${sessionTarget}`,
+  ]
+  if (windowIndex !== null && Number.isFinite(windowIndex)) {
+    commands.push(`${config.tmuxBin} select-window -t ${shellQuote(`${sessionId}:${windowIndex}`)} 2>/dev/null || true`)
+  }
+  commands.push(`exec ${config.tmuxBin} attach-session -t ${sessionTarget}`)
+  return commands.join('; ')
+}
+
+const handleRemoteTerminalSocket = async (ws, hostIdRaw, sessionIdRaw, searchParams) => {
+  const sanitizedSessionId = sanitizeId(sessionIdRaw)
+  const host = await findMobileHost(hostIdRaw)
+  const { windowIndex, initialCols, initialRows, monitorMode } = parseTerminalSocketOptions(searchParams)
+
+  if (!host || isHostLocal(host) || !host.ssh) {
+    sendWsMessage(ws, { type: 'error', message: 'Invalid remote host' })
+    ws.close(1008, 'Invalid remote host')
+    return
+  }
+  if (!sanitizedSessionId) {
+    sendWsMessage(ws, { type: 'error', message: 'Invalid session id' })
+    ws.close(1008, 'Invalid session id')
+    return
+  }
+
+  const ptyCols = !monitorMode && Number.isFinite(initialCols) && initialCols > 0 ? initialCols : 80
+  const ptyRows = !monitorMode && Number.isFinite(initialRows) && initialRows > 0 ? initialRows : 24
+  let ptyProcess
+
+  try {
+    ptyProcess = pty.spawn(
+      'ssh',
+      [
+        '-tt',
+        '-o',
+        'ServerAliveInterval=60',
+        '-o',
+        'ServerAliveCountMax=3',
+        host.ssh,
+        buildRemoteAttachCommand({ sessionId: sanitizedSessionId, windowIndex }),
+      ],
+      {
+        name: 'xterm-256color',
+        cols: ptyCols,
+        rows: ptyRows,
+        cwd: process.env.HOME ?? process.cwd(),
+        env: {
+          ...process.env,
+          TERM: 'xterm-256color',
+        },
+      },
+    )
+  } catch (error) {
+    console.warn('Failed to start remote tmux pty', error)
+    sendWsMessage(ws, { type: 'error', message: 'Unable to attach remote tmux session' })
+    ws.close(1011, 'Failed to attach remote tmux session')
+    return
+  }
+
+  const cleanup = () => {
+    if (ptyProcess) {
+      try {
+        ptyProcess.kill()
+      } catch (error) {
+        console.warn('Failed to clean up remote pty', error.message)
+      }
+      ptyProcess = null
+    }
+  }
+
+  ptyProcess.onData((data) => {
+    sendWsMessage(ws, { type: 'data', payload: data })
+  })
+
+  ptyProcess.onExit(({ exitCode, signal }) => {
+    sendWsMessage(ws, { type: 'exit', exitCode, signal })
+    ws.close(1000, 'remote tmux session detached')
+    cleanup()
+  })
+
+  ws.on('message', (raw) => {
+    let incoming
+    try {
+      incoming = JSON.parse(raw.toString())
+    } catch {
+      return
+    }
+    if (incoming.type === 'input' && typeof incoming.payload === 'string') {
+      if (!monitorMode) {
+        ptyProcess?.write(incoming.payload)
+      }
+      return
+    }
+    if (incoming.type === 'resize') {
+      if (monitorMode) {
+        return
+      }
+      const cols = Number.parseInt(incoming.cols, 10)
+      const rows = Number.parseInt(incoming.rows, 10)
+      if (Number.isFinite(cols) && Number.isFinite(rows) && cols > 0 && rows > 0) {
+        try {
+          ptyProcess?.resize(cols, rows)
+        } catch (error) {
+          console.warn('Failed to resize remote pty', error.message)
+        }
+      }
+    }
+  })
+
+  ws.on('close', cleanup)
+  ws.on('error', (error) => {
+    console.warn('Remote WebSocket error for session', sanitizedSessionId, error.message)
+    cleanup()
+  })
+
+  const pingInterval = setInterval(() => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.ping()
+    }
+  }, 30000)
+
+  ws.on('close', () => clearInterval(pingInterval))
+
+  sendWsMessage(ws, {
+    type: 'ready',
+    sessionId: sanitizedSessionId,
+    hostId: host.id,
+    cols: ptyCols,
+    rows: ptyRows,
+    monitor: monitorMode,
+  })
+}
+
 server.on('upgrade', (req, socket, head) => {
   try {
     const parsed = new URL(req.url, `http://${req.headers.host}`)
-    const match = parsed.pathname.match(/^\/ws\/sessions\/([^/]+)$/)
-    if (!match) {
+    const localMatch = parsed.pathname.match(/^\/ws\/sessions\/([^/]+)$/)
+    const remoteMatch = parsed.pathname.match(/^\/ws\/remote-sessions\/([^/]+)\/([^/]+)$/)
+    if (!localMatch && !remoteMatch) {
       socket.destroy()
       return
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
-      handleTerminalSocket(ws, match[1], parsed.searchParams).catch((error) => {
+      const handler = localMatch
+        ? handleTerminalSocket(ws, localMatch[1], parsed.searchParams)
+        : handleRemoteTerminalSocket(ws, remoteMatch[1], remoteMatch[2], parsed.searchParams)
+      handler.catch((error) => {
         console.error('Terminal socket error', error)
         ws.close(1011, 'Internal server error')
       })

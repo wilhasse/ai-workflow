@@ -51,6 +51,8 @@ services:
       - LANG=pt_BR.UTF-8
       - LC_ALL=pt_BR.UTF-8
       - TERM=xterm-256color
+      - MOBILE_SELF_HOST_ID=${MOBILE_SELF_HOST_ID:-vm10}
+      - MOBILE_WORKSPACES_CONFIG=${MOBILE_WORKSPACES_CONFIG:-/home/cslog/ai-workflow/workspace-v2/catalog/workspaces.v2.json}
     volumes:
       # Persist session data
       - tmux-session-data:/app/data
