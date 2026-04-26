@@ -87,18 +87,29 @@ class WorkspacePopup(Gtk.Window):
         provider.load_from_data(
             b"""
             window {
-                background: #111827;
+                background: #05070d;
+                color: #c2ccd8;
             }
             entry {
+                background: #080c13;
+                color: #d4dde8;
+                border: 1px solid #263244;
+                border-radius: 6px;
                 font-size: 16px;
                 padding: 10px;
             }
+            list {
+                background: #05070d;
+            }
             list row {
+                background: #070a10;
+                border: 1px solid #121a28;
                 padding: 8px;
-                border-radius: 8px;
+                border-radius: 6px;
             }
             list row:selected {
-                background: rgba(96, 165, 250, 0.18);
+                background: #182235;
+                border-color: #30405a;
             }
             """
         )
@@ -207,9 +218,9 @@ class WorkspacePopup(Gtk.Window):
         title = Gtk.Label()
         status = item.status
         title.set_markup(
-            f'<span foreground="#f9fafb"><b>{GLib.markup_escape_text(status.workspace_name)}</b></span>'
-            f' <span foreground="#f59e0b">#{status.window_index}</span>'
-            f' <span foreground="#d1d5db">{GLib.markup_escape_text(status.window_name)}</span>'
+            f'<span foreground="#d5dde8"><b>{GLib.markup_escape_text(status.workspace_name)}</b></span>'
+            f' <span foreground="#c5a15c">#{status.window_index}</span>'
+            f' <span foreground="#aeb8c6">{GLib.markup_escape_text(status.window_name)}</span>'
         )
         title.set_xalign(0)
         title.set_ellipsize(Pango.EllipsizeMode.END)
@@ -217,7 +228,7 @@ class WorkspacePopup(Gtk.Window):
 
         host = Gtk.Label()
         host.set_markup(
-            f'<span foreground="#93c5fd">{GLib.markup_escape_text(status.host.name)}</span>'
+            f'<span foreground="#8fa1b6">{GLib.markup_escape_text(status.host.name)}</span>'
         )
         host.set_xalign(1)
         top.pack_end(host, False, False, 0)
@@ -230,7 +241,7 @@ class WorkspacePopup(Gtk.Window):
         if item.recent_score:
             detail_parts.insert(0, f"recent {self._relative_time(item.recent_score)}")
         detail.set_markup(
-            '<span foreground="#9ca3af" size="small">'
+            '<span foreground="#7e8a99" size="small">'
             + GLib.markup_escape_text("   ".join(detail_parts))
             + "</span>"
         )
@@ -257,12 +268,12 @@ class WorkspacePopup(Gtk.Window):
 
     def _status_dot_markup(self, status: WorkspaceStatus) -> str:
         if status.reachable is False:
-            return '<span foreground="#ef4444">●</span>'
+            return '<span foreground="#c45f5f">●</span>'
         if status.active:
-            return '<span foreground="#22c55e">●</span>'
+            return '<span foreground="#6ea979">●</span>'
         if status.reachable is None:
-            return '<span foreground="#9ca3af">◌</span>'
-        return '<span foreground="#6b7280">○</span>'
+            return '<span foreground="#7e8a99">◌</span>'
+        return '<span foreground="#556070">○</span>'
 
     def _on_search_changed(self, _entry: Gtk.SearchEntry) -> None:
         self._refresh_rows()

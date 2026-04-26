@@ -880,6 +880,7 @@ class TerminalSwitcherDialog(Gtk.Dialog):
 
     def __init__(self, parent, entries):
         super().__init__(title="Terminal Switcher", transient_for=parent, flags=0)
+        self.set_name('terminal-switcher-dialog')
         self.parent = parent
         self.all_entries = entries
         self.filtered_entries = list(entries)
@@ -900,6 +901,7 @@ class TerminalSwitcherDialog(Gtk.Dialog):
         box.pack_start(title, False, False, 0)
 
         self.search_entry = Gtk.Entry()
+        self.search_entry.set_name('terminal-switcher-search')
         self.search_entry.set_placeholder_text('Search host, workspace, task name, or #window')
         self.search_entry.connect('changed', self._on_search_changed)
         self.search_entry.connect('activate', self._activate_selected)
@@ -907,6 +909,7 @@ class TerminalSwitcherDialog(Gtk.Dialog):
 
         self.store = Gtk.ListStore(str, str, str, str, str, object)
         self.tree = Gtk.TreeView(model=self.store)
+        self.tree.set_name('terminal-switcher-tree')
         self.tree.set_headers_visible(True)
         self.tree.connect('row-activated', self._on_row_activated)
 
@@ -921,7 +924,7 @@ class TerminalSwitcherDialog(Gtk.Dialog):
             renderer = Gtk.CellRendererText()
             if index == 3:
                 renderer.set_property('ellipsize', Pango.EllipsizeMode.END)
-            column = Gtk.TreeViewColumn(label, renderer, text=index)
+            column = Gtk.TreeViewColumn(label, renderer, markup=index)
             column.set_min_width(width)
             column.set_resizable(True)
             if index == 3:
@@ -948,14 +951,53 @@ class TerminalSwitcherDialog(Gtk.Dialog):
         box.pack_start(action_box, False, False, 0)
 
         hint = Gtk.Label()
-        hint.set_markup('<span size="small" foreground="#7f8c8d">Sorted by tmux activity first. Use ↑↓ and Enter to jump.</span>')
+        hint.set_markup('<span size="small" foreground="#7f8c8d">Sorted by recent terminal use. Use ↑↓ and Enter to jump.</span>')
         hint.set_xalign(0)
         box.pack_start(hint, False, False, 0)
 
         self.connect('key-press-event', self._on_key_press)
+        self._apply_css()
         self._populate()
         self.show_all()
         self.search_entry.grab_focus()
+
+    def _apply_css(self):
+        provider = Gtk.CssProvider()
+        provider.load_from_data(b"""
+            #terminal-switcher-dialog {
+                background-color: #05070d;
+                color: #c2ccd8;
+            }
+            #terminal-switcher-search {
+                background: #080c13;
+                color: #d4dde8;
+                border: 1px solid #263244;
+                border-radius: 6px;
+                padding: 8px;
+            }
+            #terminal-switcher-tree,
+            #terminal-switcher-tree.view {
+                background-color: #070a10;
+                color: #c2ccd8;
+            }
+            #terminal-switcher-tree.view:selected {
+                background-color: #182235;
+                color: #e2e8f0;
+            }
+            #terminal-switcher-tree.view:hover {
+                background-color: #0e1420;
+            }
+            treeview.view header button {
+                background: #080c13;
+                color: #8d98a8;
+                border-color: #1d2838;
+            }
+        """)
+        Gtk.StyleContext.add_provider_for_screen(
+            Gdk.Screen.get_default(),
+            provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+        )
 
     def _relative_time(self, timestamp):
         if not timestamp:
@@ -974,14 +1016,22 @@ class TerminalSwitcherDialog(Gtk.Dialog):
     def _populate(self):
         self.store.clear()
         for entry in self.filtered_entries:
-            host = entry.get('host_name', entry.get('host_id', 'local'))
+            host = GLib.markup_escape_text(entry.get('host_name', entry.get('host_id', 'local')))
             workspace = entry.get('workspace_name') or entry['session_name']
-            tab = f"#{entry['window_index']}"
-            task = entry.get('window_name') or f"window-{entry['window_index']}"
+            tab = GLib.markup_escape_text(f"#{entry['window_index']}")
+            task = GLib.markup_escape_text(entry.get('window_name') or f"window-{entry['window_index']}")
             if entry.get('discovered'):
                 workspace = f"{workspace} *"
-            recent = self._relative_time(entry.get('recent_at', entry.get('activity', 0)))
-            self.store.append([host, workspace, tab, task, recent, entry])
+            workspace = GLib.markup_escape_text(workspace)
+            recent = GLib.markup_escape_text(self._relative_time(entry.get('recent_at', entry.get('activity', 0))))
+            self.store.append([
+                f'<span foreground="#8fa1b6">{host}</span>',
+                f'<span foreground="#d5dde8" weight="bold">{workspace}</span>',
+                f'<span foreground="#c5a15c" weight="bold">{tab}</span>',
+                f'<span foreground="#aeb8c6">{task}</span>',
+                f'<span foreground="#7e8a99">{recent}</span>',
+                entry
+            ])
         if len(self.store) > 0:
             first = self.store.get_iter_first()
             self.tree.get_selection().select_iter(first)
