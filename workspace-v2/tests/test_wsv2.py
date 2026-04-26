@@ -17,6 +17,11 @@ from wsv2.actions import (
 )
 from wsv2.catalog import WorkspaceConfigError, load_config
 from wsv2.cli import build_popup_unavailable_message, can_launch_gui_popup, detect_popup_surface
+from wsv2.session_archive import (
+    build_record_command,
+    build_records_for_pane,
+    merge_snapshots,
+)
 from wsv2.state import LauncherState
 from wsv2.tui import build_tui_items, filter_tui_items
 from wsv2.drill import build_simulated_outage_payload, select_probe_targets
@@ -327,6 +332,164 @@ class OutageDrillTests(unittest.TestCase):
             config = load_config(write_v2_config(Path(tmp)))
         targets = select_probe_targets(config, ['vm10'])
         self.assertEqual([workspace.host_id for workspace in targets], ['vm9'])
+
+
+class SessionArchiveTests(unittest.TestCase):
+    def test_build_records_for_pane_matches_codex_and_claude_by_cwd(self) -> None:
+        pane = {
+            'session': 'harness',
+            'windowIndex': 1,
+            'windowName': 'node',
+            'windowActive': True,
+            'windowActivity': 100,
+            'paneId': '%5',
+            'paneIndex': 0,
+            'paneActive': True,
+            'panePid': 111,
+            'paneCommand': 'node',
+            'cwd': '/home/cslog/ai-workflow',
+            'paneTitle': 'ai-workflow',
+        }
+        records = build_records_for_pane(
+            pane,
+            claude_sessions=[
+                {
+                    'resumeId': 'claude-1',
+                    'cwd': '/home/cslog/ai-workflow',
+                    'pid': 222,
+                    'title': 'Claude task',
+                    'updatedAt': 200,
+                }
+            ],
+            codex_threads=[
+                {
+                    'resumeId': 'codex-1',
+                    'cwd': '/home/cslog/ai-workflow',
+                    'title': 'Codex task',
+                    'updatedAt': 300,
+                }
+            ],
+            host_id='vm9',
+            host_name='Supersaber',
+            now_ms=1000,
+            pane_pids={111, 222},
+        )
+
+        self.assertEqual({record['kind'] for record in records}, {'claude', 'codex'})
+        self.assertTrue(all(record['active'] for record in records))
+        self.assertTrue(all(record['tmux']['session'] == 'harness' for record in records))
+        resume_commands = [record['resumeCommand'] for record in records]
+        self.assertTrue(any('codex resume codex-1' in command for command in resume_commands))
+
+    def test_merge_snapshots_keeps_records_after_pane_disappears(self) -> None:
+        first = {
+            'hostId': 'vm9',
+            'hostName': 'Supersaber',
+            'reachable': True,
+            'records': [
+                {
+                    'id': 'cx-old',
+                    'kind': 'codex',
+                    'resumeId': 'thread-1',
+                    'hostId': 'vm9',
+                    'hostName': 'Supersaber',
+                    'cwd': '/repo',
+                    'title': 'Old work',
+                    'updatedAt': 100,
+                    'firstSeenAt': 1000,
+                    'lastSeenAt': 1000,
+                    'active': True,
+                    'tmux': {'session': 'repo', 'windowIndex': 1},
+                }
+            ],
+        }
+        archive = merge_snapshots({}, [first], now_ms=1000)
+        second = {
+            'hostId': 'vm9',
+            'hostName': 'Supersaber',
+            'reachable': True,
+            'records': [],
+        }
+        archive = merge_snapshots(archive, [second], now_ms=2000)
+
+        self.assertEqual(len(archive['records']), 1)
+        self.assertFalse(archive['records'][0]['active'])
+        self.assertEqual(archive['records'][0]['resumeId'], 'thread-1')
+
+    def test_unreachable_scan_does_not_mark_existing_records_inactive(self) -> None:
+        archive = {
+            'records': [
+                {
+                    'id': 'cx-live',
+                    'kind': 'codex',
+                    'resumeId': 'thread-1',
+                    'hostId': 'vm10',
+                    'hostName': 'Main Desktop',
+                    'cwd': '/repo',
+                    'title': 'Live work',
+                    'updatedAt': 100,
+                    'firstSeenAt': 1000,
+                    'lastSeenAt': 1000,
+                    'active': True,
+                    'tmux': {'session': 'repo', 'windowIndex': 1},
+                }
+            ],
+        }
+        snapshot = {
+            'hostId': 'vm10',
+            'hostName': 'Main Desktop',
+            'reachable': False,
+            'records': [],
+        }
+
+        merged = merge_snapshots(archive, [snapshot], now_ms=2000)
+
+        self.assertTrue(merged['records'][0]['active'])
+
+    def test_home_directory_session_does_not_match_every_project_pane(self) -> None:
+        pane = {
+            'session': 'harness',
+            'windowIndex': 1,
+            'windowName': 'node',
+            'cwd': str(Path.home() / 'ai-workflow'),
+        }
+        records = build_records_for_pane(
+            pane,
+            claude_sessions=[
+                {
+                    'resumeId': 'claude-home',
+                    'cwd': str(Path.home()),
+                    'title': 'Home session',
+                    'updatedAt': 200,
+                }
+            ],
+            codex_threads=[],
+            host_id='vm9',
+            host_name='Supersaber',
+            now_ms=1000,
+        )
+
+        self.assertEqual(records, [])
+
+    def test_build_record_command_can_restore_remote_tmux_window(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, \
+            mock.patch.dict(os.environ, {'WSV2_SELF_HOST': 'vm10'}, clear=True):
+            config = load_config(write_v2_config(Path(tmp)))
+        record = {
+            'kind': 'codex',
+            'resumeId': 'thread-1',
+            'hostId': 'vm9',
+            'cwd': '/home/cslog/ai-workflow',
+            'title': 'Harness task',
+            'tmux': {'session': 'harness', 'windowName': 'node'},
+        }
+
+        command = build_record_command(record, config, tmux_restore=True)
+
+        self.assertIn('ssh -t -o ServerAliveInterval=60 -o ServerAliveCountMax=3', command)
+        self.assertIn('cslog@10.1.0.9', command)
+        self.assertIn('tmux new-window', command)
+        self.assertIn('codex resume thread-1', command)
 
 
 if __name__ == '__main__':

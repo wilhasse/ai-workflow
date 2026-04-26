@@ -111,6 +111,31 @@ Kill a session:
 ./workspace-v2/scripts/wsv2 kill vm9:dbtools
 ```
 
+Archive Codex/Claude resume targets from tmux:
+
+```bash
+./workspace-v2/scripts/wsv2 archive-scan
+./workspace-v2/scripts/wsv2 archive-list
+./workspace-v2/scripts/wsv2 archive-command <archive-id>
+./workspace-v2/scripts/wsv2 archive-command --tmux <archive-id>
+```
+
+`archive-scan` stores recoverable Codex and Claude session IDs in:
+
+```bash
+~/.local/state/ai-workflow/workspace-session-archive.json
+```
+
+The archive records tmux host/session/window metadata, cwd, title, and the resume command. It does not preserve process memory; it preserves enough state to recreate a tmux window and run `codex resume ...` or `claude --resume ...` after you kill old panes or reboot a VM.
+
+Install a periodic local snapshot timer on each VM:
+
+```bash
+./workspace-v2/scripts/install-session-archive-timer.sh --host-id vm9 --host-name Supersaber
+```
+
+Use the matching host id/name on `vm10` or `vm12`. The timer runs `wsv2 archive-scan-local --save` every five minutes by default.
+
 ## How 16.2 behaves
 
 When you run from a tmux shell on a fallback host:

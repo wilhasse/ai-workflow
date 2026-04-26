@@ -9,6 +9,18 @@ import sys
 import tempfile
 
 from .actions import WorkspaceActions, terminal_recent_score
+from .session_archive import (
+    SessionArchiveError,
+    build_record_command,
+    find_archive_record,
+    format_archive_records,
+    list_archive_records,
+    load_archive,
+    merge_snapshots,
+    save_archive,
+    scan_configured_hosts,
+    scan_local_host,
+)
 from .tui import select_workspace_tui, write_selected_target
 
 
@@ -49,6 +61,35 @@ def build_parser() -> argparse.ArgumentParser:
 
     command_parser = subparsers.add_parser('command', help='Print the attach command for a target')
     command_parser.add_argument('target', help='Workspace id or host:id')
+
+    archive_scan_parser = subparsers.add_parser(
+        'archive-scan',
+        help='Snapshot tmux panes and Codex/Claude resume ids across configured hosts',
+    )
+    archive_scan_parser.add_argument('--json', action='store_true', help='Emit JSON instead of text')
+
+    local_archive_scan_parser = subparsers.add_parser(
+        'archive-scan-local',
+        help='Snapshot local tmux panes and Codex/Claude resume ids',
+    )
+    local_archive_scan_parser.add_argument('--json', action='store_true', help='Emit JSON instead of text')
+    local_archive_scan_parser.add_argument('--quiet', action='store_true', help='Suppress text output')
+    local_archive_scan_parser.add_argument('--save', action='store_true', help='Update the local archive file')
+    local_archive_scan_parser.add_argument('--host-id', default='local', help='Host id to stamp into records')
+    local_archive_scan_parser.add_argument('--host-name', help='Human-readable host name')
+
+    archive_list_parser = subparsers.add_parser('archive-list', help='List archived Codex/Claude resume targets')
+    archive_list_parser.add_argument('--json', action='store_true', help='Emit JSON instead of text')
+    archive_list_parser.add_argument('--active-only', action='store_true', help='Hide inactive historical records')
+    archive_list_parser.add_argument('--limit', type=int, default=40, help='Maximum text rows to print')
+
+    archive_command_parser = subparsers.add_parser('archive-command', help='Print a resume command for an archive id')
+    archive_command_parser.add_argument('record', help='Archive id or resume id prefix')
+    archive_command_parser.add_argument(
+        '--tmux',
+        action='store_true',
+        help='Print a command that recreates a tmux window and resumes there',
+    )
 
     return parser
 
@@ -233,6 +274,68 @@ def main(argv: list[str] | None = None) -> int:
 
     if command == 'command':
         print(actions.workspace_command(args.target, within_tmux=False))
+        return 0
+
+    if command == 'archive-scan':
+        try:
+            payload = scan_configured_hosts(actions.config)
+        except SessionArchiveError as error:
+            print(str(error), file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps(payload, indent=2))
+            return 0
+        reachable = sum(1 for item in payload['snapshots'] if item.get('reachable') is not False)
+        total = len(payload['snapshots'])
+        records = payload.get('records', [])
+        print(f"archived {len(records)} resume targets from {reachable}/{total} reachable hosts")
+        print(f"archive: {payload['archivePath']}")
+        if records:
+            print(format_archive_records(records, limit=20))
+        return 0
+
+    if command == 'archive-scan-local':
+        snapshot = scan_local_host(
+            host_id=args.host_id,
+            host_name=args.host_name or args.host_id,
+        )
+        if args.save:
+            archive = load_archive()
+            save_archive(merge_snapshots(archive, [snapshot]))
+        if args.quiet:
+            return 0
+        if args.json:
+            print(json.dumps(snapshot, indent=2))
+            return 0
+        print(
+            f"found {len(snapshot.get('records', []))} resume targets "
+            f"from {snapshot.get('paneCount', 0)} tmux panes"
+        )
+        if snapshot.get('records'):
+            print(format_archive_records(snapshot['records'], limit=20))
+        return 0
+
+    if command == 'archive-list':
+        try:
+            records = list_archive_records(include_inactive=not args.active_only)
+        except SessionArchiveError as error:
+            print(str(error), file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps(records, indent=2))
+            return 0
+        output = format_archive_records(records, limit=args.limit)
+        if output:
+            print(output)
+        return 0
+
+    if command == 'archive-command':
+        try:
+            record = find_archive_record(list_archive_records(), args.record)
+            print(build_record_command(record, actions.config, tmux_restore=args.tmux))
+        except SessionArchiveError as error:
+            print(str(error), file=sys.stderr)
+            return 1
         return 0
 
     parser.print_help()
