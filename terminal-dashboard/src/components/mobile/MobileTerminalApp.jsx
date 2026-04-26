@@ -13,6 +13,12 @@ const VOICE_SERVICES = {
 }
 const DEEPGRAM_API_KEY = import.meta.env.VITE_DEEPGRAM_API_KEY || ''
 
+const resolveStoredFontSize = () => {
+  if (typeof window === 'undefined') return DEFAULT_FONT_SIZE
+  const stored = Number(window.localStorage.getItem(FONT_SIZE_STORAGE_KEY))
+  return FONT_SIZE_OPTIONS.includes(stored) ? stored : DEFAULT_FONT_SIZE
+}
+
 const detectVoiceApiBase = () => {
   if (typeof window === 'undefined') {
     return 'http://localhost:8000'
@@ -224,11 +230,7 @@ function MobileTerminalApp() {
   const [view, setView] = useState('workspaces')
   const [selectedWorkspaceKey, setSelectedWorkspaceKey] = useState(null)
   const [selectedWindowIndex, setSelectedWindowIndex] = useState(null)
-  const [terminalFontSize, setTerminalFontSize] = useState(() => {
-    if (typeof window === 'undefined') return DEFAULT_FONT_SIZE
-    const stored = Number(window.localStorage.getItem(FONT_SIZE_STORAGE_KEY))
-    return Number.isFinite(stored) ? stored : DEFAULT_FONT_SIZE
-  })
+  const [terminalFontSize, setTerminalFontSize] = useState(resolveStoredFontSize)
   const [voiceService] = useState(() => {
     if (typeof window === 'undefined') return VOICE_SERVICES.LOCAL
     return window.localStorage.getItem(VOICE_SERVICE_STORAGE_KEY) || VOICE_SERVICES.LOCAL

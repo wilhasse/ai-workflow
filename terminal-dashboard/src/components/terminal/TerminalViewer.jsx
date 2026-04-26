@@ -11,6 +11,8 @@ const ANSI_OSC_PATTERN = new RegExp(`${ESC}\\][^${BEL}]*(?:${BEL}|${ESC}\\\\)`, 
 const ANSI_DCS_PATTERN = new RegExp(`${ESC}[P^_X].*?${ESC}\\\\`, 'gs')
 const ANSI_SINGLE_PATTERN = new RegExp(`${ESC}[@-_]`, 'g')
 const CONTROL_CHARS_PATTERN = new RegExp('\\p{Cc}', 'gu')
+const MIN_FONT_SIZE = 8
+const DEFAULT_FONT_SIZE = 14
 
 const DEFAULT_SHORTCUTS = [
   { id: 'ctrl-c', label: 'C-c', keys: '\x03', description: 'Interrupt (Ctrl+C)' },
@@ -62,6 +64,11 @@ const hasRenderableOutput = (value) => {
   return stripped.length > 0
 }
 
+const resolveFontSize = (value) => {
+  const nextValue = Number(value)
+  return Number.isFinite(nextValue) && nextValue >= MIN_FONT_SIZE ? nextValue : DEFAULT_FONT_SIZE
+}
+
 function TerminalViewer({
   wsUrl,
   fontSize,
@@ -74,7 +81,7 @@ function TerminalViewer({
   const termRef = useRef(null)
   const fitAddonRef = useRef(null)
   const socketRef = useRef(null)
-  const fontSizeRef = useRef(fontSize)
+  const fontSizeRef = useRef(resolveFontSize(fontSize))
   const [connectionState, setConnectionState] = useState({
     status: 'connecting',
     message: 'Connecting…',
@@ -87,7 +94,7 @@ function TerminalViewer({
   const onActivityRef = useRef(onActivity)
 
   useEffect(() => {
-    fontSizeRef.current = fontSize
+    fontSizeRef.current = resolveFontSize(fontSize)
   }, [fontSize])
 
   useEffect(() => {
@@ -163,8 +170,46 @@ function TerminalViewer({
     term.loadAddon(fitAddon)
     term.loadAddon(webLinksAddon)
     term.open(container)
-    if (!monitorMode) {
+    let resizeFrame = null
+    let resizeRetry = null
+
+    const fitTerminal = () => {
+      if (monitorMode) {
+        return false
+      }
+      const rect = container.getBoundingClientRect()
+      if (rect.width <= 0 || rect.height <= 0) {
+        return false
+      }
       fitAddon.fit()
+      if (typeof term.refresh === 'function') {
+        term.refresh(0, term.rows - 1)
+      }
+      return true
+    }
+
+    const scheduleFit = () => {
+      if (monitorMode || typeof window === 'undefined') {
+        return
+      }
+      if (resizeFrame) {
+        window.cancelAnimationFrame(resizeFrame)
+      }
+      resizeFrame = window.requestAnimationFrame(() => {
+        resizeFrame = window.requestAnimationFrame(() => {
+          resizeFrame = null
+          if (!fitTerminal() && !resizeRetry) {
+            resizeRetry = window.setTimeout(() => {
+              resizeRetry = null
+              fitTerminal()
+            }, 120)
+          }
+        })
+      })
+    }
+
+    if (!monitorMode) {
+      scheduleFit()
       term.focus()
     }
     termRef.current = term
@@ -203,7 +248,10 @@ function TerminalViewer({
       if (monitorMode) {
         return
       }
-      fitAddon.fit()
+      if (!fitTerminal()) {
+        scheduleFit()
+        return
+      }
       sendMessage({ type: 'resize', cols: term.cols, rows: term.rows })
     }
 
@@ -293,6 +341,12 @@ function TerminalViewer({
     }
 
     return () => {
+      if (resizeFrame) {
+        window.cancelAnimationFrame(resizeFrame)
+      }
+      if (resizeRetry) {
+        window.clearTimeout(resizeRetry)
+      }
       dataDisposable.dispose()
       cleanupResize()
       if (
@@ -348,11 +402,12 @@ function TerminalViewer({
     if (!term) {
       return
     }
+    const nextFontSize = resolveFontSize(fontSize)
     if (term.options) {
-      term.options.fontSize = fontSize
+      term.options.fontSize = nextFontSize
     }
     if (typeof term.setOption === 'function') {
-      term.setOption('fontSize', fontSize)
+      term.setOption('fontSize', nextFontSize)
     }
     if (typeof term.refresh === 'function') {
       term.refresh(0, term.rows - 1)
