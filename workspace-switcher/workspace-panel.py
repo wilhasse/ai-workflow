@@ -21,6 +21,7 @@ import time
 import socket
 
 CONFIG_FILE = os.path.expanduser("~/ai-workflow/workspace-switcher/workspaces.json")
+V2_CONFIG_FILE = os.path.expanduser("~/ai-workflow/workspace-v2/catalog/workspaces.v2.json")
 LAUNCHER_STATE_FILE = os.path.expanduser("~/.local/state/ai-workflow/workspace-v2.json")
 REFRESH_INTERVAL = 2000  # ms
 SSH_HEALTH_INTERVAL = 30  # seconds
@@ -1326,6 +1327,70 @@ class WorkspaceSwitcher(Gtk.Window):
         local_host = next((host for host in self.hosts if host.get('id') == 'local'), None)
         return (local_host or {}).get('name') or 'Local'
 
+    def _self_host_ids_for_hosts(self, hosts):
+        return {
+            host.get('id') for host in hosts
+            if host.get('id') != 'local' and host.get('ssh') and self._host_points_to_local(host)
+        }
+
+    def _canonical_workspace_host(self, host_id, hosts):
+        host_id = host_id or 'local'
+        if host_id == 'local':
+            self_host_ids = sorted(host_id for host_id in self._self_host_ids_for_hosts(hosts) if host_id)
+            if len(self_host_ids) == 1:
+                return self_host_ids[0]
+            return 'local'
+
+        for host in hosts:
+            if host.get('id') == host_id:
+                return host_id
+            if host_id in host.get('legacy_ids', []):
+                return host.get('id')
+        return host_id
+
+    def _workspace_merge_key(self, workspace, hosts):
+        return (
+            self._canonical_workspace_host(workspace.get('host', 'local'), hosts),
+            workspace.get('id'),
+        )
+
+    def _merge_v2_workspaces(self, config):
+        """Keep the legacy GTK panel in sync with the canonical v2 catalog."""
+        try:
+            with open(V2_CONFIG_FILE, 'r') as f:
+                v2_config = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return config
+
+        hosts = config.get('hosts', [])
+        workspaces = list(config.get('workspaces', []))
+        seen = {
+            self._workspace_merge_key(workspace, hosts)
+            for workspace in workspaces
+            if workspace.get('id')
+        }
+
+        for workspace in v2_config.get('workspaces', []):
+            if not workspace.get('id'):
+                continue
+            merged_workspace = {
+                'id': workspace.get('id'),
+                'name': workspace.get('name') or workspace.get('id'),
+                'path': workspace.get('path') or os.path.expanduser('~'),
+                'color': workspace.get('color') or '#3498db',
+                'icon': workspace.get('icon') or 'folder',
+                'description': workspace.get('description') or '',
+                'host': workspace.get('host') or 'local',
+            }
+            key = self._workspace_merge_key(merged_workspace, hosts)
+            if key in seen:
+                continue
+            seen.add(key)
+            workspaces.append(merged_workspace)
+
+        config['workspaces'] = workspaces
+        return config
+
     def on_key_press(self, widget, event):
         """Open all-host terminal switcher with Ctrl+Enter."""
         state = event.state & Gtk.accelerator_get_default_mod_mask()
@@ -1551,13 +1616,13 @@ class WorkspaceSwitcher(Gtk.Window):
         """Load full config file"""
         try:
             with open(CONFIG_FILE, 'r') as f:
-                return json.load(f)
+                return self._merge_v2_workspaces(json.load(f))
         except (FileNotFoundError, json.JSONDecodeError):
-            return {
+            return self._merge_v2_workspaces({
                 'hosts': [{'id': 'local', 'name': 'Local', 'ssh': None}],
                 'workspaces': [],
                 'settings': {'terminal': 'xfce4-terminal', 'shell': '/bin/bash'}
-            }
+            })
 
     def _save_full_config(self, config):
         """Save full config file"""
