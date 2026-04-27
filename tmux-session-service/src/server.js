@@ -22,6 +22,7 @@ const config = {
   workspacesConfig: process.env.WORKSPACES_CONFIG ?? path.join(os.homedir(), 'ai-workflow', 'workspace-switcher', 'workspaces.json'),
   mobileWorkspacesConfig: process.env.MOBILE_WORKSPACES_CONFIG ?? path.join(os.homedir(), 'ai-workflow', 'workspace-v2', 'catalog', 'workspaces.v2.json'),
   mobileSelfHostId: process.env.MOBILE_SELF_HOST_ID ?? process.env.WSV2_SELF_HOST ?? 'vm10',
+  sessionArchivePath: process.env.WSV2_SESSION_ARCHIVE_PATH ?? path.join(os.homedir(), '.local', 'state', 'ai-workflow', 'workspace-session-archive.json'),
 }
 const DEFAULT_HISTORY_LINES = 1000
 const MAX_HISTORY_LINES = 20000
@@ -137,6 +138,8 @@ const normalizePath = (value) => {
 const isHostLocal = (host) => host?.id === config.mobileSelfHostId || host?.id === 'local'
 
 const safeErrorMessage = (error) => error?.message ?? String(error)
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const persistUsers = async () => {
   await ensureDataDir()
@@ -687,9 +690,122 @@ const ensureTmuxSession = async ({ sessionId, projectId, command }) => {
   return ensureMetadata(sessionId, { projectId, command })
 }
 
+const readOptionalJsonFile = async (filePath) => {
+  try {
+    return JSON.parse(await fs.readFile(filePath, 'utf8'))
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return null
+    }
+    console.warn(`Failed to load JSON file ${filePath}:`, safeErrorMessage(error))
+    return null
+  }
+}
+
+const hostMatchesId = (host, value) => {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (!normalized) {
+    return false
+  }
+  if (host.id.toLowerCase() === normalized) {
+    return true
+  }
+  return (host.legacyIds || []).some((legacyId) => String(legacyId).toLowerCase() === normalized)
+}
+
+const resolveCatalogHost = (hosts, hostIdRaw) => {
+  const normalized = String(hostIdRaw || '').trim()
+  if (!normalized) {
+    return hosts.find((host) => host.id === config.mobileSelfHostId) ?? hosts[0] ?? null
+  }
+  return hosts.find((host) => hostMatchesId(host, normalized)) ?? null
+}
+
+const normalizeCatalogWorkspace = (workspace, hosts, source) => {
+  const host = resolveCatalogHost(hosts, workspace.host ?? config.mobileSelfHostId)
+  const id = sanitizeId(workspace.id)
+  if (!host || !id) {
+    return null
+  }
+  return {
+    id,
+    name: String(workspace.name || workspace.id),
+    description: String(workspace.description || ''),
+    path: normalizePath(workspace.path || ''),
+    color: String(workspace.color || (source === 'archive' ? '#64748b' : '#3498db')),
+    icon: String(workspace.icon || (source === 'archive' ? 'terminal' : 'folder')),
+    hostId: host.id,
+    source,
+    archived: source === 'archive',
+  }
+}
+
+const appendWorkspaceIfMissing = (workspaces, seenWorkspaces, workspace) => {
+  if (!workspace) {
+    return
+  }
+  const key = `${workspace.hostId}:${workspace.id}`
+  if (seenWorkspaces.has(key)) {
+    return
+  }
+  seenWorkspaces.add(key)
+  workspaces.push(workspace)
+}
+
+const formatArchivedWorkspaceName = (sessionId) =>
+  sessionId.replace(/[-_]+/g, ' ').trim().replace(/\b\w/g, (letter) => letter.toUpperCase()) || sessionId
+
+const loadArchiveWorkspaces = async (hosts, seenWorkspaces) => {
+  const archive = await readOptionalJsonFile(config.sessionArchivePath)
+  if (!archive || !Array.isArray(archive.records)) {
+    return []
+  }
+
+  const selectedBySession = new Map()
+  archive.records.forEach((record) => {
+    const tmuxData = record?.tmux || {}
+    const sessionId = sanitizeId(tmuxData.session)
+    const host = resolveCatalogHost(hosts, record?.hostId)
+    if (!sessionId || !host) {
+      return
+    }
+    const key = `${host.id}:${sessionId}`
+    if (seenWorkspaces.has(key)) {
+      return
+    }
+    const score = Math.max(
+      Number(record.activityAt || 0),
+      Number(record.lastSeenAt || 0),
+      Number(record.updatedAt || 0),
+    )
+    const previous = selectedBySession.get(key)
+    if (!previous || score > previous.score) {
+      selectedBySession.set(key, { score, host, record, sessionId })
+    }
+  })
+
+  return Array.from(selectedBySession.values()).map(({ host, record, sessionId }) =>
+    normalizeCatalogWorkspace(
+      {
+        id: sessionId,
+        name: formatArchivedWorkspaceName(sessionId),
+        description: 'Archived tmux session',
+        path: record.cwd || record.tmux?.paneCwd || '',
+        color: '#64748b',
+        icon: 'terminal',
+        host: host.id,
+      },
+      hosts,
+      'archive',
+    ),
+  )
+}
+
 const loadMobileCatalog = async () => {
-  const raw = await fs.readFile(config.mobileWorkspacesConfig, 'utf8')
-  const payload = JSON.parse(raw)
+  const payload = await readOptionalJsonFile(config.mobileWorkspacesConfig)
+  if (!payload) {
+    throw new Error(`Workspace catalog not found: ${config.mobileWorkspacesConfig}`)
+  }
   const hosts = Array.isArray(payload.hosts)
     ? payload.hosts
         .map((host) => ({
@@ -701,29 +817,31 @@ const loadMobileCatalog = async () => {
         }))
         .filter((host) => host.id)
     : [{ id: 'local', name: 'Local', ssh: null, hostnames: [], legacyIds: [] }]
-  const hostLookup = new Map(hosts.map((host) => [host.id, host]))
-  const workspaces = Array.isArray(payload.workspaces)
-    ? payload.workspaces
-        .map((workspace) => {
-          const hostId = sanitizeId(workspace.host) ?? config.mobileSelfHostId ?? 'local'
-          const host = hostLookup.get(hostId) ?? hostLookup.get('local') ?? hosts[0]
-          const id = sanitizeId(workspace.id)
-          if (!id || !host) {
-            return null
-          }
-          return {
-            id,
-            name: String(workspace.name || workspace.id),
-            description: String(workspace.description || ''),
-            path: normalizePath(workspace.path || ''),
-            color: String(workspace.color || '#3498db'),
-            icon: String(workspace.icon || 'folder'),
-            hostId: host.id,
-            source: 'configured',
-          }
-        })
-        .filter(Boolean)
-    : []
+  const workspaces = []
+  const seenWorkspaces = new Set()
+  if (Array.isArray(payload.workspaces)) {
+    payload.workspaces.forEach((workspace) => {
+      appendWorkspaceIfMissing(
+        workspaces,
+        seenWorkspaces,
+        normalizeCatalogWorkspace(workspace, hosts, 'configured'),
+      )
+    })
+  }
+
+  const legacyPayload = await readOptionalJsonFile(config.workspacesConfig)
+  if (legacyPayload && Array.isArray(legacyPayload.workspaces)) {
+    legacyPayload.workspaces.forEach((workspace) => {
+      appendWorkspaceIfMissing(
+        workspaces,
+        seenWorkspaces,
+        normalizeCatalogWorkspace(workspace, hosts, 'legacy'),
+      )
+    })
+  }
+
+  const archivedWorkspaces = await loadArchiveWorkspaces(hosts, seenWorkspaces)
+  archivedWorkspaces.forEach((workspace) => appendWorkspaceIfMissing(workspaces, seenWorkspaces, workspace))
 
   return { hosts, workspaces }
 }
@@ -1121,14 +1239,20 @@ const handleSaveProjects = async (req, res) => {
 
 const handleGetWorkspaces = async (res) => {
   try {
-    const raw = await fs.readFile(config.workspacesConfig, 'utf8')
-    const workspacesData = JSON.parse(raw)
+    const legacyPayload = await readOptionalJsonFile(config.workspacesConfig)
+    const catalog = await loadMobileCatalog()
+    const localHostIds = new Set(catalog.hosts.filter((host) => isHostLocal(host)).map((host) => host.id))
 
     // Enrich with session status
     const activeSessions = await tmuxListSessions()
     const activeSet = new Set(activeSessions)
 
-    const configuredWorkspaces = workspacesData.workspaces || []
+    const configuredWorkspaces = catalog.workspaces
+      .filter((workspace) => localHostIds.has(workspace.hostId))
+      .map((workspace) => ({
+        ...workspace,
+        host: workspace.hostId,
+      }))
     const configuredIds = new Set(configuredWorkspaces.map((workspace) => workspace.id))
     const workspaces = configuredWorkspaces.map((ws) => ({
       ...ws,
@@ -1148,13 +1272,9 @@ const handleGetWorkspaces = async (res) => {
       })
     })
 
-    respond(res, 200, { workspaces, settings: workspacesData.settings || {} })
+    respond(res, 200, { workspaces, settings: legacyPayload?.settings || {} })
   } catch (error) {
-    if (error.code === 'ENOENT') {
-      respond(res, 200, { workspaces: [], settings: {} })
-    } else {
-      respond(res, 500, { error: error.message })
-    }
+    respond(res, 500, { error: error.message })
   }
 }
 
@@ -1420,6 +1540,7 @@ const handleTerminalSocket = async (ws, sessionIdRaw, searchParams) => {
       copyModeActive = false
       try {
         await tmuxCancelCopyMode(sanitizedSessionId, windowIndex)
+        await sleep(50)
       } catch (error) {
         console.warn('Failed to leave tmux copy mode', safeErrorMessage(error))
       }
@@ -1594,6 +1715,7 @@ const handleRemoteTerminalSocket = async (ws, hostIdRaw, sessionIdRaw, searchPar
       copyModeActive = false
       try {
         await remoteCancelCopyMode(host, sanitizedSessionId, windowIndex)
+        await sleep(50)
       } catch (error) {
         console.warn('Failed to leave remote tmux copy mode', safeErrorMessage(error))
       }

@@ -77,6 +77,87 @@
       "host": "vm10"
     },
     {
+      "id": "crm-automation",
+      "name": "CRM Automation",
+      "path": "/home/cslog/svn/ticslog_trunk/docker/crmautotest",
+      "color": "#3498db",
+      "icon": "folder",
+      "description": "",
+      "host": "vm10"
+    },
+    {
+      "id": "dbtools",
+      "name": "DB Tools",
+      "path": "/home/cslog/svn/ticslog_trunk/python/dbtools",
+      "color": "#3498db",
+      "icon": "folder",
+      "description": "",
+      "host": "vm10"
+    },
+    {
+      "id": "doris-cdc",
+      "name": "Doris CDC",
+      "path": "/home/cslog/doris-cdc",
+      "color": "#3498db",
+      "icon": "folder",
+      "description": "",
+      "host": "vm10"
+    },
+    {
+      "id": "es_cmd",
+      "name": "ES Cmd",
+      "path": "/home/cslog/siscob_trunk",
+      "color": "#3498db",
+      "icon": "folder",
+      "description": "",
+      "host": "vm10"
+    },
+    {
+      "id": "monitorsql",
+      "name": "MonitorSQL",
+      "path": "/home/cslog/svn/ticslog_trunk/docker/csmonitorsql",
+      "color": "#3498db",
+      "icon": "folder",
+      "description": "",
+      "host": "vm10"
+    },
+    {
+      "id": "oci-oracle",
+      "name": "OCI Oracle",
+      "path": "/home/cslog/oci",
+      "color": "#3498db",
+      "icon": "folder",
+      "description": "",
+      "host": "vm10"
+    },
+    {
+      "id": "siscob-trunk",
+      "name": "Siscob Trunk",
+      "path": "/home/cslog/siscob_prod",
+      "color": "#3498db",
+      "icon": "folder",
+      "description": "",
+      "host": "vm10"
+    },
+    {
+      "id": "smart-sql",
+      "name": "Smart SQL",
+      "path": "/home/cslog/smart-sql",
+      "color": "#3498db",
+      "icon": "folder",
+      "description": "",
+      "host": "vm10"
+    },
+    {
+      "id": "ticslog",
+      "name": "Ticslog",
+      "path": "/home/cslog/svn/ticslog_trunk/ticslog",
+      "color": "#3498db",
+      "icon": "folder",
+      "description": "",
+      "host": "vm10"
+    },
+    {
       "id": "doris-rust",
       "name": "Doris Rust",
       "path": "/home/cslog/mysql/doris-rust",

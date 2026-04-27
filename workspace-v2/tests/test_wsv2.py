@@ -139,6 +139,62 @@ class WorkspaceConfigTests(unittest.TestCase):
         self.assertTrue(config.host_runs_local('vm9'))
         self.assertFalse(config.host_runs_local('vm10'))
 
+    def test_default_v2_config_merges_legacy_and_archived_workspaces(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            config_path = write_v2_config(tmpdir)
+            legacy_path = tmpdir / 'legacy-workspaces.json'
+            archive_path = tmpdir / 'workspace-session-archive.json'
+            legacy_path.write_text(
+                json.dumps(
+                    {
+                        'workspaces': [
+                            {
+                                'id': 'legacy-local',
+                                'name': 'Legacy Local',
+                                'path': '/legacy/local',
+                                'host': 'local',
+                            }
+                        ]
+                    }
+                ),
+                encoding='utf-8',
+            )
+            archive_path.write_text(
+                json.dumps(
+                    {
+                        'records': [
+                            {
+                                'hostId': 'vm10',
+                                'cwd': '/archive/docker',
+                                'updatedAt': 100,
+                                'lastSeenAt': 200,
+                                'tmux': {'session': 'archived-docker'},
+                            }
+                        ]
+                    }
+                ),
+                encoding='utf-8',
+            )
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    'WSV2_SELF_HOST': 'vm10',
+                    'WSV2_CONFIG_PATH': str(config_path),
+                    'WSV2_LEGACY_CONFIG_PATH': str(legacy_path),
+                    'WSV2_SESSION_ARCHIVE_PATH': str(archive_path),
+                },
+                clear=True,
+            ):
+                config = load_config()
+
+        workspaces = {(workspace.host_id, workspace.id): workspace for workspace in config.workspaces}
+        self.assertIn(('vm10', 'legacy-local'), workspaces)
+        self.assertEqual(workspaces[('vm10', 'legacy-local')].path, '/legacy/local')
+        self.assertIn(('vm10', 'archived-docker'), workspaces)
+        self.assertEqual(workspaces[('vm10', 'archived-docker')].path, '/archive/docker')
+
     def test_resolve_workspace_rejects_unknown_targets(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config = load_config(write_legacy_config(Path(tmp)))

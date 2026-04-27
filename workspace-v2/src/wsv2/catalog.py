@@ -5,12 +5,13 @@ import json
 import os
 from pathlib import Path
 import socket
-from typing import Iterable
+from typing import Any, Iterable
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 LEGACY_CONFIG_PATH = Path.home() / "ai-workflow" / "workspace-switcher" / "workspaces.json"
 V2_CONFIG_PATH = PACKAGE_ROOT / "catalog" / "workspaces.v2.json"
+SESSION_ARCHIVE_PATH = Path.home() / ".local" / "state" / "ai-workflow" / "workspace-session-archive.json"
 
 
 class WorkspaceConfigError(RuntimeError):
@@ -242,17 +243,36 @@ def _resolve_self_host_id(payload: dict, hosts: tuple[HostRecord, ...]) -> str |
     return None
 
 
-def _normalize_workspaces(raw_workspaces: list[dict], host_lookup: dict[str, HostRecord]) -> tuple[WorkspaceRecord, ...]:
+def _resolve_workspace_host(raw_host_id: str, host_lookup: dict[str, HostRecord]) -> HostRecord | None:
+    if raw_host_id in host_lookup:
+        return host_lookup[raw_host_id]
+    for host in host_lookup.values():
+        if host.matches_id(raw_host_id):
+            return host
+    return None
+
+
+def _normalize_workspaces(
+    raw_workspaces: list[dict],
+    host_lookup: dict[str, HostRecord],
+    *,
+    strict_hosts: bool = True,
+) -> tuple[WorkspaceRecord, ...]:
     workspaces = []
     for raw_workspace in raw_workspaces:
         host_id = str(raw_workspace.get("host") or "local").strip() or "local"
-        if host_id not in host_lookup:
+        host = _resolve_workspace_host(host_id, host_lookup)
+        if not host:
+            if not strict_hosts:
+                continue
             raise WorkspaceConfigError(f"Unknown host id in workspace catalog: {host_id}")
-        host = host_lookup[host_id]
+        workspace_id = str(raw_workspace.get("id") or "").strip()
+        if not workspace_id:
+            continue
         raw_path = str(raw_workspace.get("path") or str(Path.home()))
         workspaces.append(
             WorkspaceRecord(
-                id=str(raw_workspace.get("id") or "").strip(),
+                id=workspace_id,
                 name=str(raw_workspace.get("name") or raw_workspace.get("id") or "").strip(),
                 path=os.path.expanduser(raw_path),
                 raw_path=raw_path,
@@ -266,7 +286,121 @@ def _normalize_workspaces(raw_workspaces: list[dict], host_lookup: dict[str, Hos
     return tuple(workspaces)
 
 
+def _optional_json_file(path: Path) -> dict[str, Any] | None:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+
+
+def _legacy_config_candidates(config_path: Path) -> list[Path]:
+    env_path = os.environ.get("WSV2_LEGACY_CONFIG_PATH")
+    candidates = []
+    if env_path:
+        candidates.append(Path(env_path).expanduser())
+    candidates.extend(
+        [
+            PACKAGE_ROOT.parent / "workspace-switcher" / "workspaces.json",
+            Path.home() / "ai-workflow" / "workspace-switcher" / "workspaces.json",
+            LEGACY_CONFIG_PATH,
+        ]
+    )
+    return _dedupe_paths(path for path in candidates if path != config_path)
+
+
+def _dedupe_paths(paths: Iterable[Path]) -> list[Path]:
+    seen = set()
+    deduped = []
+    for path in paths:
+        key = str(path.expanduser())
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(Path(key))
+    return deduped
+
+
+def _load_legacy_workspaces(config_path: Path, host_lookup: dict[str, HostRecord]) -> tuple[WorkspaceRecord, ...]:
+    for candidate in _legacy_config_candidates(config_path):
+        payload = _optional_json_file(candidate)
+        if payload is None:
+            continue
+        return _normalize_workspaces(payload.get("workspaces") or [], host_lookup, strict_hosts=False)
+    return ()
+
+
+def _archive_path() -> Path:
+    env_path = os.environ.get("WSV2_SESSION_ARCHIVE_PATH")
+    if env_path:
+        return Path(env_path).expanduser()
+    return SESSION_ARCHIVE_PATH
+
+
+def _include_archive_workspaces() -> bool:
+    value = os.environ.get("WSV2_INCLUDE_ARCHIVE_WORKSPACES", "1").strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
+def _format_archived_workspace_name(session_id: str) -> str:
+    return (session_id.replace("-", " ").replace("_", " ").strip() or session_id).title()
+
+
+def _load_archive_workspaces(host_lookup: dict[str, HostRecord]) -> tuple[WorkspaceRecord, ...]:
+    if not _include_archive_workspaces():
+        return ()
+    payload = _optional_json_file(_archive_path())
+    if payload is None:
+        return ()
+
+    selected: dict[tuple[str, str], tuple[int, dict[str, Any]]] = {}
+    for record in payload.get("records") or []:
+        tmux_data = record.get("tmux") or {}
+        session_id = str(tmux_data.get("session") or "").strip()
+        if not session_id:
+            continue
+        host = _resolve_workspace_host(str(record.get("hostId") or ""), host_lookup)
+        if not host:
+            continue
+        score = max(
+            int(record.get("activityAt") or 0),
+            int(record.get("lastSeenAt") or 0),
+            int(record.get("updatedAt") or 0),
+        )
+        key = (host.id, session_id)
+        if key not in selected or score > selected[key][0]:
+            selected[key] = (score, record)
+
+    raw_workspaces = []
+    for (host_id, session_id), (_, record) in selected.items():
+        raw_workspaces.append(
+            {
+                "id": session_id,
+                "name": _format_archived_workspace_name(session_id),
+                "path": record.get("cwd") or (record.get("tmux") or {}).get("paneCwd") or str(Path.home()),
+                "host": host_id,
+                "color": "#64748b",
+                "icon": "terminal",
+                "description": "Archived tmux session",
+            }
+        )
+    return _normalize_workspaces(raw_workspaces, host_lookup, strict_hosts=False)
+
+
+def _merge_workspaces(*groups: Iterable[WorkspaceRecord]) -> tuple[WorkspaceRecord, ...]:
+    merged: list[WorkspaceRecord] = []
+    seen: set[tuple[str, str]] = set()
+    for group in groups:
+        for workspace in group:
+            key = (workspace.host_id, workspace.id)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(workspace)
+    return tuple(merged)
+
+
 def load_config(path: str | Path | None = None) -> WorkspaceConfig:
+    explicit_path = path is not None
     config_path = Path(path or _default_config_path()).expanduser()
     try:
         payload = json.loads(config_path.read_text(encoding="utf-8"))
@@ -289,6 +423,12 @@ def load_config(path: str | Path | None = None) -> WorkspaceConfig:
 
     host_lookup = {host.id: host for host in hosts}
     workspaces = _normalize_workspaces(payload.get("workspaces") or [], host_lookup)
+    if schema_version >= 2 and not explicit_path:
+        workspaces = _merge_workspaces(
+            workspaces,
+            _load_legacy_workspaces(config_path, host_lookup),
+            _load_archive_workspaces(host_lookup),
+        )
 
     return WorkspaceConfig(
         path=config_path,

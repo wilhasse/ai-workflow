@@ -283,7 +283,7 @@ function MobileInputDock({
       className="mobile-input-dock"
       onSubmit={(event) => {
         event.preventDefault()
-        onSend()
+        onEnter()
       }}
     >
       <textarea
@@ -296,7 +296,7 @@ function MobileInputDock({
           }
         }}
         rows={1}
-        placeholder="Type here"
+        placeholder="Type command; Enter runs"
         autoComplete="off"
         autoCorrect="off"
         autoCapitalize="none"
@@ -306,8 +306,8 @@ function MobileInputDock({
         disabled={disabled}
       />
       <div className="mobile-input-actions">
-        <button type="submit" disabled={disabled || !value}>Send</button>
-        <button type="button" onClick={onEnter} disabled={disabled}>Enter</button>
+        <button type="submit" disabled={disabled}>Enter</button>
+        <button type="button" onClick={onSend} disabled={disabled || !value}>Type</button>
         <button type="button" onClick={onSpace} disabled={disabled}>Space</button>
         <button type="button" onClick={onBackspace} disabled={disabled}>Bksp</button>
         <button type="button" onClick={onClear} disabled={disabled || !value}>Clear</button>
