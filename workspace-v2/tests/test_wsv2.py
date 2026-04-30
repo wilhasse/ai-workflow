@@ -307,7 +307,7 @@ class CodexParkingTests(unittest.TestCase):
         )
         self.assertEqual(_agent_kind({'comm': 'node', 'args': 'node /usr/bin/codex'}), 'codex')
 
-    def test_park_target_stops_matching_process_group(self) -> None:
+    def test_park_target_saves_resume_command_and_interrupts_pane(self) -> None:
         row = {
             'session': 'docker',
             'windowIndex': 1,
@@ -322,16 +322,27 @@ class CodexParkingTests(unittest.TestCase):
             'target': 'docker#1',
             'parked': False,
         }
+        candidate = {
+            'kind': 'codex',
+            'resumeId': '019d',
+            'resumeCommand': 'cd /work && codex resume 019d',
+            'title': 'Codex session',
+        }
         with mock.patch('wsv2.codex_parking.list_agent_processes', return_value=[row]), \
             mock.patch('wsv2.codex_parking._load_state', return_value={'records': []}), \
             mock.patch('wsv2.codex_parking._save_state') as save_state, \
-            mock.patch('wsv2.codex_parking.os.getpgrp', return_value=999), \
-            mock.patch('wsv2.codex_parking.os.killpg') as killpg:
+            mock.patch(
+                'wsv2.codex_parking._resume_candidates_for_rows',
+                return_value={('docker', 1, '%1'): [candidate]},
+            ), \
+            mock.patch('wsv2.codex_parking._interrupt_agent_row', return_value=[]) as interrupt, \
+            mock.patch('wsv2.codex_parking._resume_records_from_pane_output', return_value=[]):
             result = park_target('docker#1', host_id='vm10', host_name='Main Desktop')
 
         self.assertEqual(result['changed'], 1)
-        killpg.assert_called_once()
+        interrupt.assert_called_once_with(row)
         self.assertEqual(save_state.call_args.args[0]['records'][0]['processGroupId'], 123)
+        self.assertEqual(save_state.call_args.args[0]['records'][0]['resumeCommand'], 'cd /work && codex resume 019d')
 
     def test_unpark_target_continues_live_and_recorded_groups(self) -> None:
         row = {
@@ -356,6 +367,29 @@ class CodexParkingTests(unittest.TestCase):
         self.assertEqual(result['changed'], 2)
         self.assertEqual([call.args[0] for call in killpg.call_args_list], [123, 456])
         self.assertEqual(save_state.call_args.args[0]['records'][0]['session'], 'dbtools')
+
+    def test_unpark_target_launches_saved_resume_command(self) -> None:
+        state = {
+            'records': [
+                {
+                    'session': 'docker',
+                    'windowIndex': 1,
+                    'paneId': '%1',
+                    'kind': 'codex',
+                    'resumeId': '019d',
+                    'resumeCommand': 'cd /work && codex resume 019d',
+                }
+            ]
+        }
+        with mock.patch('wsv2.codex_parking.list_agent_processes', return_value=[]), \
+            mock.patch('wsv2.codex_parking._load_state', return_value=state), \
+            mock.patch('wsv2.codex_parking._save_state') as save_state, \
+            mock.patch('wsv2.codex_parking._launch_resume_record') as launch:
+            result = unpark_target('docker#1')
+
+        self.assertEqual(result['changed'], 1)
+        launch.assert_called_once()
+        self.assertEqual(save_state.call_args.args[0]['records'], [])
 
     def test_remote_command_preserves_all_flag(self) -> None:
         command = build_remote_wsv2_command(
