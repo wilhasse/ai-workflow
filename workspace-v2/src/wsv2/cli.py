@@ -101,7 +101,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     codex_parser = subparsers.add_parser(
         'codex',
-        help='List, park, or unpark Codex/Claude processes running inside tmux panes',
+        help='List, park, or resume Codex/Claude agents running inside tmux panes',
     )
     codex_subparsers = codex_parser.add_subparsers(dest='codex_command')
 
@@ -111,21 +111,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     codex_park_parser = codex_subparsers.add_parser(
         'park',
-        help='SIGSTOP Codex/Claude in a tmux target',
+        help='Interrupt Codex/Claude in a tmux target and save its resume command',
     )
     _add_codex_common_args(codex_park_parser)
     codex_park_parser.add_argument('target', nargs='?', help='tmux target like docker#1, docker, or vm10:docker#1')
-    codex_park_parser.add_argument('--all', action='store_true', help='Park all Codex/Claude process groups on the selected host')
+    codex_park_parser.add_argument('--all', action='store_true', help='Park all resumable Codex/Claude agents on the selected host')
     codex_park_parser.add_argument('--reason', default='manual', help='Reason stored in the park state')
     codex_park_parser.add_argument('--json', action='store_true', help='Emit JSON instead of text')
 
     codex_unpark_parser = codex_subparsers.add_parser(
         'unpark',
-        help='SIGCONT Codex/Claude in a tmux target',
+        help='Launch saved Codex/Claude resume commands in a tmux target',
     )
     _add_codex_common_args(codex_unpark_parser)
     codex_unpark_parser.add_argument('target', nargs='?', help='tmux target like docker#1, docker, or vm10:docker#1')
-    codex_unpark_parser.add_argument('--all', action='store_true', help='Unpark all parked process groups on the selected host')
+    codex_unpark_parser.add_argument('--all', action='store_true', help='Resume all parked Codex/Claude agents on the selected host')
     codex_unpark_parser.add_argument('--json', action='store_true', help='Emit JSON instead of text')
 
     return parser
@@ -403,7 +403,8 @@ def _print_codex_signal_result(subcommand: str, result: dict, *, json_output: bo
     if json_output:
         print(json.dumps(result, indent=2))
         return
-    print(f"{subcommand}: matched {result.get('matched', 0)}, signaled {result.get('changed', 0)}")
+    changed_label = 'parked' if subcommand == 'park' else 'resumed'
+    print(f"{subcommand}: matched {result.get('matched', 0)}, {changed_label} {result.get('changed', 0)}")
     rows = result.get('rows') or []
     if rows:
         print(format_agent_processes(rows))

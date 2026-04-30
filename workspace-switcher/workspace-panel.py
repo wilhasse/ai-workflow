@@ -102,6 +102,10 @@ def unpark_tmux_agents(host_id, host_info, session_name, window_index=None):
         return
 
 
+def default_agent_summary():
+    return {'count': 0, 'active': 0, 'parked': 0, 'status': 'none'}
+
+
 def terminal_recent_score(entry, recent_scores=None):
     recent_scores = recent_scores or {}
     host_id = entry.get('host_id', 'local')
@@ -259,15 +263,18 @@ class WorkspaceButton(Gtk.Button):
         on_remove=None,
         on_rename=None,
         on_activate=None,
+        agent_summary=None,
         activity_recent=False
     ):
         super().__init__()
+        self.set_hexpand(True)
         self.workspace = workspace
         self.host_info = host_info
         self.session_info = session_info
         self.on_remove_callback = on_remove
         self.on_rename_callback = on_rename
         self.on_activate_callback = on_activate
+        self.agent_summary = agent_summary or default_agent_summary()
         self._activity_timeout_id = None
         self._escaped_name = GLib.markup_escape_text(workspace["name"])
         self._base_color = "#2c3e50" if session_info else "#7f8c8d"
@@ -317,6 +324,13 @@ class WorkspaceButton(Gtk.Button):
             short_path = '...' + short_path[-17:]
         path_label.set_markup(f'<span size="x-small" foreground="#7f8c8d">{short_path}</span>')
         box.pack_start(path_label, False, False, 0)
+
+        agent_text = self._format_agent_summary()
+        if agent_text:
+            agent_label = Gtk.Label()
+            agent_label.set_xalign(0)
+            agent_label.set_markup(f'<span size="x-small" foreground="#d97706">{agent_text}</span>')
+            box.pack_start(agent_label, False, False, 0)
 
         self.add(box)
 
@@ -500,6 +514,18 @@ class WorkspaceButton(Gtk.Button):
                 return config.get('settings', {}).get('terminal', 'xfce4-terminal')
         except:
             return 'xfce4-terminal'
+
+    def _format_agent_summary(self):
+        count = int(self.agent_summary.get('count') or 0)
+        if count <= 0:
+            return ''
+        active = int(self.agent_summary.get('active') or 0)
+        parked = int(self.agent_summary.get('parked') or 0)
+        if parked == count:
+            return f'{parked} parked agents'
+        if parked > 0:
+            return f'{active} active / {parked} parked agents'
+        return f'{active} active agents'
 
 
 class AddWorkspaceDialog(Gtk.Dialog):
@@ -1370,6 +1396,139 @@ class WorkspaceSwitcher(Gtk.Window):
                 return workspace
         return None
 
+    def _host_by_id(self, host_id):
+        return next((host for host in self.hosts if host.get('id') == host_id), None)
+
+    def _agent_host_for_display(self, host_id, host_info):
+        agent_host_id = self._state_host_id(host_id)
+        return agent_host_id, self._host_by_id(agent_host_id) or host_info
+
+    def _agent_host_for_workspace(self, workspace, fallback_host_id, fallback_host_info):
+        workspace_host = workspace.get('host') or fallback_host_id or 'local'
+        if fallback_host_id == 'local' and self._workspace_matches_host(workspace, 'local'):
+            agent_host_id = self._state_host_id('local')
+        else:
+            agent_host_id = workspace_host
+        return agent_host_id, self._host_by_id(agent_host_id) or fallback_host_info
+
+    def _host_runs_local_agent_command(self, host_id, host_info):
+        return (
+            host_id == 'local'
+            or not host_info
+            or not host_info.get('ssh')
+            or self._host_points_to_local(host_info)
+        )
+
+    def _run_codex_agent_command(self, host_id, host_info, action, target=None, json_output=False, timeout=12):
+        host_id = host_id or 'local'
+        host_name = (host_info or {}).get('name') or host_id
+        args = [
+            WSV2_SCRIPT,
+            'codex',
+            action,
+        ]
+        if target:
+            args.append(target)
+        args.extend([
+            '--local-only',
+            '--host-id',
+            host_id,
+            '--host-name',
+            host_name,
+        ])
+        if json_output:
+            args.append('--json')
+
+        if self._host_runs_local_agent_command(host_id, host_info):
+            return subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+
+        ssh_target = (host_info or {}).get('ssh')
+        remote_parts = [
+            'cd ~/ai-workflow',
+            '&&',
+            f"WSV2_SELF_HOST={shlex.quote(host_id)}",
+            'workspace-v2/scripts/wsv2',
+            'codex',
+            action,
+        ]
+        if target:
+            remote_parts.append(shlex.quote(target))
+        remote_parts.extend([
+            '--local-only',
+            '--host-id',
+            shlex.quote(host_id),
+            '--host-name',
+            shlex.quote(host_name),
+        ])
+        if json_output:
+            remote_parts.append('--json')
+        remote_cmd = ' '.join(remote_parts)
+        return subprocess.run(
+            ['ssh', '-o', 'ConnectTimeout=3', '-o', 'BatchMode=yes', ssh_target, remote_cmd],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+
+    def _list_agents_for_host(self, host_id, host_info):
+        if (
+            not self._host_runs_local_agent_command(host_id, host_info)
+            and self.health_checker.get_status(host_id) == False
+        ):
+            return []
+        try:
+            result = self._run_codex_agent_command(
+                host_id,
+                host_info,
+                'list',
+                json_output=True,
+                timeout=6,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return []
+        if result.returncode != 0:
+            return []
+        try:
+            payload = json.loads(result.stdout or '[]')
+        except json.JSONDecodeError:
+            return []
+        if isinstance(payload, list):
+            return payload
+        if isinstance(payload, dict) and isinstance(payload.get('rows'), list):
+            return payload['rows']
+        return []
+
+    def _summarize_agents_by_session(self, rows):
+        summaries = {}
+        for row in rows:
+            session_name = row.get('session')
+            if not session_name:
+                continue
+            summary = summaries.setdefault(session_name, default_agent_summary().copy())
+            summary['count'] += 1
+            if row.get('parked'):
+                summary['parked'] += 1
+            else:
+                summary['active'] += 1
+
+        for summary in summaries.values():
+            if summary['count'] <= 0:
+                summary['status'] = 'none'
+            elif summary['parked'] == summary['count']:
+                summary['status'] = 'parked'
+            elif summary['parked'] > 0:
+                summary['status'] = 'partial'
+            else:
+                summary['status'] = 'active'
+        return summaries
+
+    def _agent_action_for_summary(self, summary):
+        if not summary or int(summary.get('count') or 0) <= 0:
+            return None, ''
+        if summary.get('status') == 'parked':
+            return 'unpark', 'Resume'
+        return 'park', 'Park'
+
     def _local_display_host_name(self):
         for host in self.hosts:
             if host.get('id') == 'local':
@@ -1745,6 +1904,47 @@ class WorkspaceSwitcher(Gtk.Window):
         self.refresh_workspaces()
         return False  # Don't repeat
 
+    def _on_agent_action_clicked(self, button, workspace, host_id, host_info, action):
+        """Park or resume Codex/Claude agents for one tmux workspace."""
+        session_name = workspace['id']
+        original_label = button.get_label()
+        button.set_sensitive(False)
+        button.set_label('...')
+
+        def run_action():
+            error_message = None
+            try:
+                result = self._run_codex_agent_command(host_id, host_info, action, session_name, timeout=20)
+                if result.returncode != 0:
+                    error_message = (result.stderr or result.stdout or f'{action} failed').strip()
+            except (OSError, subprocess.TimeoutExpired) as error:
+                error_message = str(error)
+
+            def finish():
+                button.set_label(original_label)
+                button.set_sensitive(True)
+                self.remote_session_cache.invalidate(host_id)
+                self.refresh_workspaces()
+                if error_message:
+                    self._show_error('Agent action failed', error_message)
+                return False
+
+            GLib.idle_add(finish)
+
+        threading.Thread(target=run_action, daemon=True).start()
+
+    def _show_error(self, title, message):
+        dialog = Gtk.MessageDialog(
+            transient_for=self,
+            flags=0,
+            message_type=Gtk.MessageType.ERROR,
+            buttons=Gtk.ButtonsType.OK,
+            text=title,
+        )
+        dialog.format_secondary_text(message)
+        dialog.run()
+        dialog.destroy()
+
     def _check_all_hosts_activity(self):
         """Check all hosts for activity and pulse tabs if new activity detected"""
         if not self._activity_check_lock.acquire(blocking=False):
@@ -1881,6 +2081,10 @@ class WorkspaceSwitcher(Gtk.Window):
 
         # Get tmux session info
         sessions = self._get_sessions_for_host(self._current_host, host_info)
+        agent_host_id, agent_host_info = self._agent_host_for_display(self._current_host, host_info)
+        agent_summaries = self._summarize_agents_by_session(
+            self._list_agents_for_host(agent_host_id, agent_host_info)
+        )
 
         # Configured workspaces plus active discovered tmux sessions for this host.
         workspaces = list(self._workspaces_for_host(self._current_host))
@@ -1936,6 +2140,7 @@ class WorkspaceSwitcher(Gtk.Window):
                     self.last_session_activity[ws['id']] = activity
                 if fingerprint is not None:
                     self.last_session_fingerprint[ws['id']] = fingerprint
+            agent_summary = agent_summaries.get(ws['id'], default_agent_summary())
             btn = WorkspaceButton(
                 ws,
                 host_info=host_info,
@@ -1943,9 +2148,36 @@ class WorkspaceSwitcher(Gtk.Window):
                 on_remove=self.remove_workspace,
                 on_rename=self.rename_workspace,
                 on_activate=self._on_workspace_activated,
+                agent_summary=agent_summary,
                 activity_recent=activity_recent
             )
-            self.workspace_box.pack_start(btn, False, False, 0)
+            action, label = self._agent_action_for_summary(agent_summary)
+            if action:
+                row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+                row.pack_start(btn, True, True, 0)
+                action_host_id, action_host_info = self._agent_host_for_workspace(
+                    ws,
+                    self._current_host,
+                    host_info,
+                )
+                action_btn = Gtk.Button(label=label)
+                action_btn.set_tooltip_text(
+                    f"{label} Codex/Claude agents in {ws['name']}"
+                )
+                if action == 'unpark':
+                    action_btn.get_style_context().add_class('suggested-action')
+                action_btn.connect(
+                    'clicked',
+                    self._on_agent_action_clicked,
+                    ws,
+                    action_host_id,
+                    action_host_info,
+                    action,
+                )
+                row.pack_end(action_btn, False, False, 0)
+                self.workspace_box.pack_start(row, False, False, 0)
+            else:
+                self.workspace_box.pack_start(btn, False, False, 0)
 
         # Refresh footer (activity counts are updated by _check_all_hosts_activity)
         self._update_footer()
