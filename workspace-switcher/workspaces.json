@@ -219,15 +219,6 @@
       "icon": "folder",
       "description": "",
       "host": "vm9"
-    },
-    {
-      "id": "mysql-gtid",
-      "name": "MySQL GITID",
-      "path": "/home/cslog/mysql",
-      "color": "#3498db",
-      "icon": "folder",
-      "description": "",
-      "host": "vm10"
     }
   ],
   "settings": {

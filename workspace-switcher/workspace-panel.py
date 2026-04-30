@@ -22,6 +22,7 @@ import socket
 
 CONFIG_FILE = os.path.expanduser("~/ai-workflow/workspace-switcher/workspaces.json")
 V2_CONFIG_FILE = os.path.expanduser("~/ai-workflow/workspace-v2/catalog/workspaces.v2.json")
+WSV2_SCRIPT = os.path.expanduser("~/ai-workflow/workspace-v2/scripts/wsv2")
 LAUNCHER_STATE_FILE = os.path.expanduser("~/.local/state/ai-workflow/workspace-v2.json")
 REFRESH_INTERVAL = 2000  # ms
 SSH_HEALTH_INTERVAL = 30  # seconds
@@ -50,6 +51,55 @@ def save_recent_score(target):
     os.makedirs(os.path.dirname(LAUNCHER_STATE_FILE), exist_ok=True)
     with open(LAUNCHER_STATE_FILE, 'w') as f:
         json.dump(payload, f, indent=2, sort_keys=True)
+
+
+def unpark_tmux_agents(host_id, host_info, session_name, window_index=None):
+    """Resume parked Codex/Claude processes before opening a tmux target."""
+    target = f"{session_name}#{window_index}" if window_index is not None else session_name
+    host_id = host_id or 'local'
+    host_name = (host_info or {}).get('name') or host_id
+    ssh_target = (host_info or {}).get('ssh')
+
+    try:
+        if host_id == 'local' or not ssh_target:
+            subprocess.run(
+                [
+                    WSV2_SCRIPT,
+                    'codex',
+                    'unpark',
+                    target,
+                    '--local-only',
+                    '--host-id',
+                    host_id,
+                    '--host-name',
+                    host_name,
+                ],
+                capture_output=True,
+                timeout=8,
+            )
+            return
+
+        remote_cmd = ' '.join([
+            'cd ~/ai-workflow',
+            '&&',
+            f"WSV2_SELF_HOST={shlex.quote(host_id)}",
+            'workspace-v2/scripts/wsv2',
+            'codex',
+            'unpark',
+            shlex.quote(target),
+            '--local-only',
+            '--host-id',
+            shlex.quote(host_id),
+            '--host-name',
+            shlex.quote(host_name),
+        ])
+        subprocess.run(
+            ['ssh', '-o', 'ConnectTimeout=3', '-o', 'BatchMode=yes', ssh_target, remote_cmd],
+            capture_output=True,
+            timeout=8
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return
 
 
 def terminal_recent_score(entry, recent_scores=None):
@@ -320,7 +370,7 @@ class WorkspaceButton(Gtk.Button):
     def on_remove_clicked(self, menu_item):
         """Remove this workspace from config"""
         if self.on_remove_callback:
-            self.on_remove_callback(self.workspace['id'])
+            self.on_remove_callback(self.workspace['id'], self.workspace.get('host', 'local'))
 
     def on_kill_session(self, menu_item):
         """Kill the tmux session for this workspace"""
@@ -381,6 +431,8 @@ class WorkspaceButton(Gtk.Button):
         session_name = ws['id']
         work_dir = ws['path']
         host = ws.get('host', 'local')
+
+        unpark_tmux_agents(host, self.host_info, session_name)
 
         # First, try to find and focus an existing terminal window for this workspace
         # Search by session name (tmux sets window title to "session : window — Konsole")
@@ -1532,6 +1584,8 @@ class WorkspaceSwitcher(Gtk.Window):
         window_index = entry['window_index']
         session_target = f"{session_name}:{window_index}"
 
+        unpark_tmux_agents(host_id, host_info, session_name, window_index)
+
         if host_id == 'local' or not host_info or not host_info.get('ssh'):
             subprocess.run(['tmux', 'select-window', '-t', session_target], env={**os.environ, 'TMUX': ''})
             if self._focus_existing_window(session_name):
@@ -2021,15 +2075,48 @@ class WorkspaceSwitcher(Gtk.Window):
         self._save_full_config(self.config)
         self._update_host_workspace_counts()
 
-    def remove_workspace(self, workspace_id):
+    def _remove_workspace_from_file(self, config_path, workspace_id, host_id):
+        try:
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return 0
+
+        hosts = config.get('hosts') or self.hosts
+        target_key = (self._canonical_workspace_host(host_id or 'local', hosts), workspace_id)
+        kept = []
+        removed = 0
+        for workspace in config.get('workspaces', []):
+            workspace_key = self._workspace_merge_key(workspace, hosts)
+            if workspace_key == target_key:
+                removed += 1
+                continue
+            kept.append(workspace)
+
+        if removed:
+            config['workspaces'] = kept
+            with open(config_path, 'w') as f:
+                json.dump(config, f, indent=2)
+        return removed
+
+    def remove_workspace(self, workspace_id, host_id=None):
         """Remove a workspace from config, optionally killing tmux session"""
         # Find the workspace to get its host
         workspaces = self.config.get('workspaces', [])
-        ws = next((w for w in workspaces if w['id'] == workspace_id), None)
+        target_host = host_id or self._current_host
+        ws = next(
+            (
+                w for w in workspaces
+                if w['id'] == workspace_id and self._workspace_matches_host(w, target_host)
+            ),
+            None,
+        )
+        if ws is None:
+            ws = next((w for w in workspaces if w['id'] == workspace_id), None)
         if not ws:
             return
 
-        host_id = ws.get('host', 'local')
+        host_id = ws.get('host', host_id or 'local')
         host_info = next((h for h in self.hosts if h['id'] == host_id), None)
 
         # Check if tmux session exists
@@ -2066,8 +2153,12 @@ class WorkspaceSwitcher(Gtk.Window):
                 else:
                     subprocess.run(['ssh', host_info['ssh'], f'tmux kill-session -t {workspace_id}'])
 
-        workspaces = [w for w in workspaces if w['id'] != workspace_id]
-        self.save_config(workspaces)
+        removed = self._remove_workspace_from_file(CONFIG_FILE, workspace_id, host_id)
+        removed += self._remove_workspace_from_file(V2_CONFIG_FILE, workspace_id, host_id)
+        if not removed:
+            print(f"Workspace not found in config files: {host_id}:{workspace_id}")
+        self.config = self._load_full_config()
+        self._update_host_workspace_counts()
         self.refresh_workspaces()
 
     def rename_workspace(self, workspace_id, current_name):

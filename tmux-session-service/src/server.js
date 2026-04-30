@@ -23,6 +23,7 @@ const config = {
   mobileWorkspacesConfig: process.env.MOBILE_WORKSPACES_CONFIG ?? path.join(os.homedir(), 'ai-workflow', 'workspace-v2', 'catalog', 'workspaces.v2.json'),
   mobileSelfHostId: process.env.MOBILE_SELF_HOST_ID ?? process.env.WSV2_SELF_HOST ?? 'vm10',
   sessionArchivePath: process.env.WSV2_SESSION_ARCHIVE_PATH ?? path.join(os.homedir(), '.local', 'state', 'ai-workflow', 'workspace-session-archive.json'),
+  wsv2Script: process.env.WSV2_SCRIPT ?? path.join(os.homedir(), 'ai-workflow', 'workspace-v2', 'scripts', 'wsv2'),
 }
 const DEFAULT_HISTORY_LINES = 1000
 const MAX_HISTORY_LINES = 20000
@@ -616,6 +617,141 @@ const remoteCancelCopyMode = async (host, sessionId, windowIndex) => {
   )
 }
 
+const buildAgentTarget = (sessionId, windowIndex = null) => {
+  if (!sessionId) {
+    return null
+  }
+  return Number.isFinite(windowIndex) ? `${sessionId}#${windowIndex}` : sessionId
+}
+
+const buildAgentCommand = ({
+  action,
+  sessionId = null,
+  windowIndex = null,
+  hostId,
+  hostName,
+  jsonOutput = false,
+  allTargets = false,
+}) => {
+  const target = buildAgentTarget(sessionId, windowIndex)
+  return [
+    'cd ~/ai-workflow',
+    '&&',
+    `WSV2_SELF_HOST=${shellQuote(hostId)}`,
+    'workspace-v2/scripts/wsv2',
+    'codex',
+    shellQuote(action),
+    target ? shellQuote(target) : null,
+    allTargets ? '--all' : null,
+    '--local-only',
+    '--host-id',
+    shellQuote(hostId),
+    '--host-name',
+    shellQuote(hostName || hostId),
+    jsonOutput ? '--json' : null,
+  ].filter(Boolean).join(' ')
+}
+
+const runHostAgentCommand = async (
+  host,
+  { action, sessionId = null, windowIndex = null, jsonOutput = false, allTargets = false },
+) => {
+  if (!host?.id) {
+    throw new Error('Host is required')
+  }
+  const target = buildAgentTarget(sessionId, windowIndex)
+  if (host.ssh) {
+    const command = buildAgentCommand({
+      action,
+      sessionId,
+      windowIndex,
+      hostId: host.id,
+      hostName: host.name,
+      jsonOutput,
+      allTargets,
+    })
+    const response = await runSsh(host.ssh, command, 20000, { maxBuffer: 4 * 1024 * 1024 })
+    if (!response.ok) {
+      throw response.error
+    }
+    return response.stdout
+  }
+
+  const args = ['codex', action]
+  if (target) {
+    args.push(target)
+  }
+  if (allTargets) {
+    args.push('--all')
+  }
+  args.push('--local-only', '--host-id', host.id, '--host-name', host.name || host.id)
+  if (jsonOutput) {
+    args.push('--json')
+  }
+  const result = await execFileAsync(
+    config.wsv2Script,
+    args,
+    {
+      timeout: 20000,
+      maxBuffer: 4 * 1024 * 1024,
+      env: {
+        ...process.env,
+        WSV2_SELF_HOST: host.id,
+      },
+    },
+  )
+  return result.stdout
+}
+
+const listHostAgents = async (host) => {
+  const stdout = await runHostAgentCommand(host, { action: 'list', jsonOutput: true })
+  try {
+    const parsed = JSON.parse(stdout || '[]')
+    if (Array.isArray(parsed)) {
+      return parsed
+    }
+    if (Array.isArray(parsed.rows)) {
+      return parsed.rows
+    }
+    return []
+  } catch (error) {
+    throw new Error(`Invalid agent list JSON: ${safeErrorMessage(error)}`)
+  }
+}
+
+const summarizeWorkspaceAgents = (rows, sessionId) => {
+  const matchingRows = rows.filter((row) => row?.session === sessionId)
+  const agentCount = matchingRows.length
+  const parkedAgentCount = matchingRows.filter((row) => row.parked).length
+  const activeAgentCount = Math.max(0, agentCount - parkedAgentCount)
+  let status = 'none'
+  if (agentCount > 0 && parkedAgentCount === agentCount) {
+    status = 'parked'
+  } else if (parkedAgentCount > 0) {
+    status = 'partial'
+  } else if (agentCount > 0) {
+    status = 'active'
+  }
+  return {
+    count: agentCount,
+    active: activeAgentCount,
+    parked: parkedAgentCount,
+    status,
+  }
+}
+
+const unparkLocalAgents = async (sessionId, windowIndex) => {
+  const selfHost = await findMobileHost(config.mobileSelfHostId)
+  if (!selfHost) {
+    throw new Error(`Self host not found: ${config.mobileSelfHostId}`)
+  }
+  await runHostAgentCommand(selfHost, { action: 'unpark', sessionId, windowIndex })
+}
+
+const unparkRemoteAgents = async (host, sessionId, windowIndex) => {
+  await runHostAgentCommand(host, { action: 'unpark', sessionId, windowIndex })
+}
+
 const tmuxSelectWindow = async (sessionId, windowIndex) => {
   const response = await runTmux(['select-window', '-t', `${sessionId}:${windowIndex}`])
   return response.ok
@@ -846,7 +982,7 @@ const loadMobileCatalog = async () => {
   return { hosts, workspaces }
 }
 
-const decorateMobileWorkspace = ({ workspace, host, windows, active }) => {
+const decorateMobileWorkspace = ({ workspace, host, windows, active, agentSummary = null }) => {
   const lastActivityAt = windows.reduce(
     (latest, window) => Math.max(latest, window.lastActivityAt || 0),
     0,
@@ -862,6 +998,12 @@ const decorateMobileWorkspace = ({ workspace, host, windows, active }) => {
     windows,
     windowCount: windows.length,
     lastActivityAt,
+    agents: agentSummary ?? {
+      count: 0,
+      active: 0,
+      parked: 0,
+      status: 'none',
+    },
     connection: {
       type: isHostLocal(host) ? 'local' : 'remote',
       hostId: host.id,
@@ -874,6 +1016,12 @@ const buildHostMobileInventory = async (host, configuredWorkspaces) => {
   const windowRows = isHostLocal(host)
     ? await tmuxListAllWindows()
     : await remoteListAllWindows(host)
+  let agentRows = []
+  try {
+    agentRows = await listHostAgents(host)
+  } catch (error) {
+    console.warn(`Failed to list Codex/Claude agents for ${host.name}:`, safeErrorMessage(error))
+  }
   const windowsBySession = groupWindowsBySession(windowRows)
   const activeSessionIds = new Set(windowsBySession.keys())
   const configuredIds = new Set(configuredWorkspaces.map((workspace) => workspace.id))
@@ -883,6 +1031,7 @@ const buildHostMobileInventory = async (host, configuredWorkspaces) => {
       host,
       windows: windowsBySession.get(workspace.id) ?? [],
       active: activeSessionIds.has(workspace.id),
+      agentSummary: summarizeWorkspaceAgents(agentRows, workspace.id),
     }),
   )
 
@@ -906,6 +1055,7 @@ const buildHostMobileInventory = async (host, configuredWorkspaces) => {
         host,
         windows: windowsBySession.get(sessionId) ?? [],
         active: true,
+        agentSummary: summarizeWorkspaceAgents(agentRows, sessionId),
       }),
     )
   })
@@ -966,6 +1116,12 @@ const handleMobileWorkspaces = async (res) => {
             windows: [],
             windowCount: 0,
             lastActivityAt: 0,
+            agents: {
+              count: 0,
+              active: 0,
+              parked: 0,
+              status: 'unknown',
+            },
             connection: {
               type: isHostLocal(host) ? 'local' : 'remote',
               hostId: host.id,
@@ -1025,6 +1181,48 @@ const handleMobileHistory = async (res, hostIdRaw, sessionIdRaw, searchParams) =
       includeVisible,
       text,
       capturedAt: new Date().toISOString(),
+    })
+  } catch (error) {
+    respond(res, 500, { error: safeErrorMessage(error) })
+  }
+}
+
+const handleMobileAgentAction = async (req, res, hostIdRaw, sessionIdRaw) => {
+  const host = await findMobileHost(hostIdRaw)
+  const sessionId = sanitizeId(sessionIdRaw)
+  if (!host) {
+    respond(res, 404, { error: 'Host not found' })
+    return
+  }
+  if (!sessionId) {
+    respond(res, 400, { error: 'Invalid session id' })
+    return
+  }
+
+  let body
+  try {
+    body = await readBody(req)
+  } catch (error) {
+    respond(res, 400, { error: error.message })
+    return
+  }
+  const action = String(body.action || '').trim().toLowerCase()
+  if (!['park', 'unpark'].includes(action)) {
+    respond(res, 400, { error: 'Action must be park or unpark' })
+    return
+  }
+
+  try {
+    const stdout = await runHostAgentCommand(host, { action, sessionId })
+    const rows = await listHostAgents(host)
+    respond(res, 200, {
+      hostId: host.id,
+      hostName: host.name,
+      sessionId,
+      action,
+      output: stdout,
+      agents: summarizeWorkspaceAgents(rows, sessionId),
+      rows: rows.filter((row) => row?.session === sessionId),
     })
   } catch (error) {
     respond(res, 500, { error: safeErrorMessage(error) })
@@ -1386,6 +1584,11 @@ const server = http.createServer(async (req, res) => {
     await handleMobileHistory(res, mobileHistoryMatch[1], mobileHistoryMatch[2], parsed.searchParams)
     return
   }
+  const mobileAgentMatch = pathName.match(/^\/mobile\/agents\/([^/]+)\/([^/]+)$/)
+  if (mobileAgentMatch && method === 'POST') {
+    await handleMobileAgentAction(req, res, mobileAgentMatch[1], mobileAgentMatch[2])
+    return
+  }
   if (method === 'GET' && pathName === '/sessions') {
     await handleListSessions(res)
     return
@@ -1460,6 +1663,14 @@ const handleTerminalSocket = async (ws, sessionIdRaw, searchParams) => {
     sendWsMessage(ws, { type: 'error', message: 'Unable to prepare tmux session' })
     ws.close(1011, 'Session unavailable')
     return
+  }
+
+  if (!monitorMode) {
+    try {
+      await unparkLocalAgents(sanitizedSessionId, windowIndex)
+    } catch (error) {
+      console.warn('Failed to unpark local Codex/Claude agents', safeErrorMessage(error))
+    }
   }
 
   // Select specific window if requested
@@ -1658,6 +1869,14 @@ const handleRemoteTerminalSocket = async (ws, hostIdRaw, sessionIdRaw, searchPar
   const ptyRows = !monitorMode && Number.isFinite(initialRows) && initialRows > 0 ? initialRows : 24
   let ptyProcess
   let copyModeActive = false
+
+  if (!monitorMode) {
+    try {
+      await unparkRemoteAgents(host, sanitizedSessionId, windowIndex)
+    } catch (error) {
+      console.warn('Failed to unpark remote Codex/Claude agents', safeErrorMessage(error))
+    }
+  }
 
   try {
     ptyProcess = pty.spawn(

@@ -113,7 +113,33 @@ const formatActivity = (value) => {
   return `${Math.floor(hours / 24)}d ago`
 }
 
-function WorkspaceList({ hosts, query, onQueryChange, selectedKey, onSelectWorkspace, onRefresh, loading }) {
+const formatAgentStatus = (agents) => {
+  if (!agents || !agents.count) {
+    return 'no agents'
+  }
+  if (agents.status === 'parked') {
+    return `${agents.parked} parked`
+  }
+  if (agents.status === 'partial') {
+    return `${agents.active} active / ${agents.parked} parked`
+  }
+  return `${agents.active || agents.count} active`
+}
+
+const agentActionLabel = (agents) => (agents?.status === 'parked' ? 'Resume' : 'Park')
+
+function WorkspaceList({
+  hosts,
+  query,
+  onQueryChange,
+  selectedKey,
+  onSelectWorkspace,
+  onToggleAgents,
+  agentActionKey,
+  agentActionError,
+  onRefresh,
+  loading,
+}) {
   const normalizedQuery = query.trim().toLowerCase()
   const visibleHosts = hosts.map((host) => ({
     ...host,
@@ -145,6 +171,7 @@ function WorkspaceList({ hosts, query, onQueryChange, selectedKey, onSelectWorks
           {loading ? '...' : 'Refresh'}
         </button>
       </div>
+      {agentActionError && <p className="mobile-agent-error">{agentActionError}</p>}
 
       <div className="mobile-host-groups">
         {visibleHosts.map((host) => (
@@ -158,25 +185,63 @@ function WorkspaceList({ hosts, query, onQueryChange, selectedKey, onSelectWorks
               </small>
             </header>
             {host.error && <p className="mobile-host-error">{host.error}</p>}
-            {host.workspaces.map((workspace) => (
-              <button
-                key={workspace.key}
-                type="button"
-                className={`mobile-workspace-button ${selectedKey === workspace.key ? 'selected' : ''}`}
-                onClick={() => onSelectWorkspace(workspace)}
-                disabled={!workspace.reachable}
-              >
-                <span className={`mobile-workspace-dot ${workspace.active ? 'active' : ''}`} />
-                <span className="mobile-workspace-main">
-                  <strong>{workspace.name}</strong>
-                  <small>{workspace.path || workspace.description || workspace.id}</small>
-                </span>
-                <span className="mobile-workspace-meta">
-                  <span>{workspace.windowCount || 0} tabs</span>
-                  <small>{formatActivity(workspace.lastActivityAt)}</small>
-                </span>
-              </button>
-            ))}
+            {host.workspaces.map((workspace) => {
+              const agentBusy = agentActionKey === workspace.key
+              const agentCount = workspace.agents?.count || 0
+              const canToggleAgents = workspace.reachable && agentCount > 0 && !agentBusy
+              return (
+                <div
+                  key={workspace.key}
+                  role="button"
+                  tabIndex={workspace.reachable ? 0 : -1}
+                  aria-disabled={!workspace.reachable}
+                  className={[
+                    'mobile-workspace-button',
+                    selectedKey === workspace.key ? 'selected' : '',
+                    !workspace.reachable ? 'unreachable' : '',
+                  ].filter(Boolean).join(' ')}
+                  onClick={() => {
+                    if (workspace.reachable) {
+                      onSelectWorkspace(workspace)
+                    }
+                  }}
+                  onKeyDown={(event) => {
+                    if (!workspace.reachable) {
+                      return
+                    }
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault()
+                      onSelectWorkspace(workspace)
+                    }
+                  }}
+                >
+                  <span className={`mobile-workspace-dot ${workspace.active ? 'active' : ''}`} />
+                  <span className="mobile-workspace-main">
+                    <strong>{workspace.name}</strong>
+                    <small>{workspace.path || workspace.description || workspace.id}</small>
+                  </span>
+                  <span className="mobile-workspace-meta">
+                    <span>{workspace.windowCount || 0} tabs</span>
+                    <small>{formatActivity(workspace.lastActivityAt)}</small>
+                    <small className={`mobile-agent-pill ${workspace.agents?.status || 'none'}`}>
+                      {formatAgentStatus(workspace.agents)}
+                    </small>
+                  </span>
+                  <button
+                    type="button"
+                    className={`mobile-agent-action ${workspace.agents?.status === 'parked' ? 'resume' : 'park'}`}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      onToggleAgents(workspace)
+                    }}
+                    disabled={!canToggleAgents}
+                    aria-label={`${agentActionLabel(workspace.agents)} Codex and Claude agents in ${workspace.name}`}
+                  >
+                    {agentBusy ? '...' : agentActionLabel(workspace.agents)}
+                  </button>
+                </div>
+              )
+            })}
           </section>
         ))}
       </div>
@@ -342,6 +407,8 @@ function MobileTerminalApp() {
   const [voicePending, setVoicePending] = useState(false)
   const [terminalDraft, setTerminalDraft] = useState('')
   const [terminalInputError, setTerminalInputError] = useState('')
+  const [agentActionKey, setAgentActionKey] = useState('')
+  const [agentActionError, setAgentActionError] = useState('')
   const terminalBridgeRef = useRef(null)
   const voiceRecorderRef = useRef(null)
   const voiceRecognitionRef = useRef(null)
@@ -431,6 +498,47 @@ function MobileTerminalApp() {
       setView('terminal')
     }
   }, [isTablet])
+
+  const updateWorkspaceAgents = useCallback((workspaceKey, agents) => {
+    if (!agents) {
+      return
+    }
+    setHosts((currentHosts) => currentHosts.map((host) => ({
+      ...host,
+      workspaces: (host.workspaces || []).map((workspace) => (
+        workspace.key === workspaceKey ? { ...workspace, agents } : workspace
+      )),
+    })))
+  }, [])
+
+  const handleToggleWorkspaceAgents = useCallback(async (workspace) => {
+    if (!workspace?.agents?.count || agentActionKey) {
+      return
+    }
+    const action = workspace.agents.status === 'parked' ? 'unpark' : 'park'
+    setAgentActionKey(workspace.key)
+    setAgentActionError('')
+    try {
+      const response = await fetch(
+        `/api/mobile/agents/${encodeURIComponent(workspace.hostId)}/${encodeURIComponent(workspace.id)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action }),
+        },
+      )
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(payload.error || `Unable to ${action} agents`)
+      }
+      updateWorkspaceAgents(workspace.key, payload.agents)
+      await loadInventory()
+    } catch (actionError) {
+      setAgentActionError(actionError.message || `Unable to ${action} agents`)
+    } finally {
+      setAgentActionKey('')
+    }
+  }, [agentActionKey, loadInventory, updateWorkspaceAgents])
 
   const cleanupVoiceResources = useCallback(() => {
     if (voiceRecognitionRef.current) {
@@ -833,6 +941,9 @@ function MobileTerminalApp() {
             onQueryChange={setQuery}
             selectedKey={selectedWorkspaceKey}
             onSelectWorkspace={handleSelectWorkspace}
+            onToggleAgents={handleToggleWorkspaceAgents}
+            agentActionKey={agentActionKey}
+            agentActionError={agentActionError}
             onRefresh={refreshInventory}
             loading={loading}
           />
@@ -870,6 +981,9 @@ function MobileTerminalApp() {
           onQueryChange={setQuery}
           selectedKey={selectedWorkspaceKey}
           onSelectWorkspace={handleSelectWorkspace}
+          onToggleAgents={handleToggleWorkspaceAgents}
+          agentActionKey={agentActionKey}
+          agentActionError={agentActionError}
           onRefresh={refreshInventory}
           loading={loading}
         />

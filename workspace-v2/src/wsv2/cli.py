@@ -9,6 +9,14 @@ import sys
 import tempfile
 
 from .actions import WorkspaceActions, terminal_recent_score
+from .codex_parking import (
+    CodexParkingError,
+    build_remote_wsv2_command,
+    format_agent_processes,
+    list_agent_processes,
+    park_target,
+    unpark_target,
+)
 from .session_archive import (
     SessionArchiveError,
     build_record_command,
@@ -91,7 +99,43 @@ def build_parser() -> argparse.ArgumentParser:
         help='Print a command that recreates a tmux window and resumes there',
     )
 
+    codex_parser = subparsers.add_parser(
+        'codex',
+        help='List, park, or unpark Codex/Claude processes running inside tmux panes',
+    )
+    codex_subparsers = codex_parser.add_subparsers(dest='codex_command')
+
+    codex_list_parser = codex_subparsers.add_parser('list', help='List Codex/Claude tmux panes')
+    _add_codex_common_args(codex_list_parser)
+    codex_list_parser.add_argument('--json', action='store_true', help='Emit JSON instead of text')
+
+    codex_park_parser = codex_subparsers.add_parser(
+        'park',
+        help='SIGSTOP Codex/Claude in a tmux target',
+    )
+    _add_codex_common_args(codex_park_parser)
+    codex_park_parser.add_argument('target', nargs='?', help='tmux target like docker#1, docker, or vm10:docker#1')
+    codex_park_parser.add_argument('--all', action='store_true', help='Park all Codex/Claude process groups on the selected host')
+    codex_park_parser.add_argument('--reason', default='manual', help='Reason stored in the park state')
+    codex_park_parser.add_argument('--json', action='store_true', help='Emit JSON instead of text')
+
+    codex_unpark_parser = codex_subparsers.add_parser(
+        'unpark',
+        help='SIGCONT Codex/Claude in a tmux target',
+    )
+    _add_codex_common_args(codex_unpark_parser)
+    codex_unpark_parser.add_argument('target', nargs='?', help='tmux target like docker#1, docker, or vm10:docker#1')
+    codex_unpark_parser.add_argument('--all', action='store_true', help='Unpark all parked process groups on the selected host')
+    codex_unpark_parser.add_argument('--json', action='store_true', help='Emit JSON instead of text')
+
     return parser
+
+
+def _add_codex_common_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument('--host', help='Host id to operate on')
+    parser.add_argument('--local-only', action='store_true', help=argparse.SUPPRESS)
+    parser.add_argument('--host-id', help=argparse.SUPPRESS)
+    parser.add_argument('--host-name', help=argparse.SUPPRESS)
 
 
 def build_popup_unavailable_message(details: str | None = None) -> str:
@@ -182,6 +226,189 @@ def run_tmux_popup(actions: WorkspaceActions) -> int:
         return 0
     actions.attach_workspace(selected)
     return 0
+
+
+def run_codex_command(actions: WorkspaceActions, args: argparse.Namespace) -> int:
+    subcommand = args.codex_command or 'list'
+    if subcommand == 'list':
+        return _run_codex_list(actions, args)
+    if subcommand in {'park', 'unpark'}:
+        return _run_codex_signal(actions, args, subcommand)
+    raise SystemExit('codex requires one of: list, park, unpark')
+
+
+def _run_codex_list(actions: WorkspaceActions, args: argparse.Namespace) -> int:
+    if args.local_only:
+        rows = list_agent_processes(host_id=args.host_id, host_name=args.host_name)
+        if args.json:
+            print(json.dumps(rows, indent=2))
+        else:
+            print(format_agent_processes(rows))
+        return 0
+
+    rows = []
+    errors = []
+    for host in _selected_codex_hosts(actions, args.host):
+        if actions.config.host_runs_local(host):
+            rows.extend(list_agent_processes(host_id=host.id, host_name=host.name))
+            continue
+        try:
+            remote_payload = _run_remote_codex_json(host, 'list', None)
+            rows.extend(remote_payload.get('rows', []) if isinstance(remote_payload, dict) else remote_payload)
+        except CodexParkingError as error:
+            errors.append(f"{host.name}: {error}")
+
+    if args.json:
+        print(json.dumps({"rows": rows, "errors": errors}, indent=2))
+    else:
+        print(format_agent_processes(rows))
+        for error in errors:
+            print(f"error: {error}", file=sys.stderr)
+    return 1 if errors and not rows else 0
+
+
+def _run_codex_signal(actions: WorkspaceActions, args: argparse.Namespace, subcommand: str) -> int:
+    target = None if args.all else args.target
+    if not target and not args.all:
+        print(f"codex {subcommand} requires a target or --all", file=sys.stderr)
+        return 2
+
+    if args.local_only:
+        result = _run_local_codex_signal(args, subcommand, target)
+        _print_codex_signal_result(subcommand, result, json_output=args.json)
+        return 1 if result.get('errors') else 0
+
+    host, local_target = _resolve_codex_host_target(actions, target, args.host)
+    if actions.config.host_runs_local(host):
+        result = _run_local_codex_signal(
+            argparse.Namespace(
+                host_id=host.id,
+                host_name=host.name,
+                reason=getattr(args, 'reason', None),
+            ),
+            subcommand,
+            local_target,
+        )
+    else:
+        result = _run_remote_codex_json(
+            host,
+            subcommand,
+            local_target,
+            reason=getattr(args, 'reason', None),
+            all_targets=args.all,
+        )
+    _print_codex_signal_result(subcommand, result, json_output=args.json)
+    return 1 if result.get('errors') else 0
+
+
+def _run_local_codex_signal(args: argparse.Namespace, subcommand: str, target: str | None) -> dict:
+    if subcommand == 'park':
+        return park_target(
+            target,
+            host_id=args.host_id,
+            host_name=args.host_name,
+            reason=getattr(args, 'reason', None) or 'manual',
+        )
+    return unpark_target(target, host_id=args.host_id, host_name=args.host_name)
+
+
+def _selected_codex_hosts(actions: WorkspaceActions, host_arg: str | None):
+    if not host_arg:
+        return actions.config.hosts
+    host_id = actions.config.normalize_host_id(host_arg)
+    if not host_id:
+        raise SystemExit(f"Unknown host id: {host_arg}")
+    return [actions.config.get_host(host_id)]
+
+
+def _resolve_codex_host_target(
+    actions: WorkspaceActions,
+    target: str | None,
+    host_arg: str | None,
+):
+    host_id = actions.config.normalize_host_id(host_arg)
+    local_target = target
+    if not host_id and target and ':' in target:
+        candidate, rest = target.split(':', 1)
+        normalized = actions.config.normalize_host_id(candidate)
+        if normalized and any(host.id == normalized for host in actions.config.hosts):
+            host_id = normalized
+            local_target = rest
+    host_id = host_id or actions.config.self_host_id or 'local'
+    return actions.config.get_host(host_id), local_target
+
+
+def _run_remote_codex_json(
+    host,
+    subcommand: str,
+    target: str | None,
+    *,
+    reason: str | None = None,
+    all_targets: bool = False,
+):
+    if not host.ssh:
+        raise CodexParkingError(f"{host.name} has no SSH target")
+    remote_command = build_remote_wsv2_command(
+        subcommand,
+        target,
+        host_id=host.id,
+        host_name=host.name,
+        reason=reason,
+        json_output=True,
+        all_targets=all_targets,
+    )
+    try:
+        result = subprocess.run(
+            [
+                'ssh',
+                '-o',
+                'ConnectTimeout=4',
+                '-o',
+                'BatchMode=yes',
+                host.ssh,
+                remote_command,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise CodexParkingError(str(error)) from error
+    if result.returncode != 0:
+        if subcommand == 'list' and _remote_missing_wsv2(result.stderr + result.stdout):
+            return []
+        raise CodexParkingError(result.stderr.strip() or result.stdout.strip() or 'remote command failed')
+    try:
+        payload = json.loads(result.stdout or '[]')
+    except json.JSONDecodeError as error:
+        raise CodexParkingError(f"invalid remote JSON from {host.name}") from error
+    if isinstance(payload, list):
+        return payload
+    return payload
+
+
+def _remote_missing_wsv2(output: str) -> bool:
+    lowered = output.lower()
+    return (
+        'workspace-v2/scripts/wsv2' in lowered
+        and (
+            'no such file' in lowered
+            or 'not found' in lowered
+            or 'arquivo ou diret' in lowered
+        )
+    )
+
+
+def _print_codex_signal_result(subcommand: str, result: dict, *, json_output: bool = False) -> None:
+    if json_output:
+        print(json.dumps(result, indent=2))
+        return
+    print(f"{subcommand}: matched {result.get('matched', 0)}, signaled {result.get('changed', 0)}")
+    rows = result.get('rows') or []
+    if rows:
+        print(format_agent_processes(rows))
+    for error in result.get('errors') or []:
+        print(f"error: {error}", file=sys.stderr)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -337,6 +564,13 @@ def main(argv: list[str] | None = None) -> int:
             print(str(error), file=sys.stderr)
             return 1
         return 0
+
+    if command == 'codex':
+        try:
+            return run_codex_command(actions, args)
+        except CodexParkingError as error:
+            print(str(error), file=sys.stderr)
+            return 1
 
     parser.print_help()
     return 1

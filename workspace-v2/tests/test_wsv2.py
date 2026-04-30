@@ -17,6 +17,15 @@ from wsv2.actions import (
 )
 from wsv2.catalog import WorkspaceConfigError, load_config
 from wsv2.cli import build_popup_unavailable_message, can_launch_gui_popup, detect_popup_surface
+from wsv2.codex_parking import (
+    _agent_kind,
+    _foreground_tmux_panes,
+    build_remote_wsv2_command,
+    format_agent_processes,
+    parse_agent_target,
+    park_target,
+    unpark_target,
+)
 from wsv2.session_archive import (
     build_record_command,
     build_records_for_pane,
@@ -251,6 +260,163 @@ class LauncherStateTests(unittest.TestCase):
 
         self.assertIn('vm9:dbtools', scores)
         self.assertGreater(scores['vm9:dbtools'], 0)
+
+
+class CodexParkingTests(unittest.TestCase):
+    def test_parse_agent_target_accepts_session_and_window_forms(self) -> None:
+        session_target = parse_agent_target('docker')
+        window_hash_target = parse_agent_target('docker#4')
+        window_colon_target = parse_agent_target('docker:6')
+
+        self.assertEqual(session_target.session_id, 'docker')
+        self.assertIsNone(session_target.window_index)
+        self.assertEqual(window_hash_target.session_id, 'docker')
+        self.assertEqual(window_hash_target.window_index, 4)
+        self.assertEqual(window_colon_target.session_id, 'docker')
+        self.assertEqual(window_colon_target.window_index, 6)
+        self.assertIsNone(parse_agent_target('all'))
+
+    def test_format_agent_processes_marks_parked_rows(self) -> None:
+        output = format_agent_processes(
+            [
+                {
+                    'parked': True,
+                    'hostName': 'Main Desktop',
+                    'session': 'docker',
+                    'windowIndex': 1,
+                    'kinds': ['codex'],
+                    'processGroupId': 123,
+                    'agentPids': [124],
+                    'commands': ['codex resume 019d'],
+                }
+            ]
+        )
+
+        self.assertIn('PARKED', output)
+        self.assertIn('docker#1', output)
+        self.assertIn('codex', output)
+
+    def test_agent_detection_ignores_shell_snapshot_metadata(self) -> None:
+        self.assertIsNone(
+            _agent_kind(
+                {
+                    'comm': 'bash',
+                    'args': "export CLAUDE_PLUGIN_DATA='/home/cslog/.claude/plugins/data/codex-openai-codex'",
+                }
+            )
+        )
+        self.assertEqual(_agent_kind({'comm': 'node', 'args': 'node /usr/bin/codex'}), 'codex')
+
+    def test_park_target_saves_resume_command_and_interrupts_pane(self) -> None:
+        row = {
+            'session': 'docker',
+            'windowIndex': 1,
+            'windowName': 'node',
+            'paneId': '%1',
+            'panePid': 100,
+            'processGroupId': 123,
+            'pids': [123, 124],
+            'agentPids': [124],
+            'kinds': ['codex'],
+            'cwd': '/work',
+            'target': 'docker#1',
+            'parked': False,
+        }
+        candidate = {
+            'kind': 'codex',
+            'resumeId': '019d',
+            'resumeCommand': 'cd /work && codex resume 019d',
+            'title': 'Codex session',
+        }
+        with mock.patch('wsv2.codex_parking.list_agent_processes', return_value=[row]), \
+            mock.patch('wsv2.codex_parking._load_state', return_value={'records': []}), \
+            mock.patch('wsv2.codex_parking._save_state') as save_state, \
+            mock.patch(
+                'wsv2.codex_parking._resume_candidates_for_rows',
+                return_value={('docker', 1, '%1'): [candidate]},
+            ), \
+            mock.patch('wsv2.codex_parking._interrupt_agent_row', return_value=[]) as interrupt, \
+            mock.patch('wsv2.codex_parking._resume_records_from_pane_output', return_value=[]):
+            result = park_target('docker#1', host_id='vm10', host_name='Main Desktop')
+
+        self.assertEqual(result['changed'], 1)
+        interrupt.assert_called_once_with(row)
+        self.assertEqual(save_state.call_args.args[0]['records'][0]['processGroupId'], 123)
+        self.assertEqual(save_state.call_args.args[0]['records'][0]['resumeCommand'], 'cd /work && codex resume 019d')
+
+    def test_unpark_target_continues_live_and_recorded_groups(self) -> None:
+        row = {
+            'session': 'docker',
+            'windowIndex': 1,
+            'processGroupId': 123,
+            'target': 'docker#1',
+            'parked': True,
+        }
+        state = {
+            'records': [
+                {'session': 'docker', 'windowIndex': 1, 'processGroupId': 456},
+                {'session': 'dbtools', 'windowIndex': 1, 'processGroupId': 789},
+            ]
+        }
+        with mock.patch('wsv2.codex_parking.list_agent_processes', return_value=[row]), \
+            mock.patch('wsv2.codex_parking._load_state', return_value=state), \
+            mock.patch('wsv2.codex_parking._save_state') as save_state, \
+            mock.patch('wsv2.codex_parking.os.killpg') as killpg:
+            result = unpark_target('docker#1')
+
+        self.assertEqual(result['changed'], 2)
+        self.assertEqual([call.args[0] for call in killpg.call_args_list], [123, 456])
+        self.assertEqual(save_state.call_args.args[0]['records'][0]['session'], 'dbtools')
+
+    def test_unpark_target_launches_saved_resume_command(self) -> None:
+        state = {
+            'records': [
+                {
+                    'session': 'docker',
+                    'windowIndex': 1,
+                    'paneId': '%1',
+                    'kind': 'codex',
+                    'resumeId': '019d',
+                    'resumeCommand': 'cd /work && codex resume 019d',
+                }
+            ]
+        }
+        with mock.patch('wsv2.codex_parking.list_agent_processes', return_value=[]), \
+            mock.patch('wsv2.codex_parking._load_state', return_value=state), \
+            mock.patch('wsv2.codex_parking._save_state') as save_state, \
+            mock.patch('wsv2.codex_parking._launch_resume_record') as launch:
+            result = unpark_target('docker#1')
+
+        self.assertEqual(result['changed'], 1)
+        launch.assert_called_once()
+        self.assertEqual(save_state.call_args.args[0]['records'], [])
+
+    def test_remote_command_preserves_all_flag(self) -> None:
+        command = build_remote_wsv2_command(
+            'park',
+            None,
+            host_id='vm10',
+            host_name='Main Desktop',
+            json_output=True,
+            all_targets=True,
+        )
+
+        self.assertIn('codex park --all --local-only', command)
+        self.assertIn('--json', command)
+
+    def test_foreground_tmux_panes_sends_fg_once_per_pane(self) -> None:
+        with mock.patch('wsv2.codex_parking.subprocess.run') as run:
+            run.return_value.returncode = 0
+            errors = _foreground_tmux_panes(
+                [{'paneId': '%1'}, {'paneId': '%1'}],
+                [{'paneId': '%2'}],
+        )
+
+        self.assertEqual(errors, [])
+        self.assertEqual(len(run.call_args_list), 4)
+        self.assertEqual(run.call_args_list[0].args[0], ['tmux', 'send-keys', '-t', '%1', 'C-c'])
+        self.assertEqual(run.call_args_list[1].args[0][:4], ['tmux', 'send-keys', '-t', '%1'])
+        self.assertEqual(run.call_args_list[1].args[0][-2:], ['fg', 'Enter'])
 
 
 class TerminalRankingTests(unittest.TestCase):

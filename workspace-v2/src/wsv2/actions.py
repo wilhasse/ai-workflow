@@ -9,6 +9,7 @@ import subprocess
 from typing import Iterable
 
 from .catalog import HostRecord, WorkspaceConfigError, WorkspaceRecord, load_config
+from .codex_parking import CodexParkingError, build_remote_wsv2_command, unpark_target
 from .state import LauncherState
 
 
@@ -366,6 +367,54 @@ class WorkspaceActions:
             within_tmux=within_tmux,
         )
 
+    def unpark_workspace_target(self, target: str) -> None:
+        terminal_target = parse_terminal_target(target)
+        if terminal_target:
+            host_id = self.config.normalize_host_id(terminal_target.host_id) or self.config.self_host_id
+            if not host_id:
+                return
+            host = self.config.get_host(host_id)
+            tmux_target = (
+                f"{terminal_target.session_id}#{terminal_target.window_index}"
+                if terminal_target.window_index is not None
+                else terminal_target.session_id
+            )
+            self._unpark_tmux_target(host, tmux_target)
+            return
+
+        workspace = self.resolve_workspace(target)
+        self._unpark_tmux_target(workspace.host, workspace.id)
+
+    def _unpark_tmux_target(self, host: HostRecord, tmux_target: str) -> None:
+        try:
+            if self.config.host_runs_local(host):
+                unpark_target(tmux_target, host_id=host.id, host_name=host.name)
+                return
+            if not host.ssh:
+                return
+            remote_command = build_remote_wsv2_command(
+                'unpark',
+                tmux_target,
+                host_id=host.id,
+                host_name=host.name,
+            )
+            subprocess.run(
+                [
+                    'ssh',
+                    '-o',
+                    'ConnectTimeout=3',
+                    '-o',
+                    'BatchMode=yes',
+                    host.ssh,
+                    remote_command,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=8,
+            )
+        except (CodexParkingError, OSError, subprocess.TimeoutExpired):
+            return
+
     def open_workspace(self, target: str, focus_existing: bool = True) -> str:
         terminal_target = parse_terminal_target(target)
         if terminal_target:
@@ -373,6 +422,7 @@ class WorkspaceActions:
             if not host_id:
                 raise WorkspaceConfigError(f"Host is required for terminal target: {target}")
             title = f"{terminal_target.session_id}:{terminal_target.window_index}"
+            self.unpark_workspace_target(target)
             if focus_existing and self.focus_workspace_window(terminal_target.session_id):
                 self.state.mark_recent(target)
                 return "focused"
@@ -383,6 +433,7 @@ class WorkspaceActions:
             return "launched"
 
         workspace = self.resolve_workspace(target)
+        self.unpark_workspace_target(target)
         if focus_existing and self.focus_workspace_window(workspace.id):
             self.state.mark_recent(workspace.target)
             return "focused"
@@ -396,6 +447,7 @@ class WorkspaceActions:
     def attach_workspace(self, target: str, *, replace_process: bool = True) -> int:
         terminal_target = parse_terminal_target(target)
         if terminal_target:
+            self.unpark_workspace_target(target)
             command = self.workspace_command(
                 target,
                 within_tmux=bool(os.environ.get("TMUX")),
@@ -403,6 +455,7 @@ class WorkspaceActions:
             self.state.mark_recent(target)
         else:
             workspace = self.resolve_workspace(target)
+            self.unpark_workspace_target(target)
             command = self.workspace_command(
                 target,
                 within_tmux=bool(os.environ.get("TMUX")) and self.config.host_runs_local(workspace.host_id),
