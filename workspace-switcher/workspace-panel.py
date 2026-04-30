@@ -1235,6 +1235,14 @@ class WorkspaceSwitcher(Gtk.Window):
         refresh_btn.connect('clicked', lambda b: self.refresh_workspaces())
         header_box.pack_end(refresh_btn, False, False, 0)
 
+        # Bulk agent parking button for the selected host tab.
+        self.agent_all_button = Gtk.Button(label="Park all")
+        self.agent_all_button.set_relief(Gtk.ReliefStyle.NONE)
+        self.agent_all_button.set_tooltip_text("No Codex/Claude agents on this host")
+        self.agent_all_button.set_sensitive(False)
+        self.agent_all_button.connect('clicked', self._on_agent_all_clicked)
+        header_box.pack_end(self.agent_all_button, False, False, 0)
+
         main_box.pack_start(header_box, False, False, 0)
 
         # Separator
@@ -1419,7 +1427,16 @@ class WorkspaceSwitcher(Gtk.Window):
             or self._host_points_to_local(host_info)
         )
 
-    def _run_codex_agent_command(self, host_id, host_info, action, target=None, json_output=False, timeout=12):
+    def _run_codex_agent_command(
+        self,
+        host_id,
+        host_info,
+        action,
+        target=None,
+        json_output=False,
+        all_targets=False,
+        timeout=12,
+    ):
         host_id = host_id or 'local'
         host_name = (host_info or {}).get('name') or host_id
         args = [
@@ -1429,6 +1446,8 @@ class WorkspaceSwitcher(Gtk.Window):
         ]
         if target:
             args.append(target)
+        if all_targets:
+            args.append('--all')
         args.extend([
             '--local-only',
             '--host-id',
@@ -1453,6 +1472,8 @@ class WorkspaceSwitcher(Gtk.Window):
         ]
         if target:
             remote_parts.append(shlex.quote(target))
+        if all_targets:
+            remote_parts.append('--all')
         remote_parts.extend([
             '--local-only',
             '--host-id',
@@ -1498,6 +1519,27 @@ class WorkspaceSwitcher(Gtk.Window):
             return payload['rows']
         return []
 
+    def _finalize_agent_summary(self, summary):
+        if summary['count'] <= 0:
+            summary['status'] = 'none'
+        elif summary['parked'] == summary['count']:
+            summary['status'] = 'parked'
+        elif summary['parked'] > 0:
+            summary['status'] = 'partial'
+        else:
+            summary['status'] = 'active'
+        return summary
+
+    def _summarize_all_agents(self, rows):
+        summary = default_agent_summary().copy()
+        for row in rows:
+            summary['count'] += 1
+            if row.get('parked'):
+                summary['parked'] += 1
+            else:
+                summary['active'] += 1
+        return self._finalize_agent_summary(summary)
+
     def _summarize_agents_by_session(self, rows):
         summaries = {}
         for row in rows:
@@ -1512,14 +1554,7 @@ class WorkspaceSwitcher(Gtk.Window):
                 summary['active'] += 1
 
         for summary in summaries.values():
-            if summary['count'] <= 0:
-                summary['status'] = 'none'
-            elif summary['parked'] == summary['count']:
-                summary['status'] = 'parked'
-            elif summary['parked'] > 0:
-                summary['status'] = 'partial'
-            else:
-                summary['status'] = 'active'
+            self._finalize_agent_summary(summary)
         return summaries
 
     def _agent_action_for_summary(self, summary):
@@ -1528,6 +1563,27 @@ class WorkspaceSwitcher(Gtk.Window):
         if summary.get('status') == 'parked':
             return 'unpark', 'Resume'
         return 'park', 'Park'
+
+    def _update_agent_all_button(self, summary):
+        if not hasattr(self, 'agent_all_button'):
+            return
+        if getattr(self, '_agent_all_action_running', False):
+            return
+        action, label = self._agent_action_for_summary(summary)
+        if not action:
+            self.agent_all_button.set_label('Park all')
+            self.agent_all_button.set_sensitive(False)
+            self.agent_all_button.set_tooltip_text('No Codex/Claude agents on this host')
+            return
+
+        count = int(summary.get('count') or 0)
+        active = int(summary.get('active') or 0)
+        parked = int(summary.get('parked') or 0)
+        self.agent_all_button.set_label(f'{label} all')
+        self.agent_all_button.set_sensitive(True)
+        self.agent_all_button.set_tooltip_text(
+            f"{label} all Codex/Claude agents on this host ({active} active, {parked} parked, {count} total)"
+        )
 
     def _local_display_host_name(self):
         for host in self.hosts:
@@ -1904,6 +1960,48 @@ class WorkspaceSwitcher(Gtk.Window):
         self.refresh_workspaces()
         return False  # Don't repeat
 
+    def _on_agent_all_clicked(self, button):
+        """Park or resume all Codex/Claude agents on the selected host."""
+        summary = getattr(self, '_current_all_agent_summary', default_agent_summary())
+        action, _label = self._agent_action_for_summary(summary)
+        if not action:
+            return
+        host_id = getattr(self, '_current_agent_host_id', 'local')
+        host_info = getattr(self, '_current_agent_host_info', None)
+        original_label = button.get_label()
+        self._agent_all_action_running = True
+        button.set_sensitive(False)
+        button.set_label('...')
+
+        def run_action():
+            error_message = None
+            try:
+                result = self._run_codex_agent_command(
+                    host_id,
+                    host_info,
+                    action,
+                    all_targets=True,
+                    timeout=30,
+                )
+                if result.returncode != 0:
+                    error_message = (result.stderr or result.stdout or f'{action} all failed').strip()
+            except (OSError, subprocess.TimeoutExpired) as error:
+                error_message = str(error)
+
+            def finish():
+                self._agent_all_action_running = False
+                button.set_label(original_label)
+                button.set_sensitive(True)
+                self.remote_session_cache.invalidate(host_id)
+                self.refresh_workspaces()
+                if error_message:
+                    self._show_error('Agent action failed', error_message)
+                return False
+
+            GLib.idle_add(finish)
+
+        threading.Thread(target=run_action, daemon=True).start()
+
     def _on_agent_action_clicked(self, button, workspace, host_id, host_info, action):
         """Park or resume Codex/Claude agents for one tmux workspace."""
         session_name = workspace['id']
@@ -2082,9 +2180,12 @@ class WorkspaceSwitcher(Gtk.Window):
         # Get tmux session info
         sessions = self._get_sessions_for_host(self._current_host, host_info)
         agent_host_id, agent_host_info = self._agent_host_for_display(self._current_host, host_info)
-        agent_summaries = self._summarize_agents_by_session(
-            self._list_agents_for_host(agent_host_id, agent_host_info)
-        )
+        agent_rows = self._list_agents_for_host(agent_host_id, agent_host_info)
+        agent_summaries = self._summarize_agents_by_session(agent_rows)
+        self._current_agent_host_id = agent_host_id
+        self._current_agent_host_info = agent_host_info
+        self._current_all_agent_summary = self._summarize_all_agents(agent_rows)
+        self._update_agent_all_button(self._current_all_agent_summary)
 
         # Configured workspaces plus active discovered tmux sessions for this host.
         workspaces = list(self._workspaces_for_host(self._current_host))
