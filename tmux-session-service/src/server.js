@@ -196,7 +196,11 @@ const normalizePath = (value) => {
 
 const isHostLocal = (host) => host?.id === config.mobileSelfHostId || host?.id === 'local'
 
-const safeErrorMessage = (error) => error?.message ?? String(error)
+const safeErrorMessage = (error) => {
+  const message = error?.message ?? String(error)
+  const cause = error?.cause?.code ?? error?.cause?.message
+  return cause ? `${message} (${cause})` : message
+}
 
 const sanitizeDeepgramToken = (value, fallback = '') => {
   const trimmed = String(value || fallback || '').trim()
@@ -229,6 +233,29 @@ const readDeepgramError = async (response) => {
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+const shouldRetryDeepgramStatus = (status) =>
+  status === 408 || status === 425 || status === 429 || status >= 500
+
+const fetchDeepgram = async (url, options, { attempts = 3 } = {}) => {
+  let lastError = null
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const response = await fetch(url, options)
+      if (response.ok || attempt === attempts || !shouldRetryDeepgramStatus(response.status)) {
+        return response
+      }
+      await response.arrayBuffer().catch(() => null)
+    } catch (error) {
+      lastError = error
+      if (attempt === attempts) {
+        throw error
+      }
+    }
+    await sleep(250 * attempt)
+  }
+  throw lastError ?? new Error('Deepgram request failed')
+}
 
 const persistUsers = async () => {
   await ensureDataDir()
@@ -1361,7 +1388,7 @@ const handleVoiceTranscribe = async (req, res, searchParams) => {
   url.searchParams.set('punctuate', 'true')
 
   try {
-    const response = await fetch(url, {
+    const response = await fetchDeepgram(url, {
       method: 'POST',
       headers: {
         Authorization: `Token ${config.deepgramApiKey}`,
@@ -1422,7 +1449,7 @@ const handleVoiceTts = async (req, res) => {
   url.searchParams.set('encoding', encoding)
 
   try {
-    const response = await fetch(url, {
+    const response = await fetchDeepgram(url, {
       method: 'POST',
       headers: {
         Authorization: `Token ${config.deepgramApiKey}`,

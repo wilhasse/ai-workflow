@@ -25,7 +25,7 @@ const TERMINAL_ESCAPE_PATTERN = new RegExp(
   `${ESC}(?:[@-Z\\\\-_]|\\[[0-?]*[ -/]*[@-~]|\\][^${BEL}]*(?:${BEL}|${ESC}\\\\))`,
   'g',
 )
-const SPEECH_TEXT_MAX_CHARS = 1900
+const SPEECH_TEXT_MAX_CHARS = 450
 
 const resolveStoredFontSize = () => {
   if (typeof window === 'undefined') return DEFAULT_FONT_SIZE
