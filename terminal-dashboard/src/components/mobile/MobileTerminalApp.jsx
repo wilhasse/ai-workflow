@@ -26,6 +26,14 @@ const TERMINAL_ESCAPE_PATTERN = new RegExp(
   'g',
 )
 const SPEECH_TEXT_MAX_CHARS = 450
+const ASSISTANT_LINE_PATTERN = /^•\s+(?!Ran\b)(.+)$/
+const TOOL_LINE_PATTERN = /^(?:•\s+Ran\b|[└│]\s|…\s+\+\d+\s+lines)/
+const USER_PROMPT_LINE_PATTERN = /^›\s/
+const SHELL_PROMPT_LINE_PATTERN = /^[\w.-]+@[\w.-]+:[^$#]*[$#]\s/
+const TABLE_BORDER_LINE_PATTERN = /^[+\-|=\s]+$|^[┌┬┐├┼┤└┴┘─\s]+$/
+const TABLE_ROW_LINE_PATTERN = /^\|.*\|$/
+const STATUS_COUNTER_PATTERN = /\s+·\s+[\d.]+[KMG]?\s+in\s+·.*$/
+const WORD_PATTERN = /[A-Za-zÀ-ÖØ-öø-ÿ]{2,}/g
 
 const resolveStoredFontSize = () => {
   if (typeof window === 'undefined') return DEFAULT_FONT_SIZE
@@ -93,22 +101,102 @@ const formatRecordingDetails = ({ recordingMs, size } = {}) => {
   return details.length ? ` (${details.join(', ')})` : ''
 }
 
-const normalizeTerminalSpeechText = (value) =>
+const normalizeTerminalSpeechLines = (value) =>
   String(value || '')
     .replace(TERMINAL_ESCAPE_PATTERN, ' ')
     .replace(/\r/g, '\n')
     .split('\n')
     .map((line) => line.replace(/\s+/g, ' ').trim())
     .filter(Boolean)
-    .join('\n')
 
-const tailTextForSpeech = (value) => {
-  const text = normalizeTerminalSpeechText(value)
+const limitSpeechText = (value, { preferStart = false } = {}) => {
+  const text = String(value || '').trim()
   if (text.length <= SPEECH_TEXT_MAX_CHARS) {
     return text
   }
+  if (preferStart) {
+    const head = text.slice(0, SPEECH_TEXT_MAX_CHARS)
+    return head.replace(/\n[^\n]*$/, '').trim() || head.trim()
+  }
   const tail = text.slice(-SPEECH_TEXT_MAX_CHARS)
   return tail.replace(/^[^\n]*\n?/, '').trim() || tail.trim()
+}
+
+const cleanSpeechLine = (line) =>
+  String(line || '')
+    .replace(/^•\s+/, '')
+    .replace(STATUS_COUNTER_PATTERN, '')
+    .trim()
+
+const hasReadableWords = (line) => (line.match(WORD_PATTERN) || []).length > 0
+
+const isSpeechBoundaryLine = (line) =>
+  USER_PROMPT_LINE_PATTERN.test(line) ||
+  SHELL_PROMPT_LINE_PATTERN.test(line) ||
+  TOOL_LINE_PATTERN.test(line) ||
+  TABLE_BORDER_LINE_PATTERN.test(line) ||
+  TABLE_ROW_LINE_PATTERN.test(line)
+
+const isReadableSpeechLine = (line) => {
+  const cleaned = cleanSpeechLine(line)
+  if (!cleaned || !hasReadableWords(cleaned)) {
+    return false
+  }
+  return !isSpeechBoundaryLine(cleaned)
+}
+
+const pushReadableBlock = (blocks, block) => {
+  const text = block.join('\n').trim()
+  if (text.length >= 24 && hasReadableWords(text)) {
+    blocks.push(text)
+  }
+}
+
+const fallbackTextForSpeech = (lines) => {
+  const filtered = lines
+    .filter((line) => !isSpeechBoundaryLine(line))
+    .map(cleanSpeechLine)
+    .filter(isReadableSpeechLine)
+    .join('\n')
+  return limitSpeechText(filtered)
+}
+
+const terminalTextForSpeech = (value) => {
+  const lines = normalizeTerminalSpeechLines(value)
+  const blocks = []
+  let currentBlock = []
+
+  lines.forEach((line) => {
+    const assistantLine = line.match(ASSISTANT_LINE_PATTERN)
+    if (assistantLine) {
+      pushReadableBlock(blocks, currentBlock)
+      currentBlock = [cleanSpeechLine(assistantLine[1])]
+      return
+    }
+
+    if (!currentBlock.length) {
+      return
+    }
+
+    if (isSpeechBoundaryLine(line)) {
+      pushReadableBlock(blocks, currentBlock)
+      currentBlock = []
+      return
+    }
+
+    if (isReadableSpeechLine(line)) {
+      currentBlock.push(cleanSpeechLine(line))
+    }
+  })
+
+  pushReadableBlock(blocks, currentBlock)
+
+  const lastAssistantMessage = blocks.at(-1)
+  if (lastAssistantMessage) {
+    return limitSpeechText(lastAssistantMessage, { preferStart: true })
+  }
+
+  return fallbackTextForSpeech(lines)
 }
 
 const buildMobileSocketUrl = (workspace, windowIndex) => {
@@ -755,7 +843,7 @@ function MobileTerminalApp() {
       if (!historyResponse.ok) {
         throw new Error(historyData.error || 'Unable to read terminal output.')
       }
-      const speechText = tailTextForSpeech(historyData.text)
+      const speechText = terminalTextForSpeech(historyData.text)
       if (!speechText) {
         throw new Error('No terminal text available to read.')
       }
