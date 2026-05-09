@@ -100,6 +100,22 @@ The Docker deployment includes:
 - **tmux-session-service** - Session persistence API + WebSocket bridge
 - **whisper-realtime-api** (optional) - Voice transcription
 
+### Deepgram Voice
+
+The mobile terminal can use Deepgram through `tmux-session-service`, so the browser never receives the API key.
+
+Set these in a local `.env` or deployment environment before restarting Compose:
+
+```bash
+DEEPGRAM_API_KEY=...
+DEEPGRAM_STT_MODEL=nova-3
+DEEPGRAM_STT_LANGUAGE=pt-BR
+DEEPGRAM_TTS_MODEL=aura-2-thalia-en
+DEEPGRAM_TTS_ENCODING=mp3
+```
+
+Mobile voice input posts recorded audio to `/api/voice/transcribe`. The `/mobile` terminal also has a `Read` control that captures recent terminal output and plays it through `/api/voice/tts`.
+
 ### Architecture
 
 ```

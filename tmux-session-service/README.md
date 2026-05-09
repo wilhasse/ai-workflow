@@ -29,6 +29,9 @@ Environment variables:
 - `SHELL_CMD` – default shell command when creating a session (defaults to `$SHELL` or `/bin/bash`).
 - `DATA_DIR` – directory for `sessions.json` persistence.
 - `TMUX_BRIDGE_NAME` – optional terminal name passed to `node-pty` (defaults to `xterm-256color`).
+- `DEEPGRAM_API_KEY` – server-side key for mobile voice transcription and speech playback.
+- `DEEPGRAM_STT_MODEL` / `DEEPGRAM_STT_LANGUAGE` – defaults `nova-3` / `pt-BR`.
+- `DEEPGRAM_TTS_MODEL` / `DEEPGRAM_TTS_ENCODING` – defaults `aura-2-thalia-en` / `mp3`.
 
 ## Docker
 ```
@@ -56,5 +59,8 @@ Make sure `tmux` is installed inside the container image (extend from `node:20-s
 | `PUT` | `/sessions/:id` | Idempotently ensure a specific session exists. |
 | `POST` | `/sessions/:id/keepalive` | Update timestamps without touching tmux. |
 | `DELETE` | `/sessions/:id` | Kill a tmux session and drop metadata. |
+| `GET` | `/voice/status` | Reports whether Deepgram is configured and which voice models are active. |
+| `POST` | `/voice/transcribe` | Proxies raw audio to Deepgram STT and returns `{ text }`. |
+| `POST` | `/voice/tts` | Proxies text to Deepgram TTS and streams the audio response. |
 
 Responses contain structured errors when tmux is unreachable or ids are invalid, making it easy to automate clean-up cron jobs or integrate with your dashboard.

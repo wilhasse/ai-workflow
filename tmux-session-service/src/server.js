@@ -24,6 +24,14 @@ const config = {
   mobileSelfHostId: process.env.MOBILE_SELF_HOST_ID ?? process.env.WSV2_SELF_HOST ?? 'vm10',
   sessionArchivePath: process.env.WSV2_SESSION_ARCHIVE_PATH ?? path.join(os.homedir(), '.local', 'state', 'ai-workflow', 'workspace-session-archive.json'),
   wsv2Script: process.env.WSV2_SCRIPT ?? path.join(os.homedir(), 'ai-workflow', 'workspace-v2', 'scripts', 'wsv2'),
+  deepgramApiKey: process.env.DEEPGRAM_API_KEY ?? '',
+  deepgramApiBase: process.env.DEEPGRAM_API_BASE ?? 'https://api.deepgram.com',
+  deepgramSttModel: process.env.DEEPGRAM_STT_MODEL ?? 'nova-3',
+  deepgramSttLanguage: process.env.DEEPGRAM_STT_LANGUAGE ?? 'pt-BR',
+  deepgramTtsModel: process.env.DEEPGRAM_TTS_MODEL ?? 'aura-2-thalia-en',
+  deepgramTtsEncoding: process.env.DEEPGRAM_TTS_ENCODING ?? 'mp3',
+  deepgramTtsMaxChars: Number.parseInt(process.env.DEEPGRAM_TTS_MAX_CHARS ?? '2000', 10),
+  voiceMaxAudioBytes: Number.parseInt(process.env.VOICE_MAX_AUDIO_BYTES ?? String(25 * 1024 * 1024), 10),
 }
 const DEFAULT_HISTORY_LINES = 1000
 const MAX_HISTORY_LINES = 20000
@@ -49,6 +57,23 @@ const respond = (res, status, payload) => {
     return
   }
   res.end(JSON.stringify(payload ?? {}))
+}
+
+const respondBinary = (res, status, body, headers = {}) => {
+  res.writeHead(status, {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
+    ...headers,
+  })
+  res.end(body)
+}
+
+class PayloadTooLargeError extends Error {
+  constructor(message) {
+    super(message)
+    this.statusCode = 413
+  }
 }
 
 const sanitizeId = (value) => {
@@ -83,6 +108,39 @@ const readBody = async (req) =>
       }
     })
     req.on('error', reject)
+  })
+
+const readRawBody = async (req, maxBytes) =>
+  new Promise((resolve, reject) => {
+    const chunks = []
+    let totalBytes = 0
+    let settled = false
+
+    req.on('data', (chunk) => {
+      if (settled) {
+        return
+      }
+      totalBytes += chunk.length
+      if (totalBytes > maxBytes) {
+        settled = true
+        reject(new PayloadTooLargeError('Audio payload exceeds limit'))
+        req.destroy()
+        return
+      }
+      chunks.push(chunk)
+    })
+    req.on('end', () => {
+      if (!settled) {
+        settled = true
+        resolve(Buffer.concat(chunks))
+      }
+    })
+    req.on('error', (error) => {
+      if (!settled) {
+        settled = true
+        reject(error)
+      }
+    })
   })
 
 const sanitizeUsername = (value) => {
@@ -139,6 +197,36 @@ const normalizePath = (value) => {
 const isHostLocal = (host) => host?.id === config.mobileSelfHostId || host?.id === 'local'
 
 const safeErrorMessage = (error) => error?.message ?? String(error)
+
+const sanitizeDeepgramToken = (value, fallback = '') => {
+  const trimmed = String(value || fallback || '').trim()
+  if (!trimmed) {
+    return ''
+  }
+  const safe = trimmed.match(/[A-Za-z0-9._-]/g)
+  if (!safe) {
+    return ''
+  }
+  return safe.join('').slice(0, 80)
+}
+
+const sanitizeDeepgramLanguage = (value) => sanitizeDeepgramToken(value, config.deepgramSttLanguage).slice(0, 20)
+
+const redactDeepgramSecret = (value) =>
+  String(value || '').replaceAll(config.deepgramApiKey, '[redacted]')
+
+const deepgramUrl = (pathName) => {
+  const base = config.deepgramApiBase.endsWith('/')
+    ? config.deepgramApiBase
+    : `${config.deepgramApiBase}/`
+  return new URL(pathName.replace(/^\//, ''), base)
+}
+
+const readDeepgramError = async (response) => {
+  const raw = await response.text().catch(() => '')
+  const detail = redactDeepgramSecret(raw).replace(/\s+/g, ' ').trim()
+  return detail.slice(0, 500) || response.statusText || 'Deepgram request failed'
+}
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -1229,6 +1317,138 @@ const handleMobileAgentAction = async (req, res, hostIdRaw, sessionIdRaw) => {
   }
 }
 
+const handleVoiceStatus = (res) => {
+  respond(res, 200, {
+    deepgram: {
+      configured: Boolean(config.deepgramApiKey),
+      sttModel: config.deepgramSttModel,
+      sttLanguage: config.deepgramSttLanguage,
+      ttsModel: config.deepgramTtsModel,
+      ttsEncoding: config.deepgramTtsEncoding,
+      ttsMaxChars: config.deepgramTtsMaxChars,
+      maxAudioBytes: config.voiceMaxAudioBytes,
+    },
+  })
+}
+
+const handleVoiceTranscribe = async (req, res, searchParams) => {
+  if (!config.deepgramApiKey) {
+    respond(res, 503, { error: 'Deepgram API key is not configured on the server.' })
+    return
+  }
+
+  let audio
+  try {
+    audio = await readRawBody(req, config.voiceMaxAudioBytes)
+  } catch (error) {
+    respond(res, error.statusCode || 400, { error: safeErrorMessage(error) })
+    return
+  }
+
+  if (!audio.length) {
+    respond(res, 400, { error: 'Audio payload is empty.' })
+    return
+  }
+
+  const contentType = String(req.headers['content-type'] || 'application/octet-stream').split(';')[0]
+  const url = deepgramUrl('/v1/listen')
+  const language = sanitizeDeepgramLanguage(searchParams.get('language'))
+  url.searchParams.set('model', sanitizeDeepgramToken(config.deepgramSttModel, 'nova-3'))
+  if (language) {
+    url.searchParams.set('language', language)
+  }
+  url.searchParams.set('smart_format', 'true')
+  url.searchParams.set('punctuate', 'true')
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Token ${config.deepgramApiKey}`,
+        'Content-Type': contentType || 'application/octet-stream',
+      },
+      body: audio,
+    })
+
+    if (!response.ok) {
+      const detail = await readDeepgramError(response)
+      respond(res, 502, { error: `Deepgram transcription failed (${response.status}): ${detail}` })
+      return
+    }
+
+    const payload = await response.json()
+    const channel = payload.results?.channels?.[0]
+    const transcript = channel?.alternatives?.[0]?.transcript ?? ''
+    respond(res, 200, {
+      provider: 'deepgram',
+      text: transcript,
+      language: channel?.detected_language ?? language,
+      duration: payload.metadata?.duration ?? 0,
+      requestId: payload.metadata?.request_id ?? null,
+    })
+  } catch (error) {
+    respond(res, 502, { error: `Deepgram transcription failed: ${safeErrorMessage(error)}` })
+  }
+}
+
+const handleVoiceTts = async (req, res) => {
+  if (!config.deepgramApiKey) {
+    respond(res, 503, { error: 'Deepgram API key is not configured on the server.' })
+    return
+  }
+
+  let body
+  try {
+    body = await readBody(req)
+  } catch (error) {
+    respond(res, 400, { error: error.message })
+    return
+  }
+
+  const text = String(body.text || '').replace(/\s+/g, ' ').trim()
+  if (!text) {
+    respond(res, 400, { error: 'Text is required.' })
+    return
+  }
+  if (text.length > config.deepgramTtsMaxChars) {
+    respond(res, 413, { error: `Text exceeds ${config.deepgramTtsMaxChars} characters.` })
+    return
+  }
+
+  const model = sanitizeDeepgramToken(body.model, config.deepgramTtsModel) || 'aura-2-thalia-en'
+  const encoding = sanitizeDeepgramToken(body.encoding, config.deepgramTtsEncoding) || 'mp3'
+  const url = deepgramUrl('/v1/speak')
+  url.searchParams.set('model', model)
+  url.searchParams.set('encoding', encoding)
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Token ${config.deepgramApiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ text }),
+    })
+
+    if (!response.ok) {
+      const detail = await readDeepgramError(response)
+      respond(res, 502, { error: `Deepgram speech failed (${response.status}): ${detail}` })
+      return
+    }
+
+    const audio = Buffer.from(await response.arrayBuffer())
+    respondBinary(res, 200, audio, {
+      'Content-Type': response.headers.get('content-type') || 'audio/mpeg',
+      'Cache-Control': 'no-store',
+      'X-Deepgram-Request-Id': response.headers.get('dg-request-id') || '',
+      'X-Deepgram-Model': response.headers.get('dg-model-name') || model,
+    })
+  } catch (error) {
+    respond(res, 502, { error: `Deepgram speech failed: ${safeErrorMessage(error)}` })
+  }
+}
+
 const handleHealth = async (res) => {
   const tmuxVersion = await runTmux(['-V'])
   respond(res, 200, {
@@ -1577,6 +1797,18 @@ const server = http.createServer(async (req, res) => {
   }
   if (method === 'GET' && pathName === '/mobile/workspaces') {
     await handleMobileWorkspaces(res)
+    return
+  }
+  if (method === 'GET' && pathName === '/voice/status') {
+    handleVoiceStatus(res)
+    return
+  }
+  if (method === 'POST' && pathName === '/voice/transcribe') {
+    await handleVoiceTranscribe(req, res, parsed.searchParams)
+    return
+  }
+  if (method === 'POST' && pathName === '/voice/tts') {
+    await handleVoiceTts(req, res)
     return
   }
   const mobileHistoryMatch = pathName.match(/^\/mobile\/history\/([^/]+)\/([^/]+)$/)

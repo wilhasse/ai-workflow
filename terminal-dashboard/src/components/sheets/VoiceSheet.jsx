@@ -105,7 +105,7 @@ function VoiceSheet({
 
         {voiceService === VOICE_SERVICES.DEEPGRAM && !hasDeepgramKey && (
           <p className="voice-warning">
-            Deepgram API key not configured. Add VITE_DEEPGRAM_API_KEY to .env file.
+            Deepgram API key is not configured on the server.
           </p>
         )}
 

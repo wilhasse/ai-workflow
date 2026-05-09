@@ -11,7 +11,6 @@ const VOICE_SERVICES = {
   LOCAL: 'local',
   DEEPGRAM: 'deepgram',
 }
-const DEEPGRAM_API_KEY = import.meta.env.VITE_DEEPGRAM_API_KEY || ''
 const RECORDER_MIME_TYPES = [
   'audio/webm;codecs=opus',
   'audio/webm',
@@ -20,6 +19,13 @@ const RECORDER_MIME_TYPES = [
   'audio/ogg;codecs=opus',
   'audio/ogg',
 ]
+const ESC = '\\u001B'
+const BEL = '\\u0007'
+const TERMINAL_ESCAPE_PATTERN = new RegExp(
+  `${ESC}(?:[@-Z\\\\-_]|\\[[0-?]*[ -/]*[@-~]|\\][^${BEL}]*(?:${BEL}|${ESC}\\\\))`,
+  'g',
+)
+const SPEECH_TEXT_MAX_CHARS = 1900
 
 const resolveStoredFontSize = () => {
   if (typeof window === 'undefined') return DEFAULT_FONT_SIZE
@@ -36,6 +42,17 @@ const detectVoiceApiBase = () => {
     return `${protocol}//${hostname}:8000`
   }
   return `${origin}/api/whisper`
+}
+
+const detectVoiceProxyBase = () => {
+  if (typeof window === 'undefined') {
+    return 'http://localhost:5001'
+  }
+  const { protocol, hostname, port, origin } = window.location
+  if (port === '5173') {
+    return `${protocol}//${hostname}:5001`
+  }
+  return `${origin}/api`
 }
 
 const getSpeechRecognitionConstructor = () => {
@@ -74,6 +91,24 @@ const formatRecordingDetails = ({ recordingMs, size } = {}) => {
     details.push(`${Math.max(1, Math.round(size / 1024))} KB`)
   }
   return details.length ? ` (${details.join(', ')})` : ''
+}
+
+const normalizeTerminalSpeechText = (value) =>
+  String(value || '')
+    .replace(TERMINAL_ESCAPE_PATTERN, ' ')
+    .replace(/\r/g, '\n')
+    .split('\n')
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .join('\n')
+
+const tailTextForSpeech = (value) => {
+  const text = normalizeTerminalSpeechText(value)
+  if (text.length <= SPEECH_TEXT_MAX_CHARS) {
+    return text
+  }
+  const tail = text.slice(-SPEECH_TEXT_MAX_CHARS)
+  return tail.replace(/^[^\n]*\n?/, '').trim() || tail.trim()
 }
 
 const buildMobileSocketUrl = (workspace, windowIndex) => {
@@ -392,11 +427,11 @@ function MobileTerminalApp() {
   const [selectedWorkspaceKey, setSelectedWorkspaceKey] = useState(null)
   const [selectedWindowIndex, setSelectedWindowIndex] = useState(null)
   const [terminalFontSize, setTerminalFontSize] = useState(resolveStoredFontSize)
-  const [voiceService] = useState(() => {
-    if (typeof window === 'undefined') return VOICE_SERVICES.LOCAL
-    return window.localStorage.getItem(VOICE_SERVICE_STORAGE_KEY) || VOICE_SERVICES.LOCAL
+  const [voiceService, setVoiceService] = useState(() => {
+    if (typeof window === 'undefined') return VOICE_SERVICES.DEEPGRAM
+    return window.localStorage.getItem(VOICE_SERVICE_STORAGE_KEY) || VOICE_SERVICES.DEEPGRAM
   })
-  const [voiceLanguage] = useState(() => {
+  const [voiceLanguage, setVoiceLanguage] = useState(() => {
     if (typeof window === 'undefined') return 'pt-BR'
     return window.localStorage.getItem(VOICE_LANGUAGE_STORAGE_KEY) || 'pt-BR'
   })
@@ -405,6 +440,13 @@ function MobileTerminalApp() {
   const [voiceError, setVoiceError] = useState('')
   const [voiceRecording, setVoiceRecording] = useState(false)
   const [voicePending, setVoicePending] = useState(false)
+  const [voiceProviderStatus, setVoiceProviderStatus] = useState({
+    checked: false,
+    deepgramConfigured: false,
+  })
+  const [speechPlaybackStatus, setSpeechPlaybackStatus] = useState('')
+  const [speechPlaybackError, setSpeechPlaybackError] = useState('')
+  const [speechPlaybackPending, setSpeechPlaybackPending] = useState(false)
   const [terminalDraft, setTerminalDraft] = useState('')
   const [terminalInputError, setTerminalInputError] = useState('')
   const [agentActionKey, setAgentActionKey] = useState('')
@@ -415,6 +457,8 @@ function MobileTerminalApp() {
   const voiceStreamRef = useRef(null)
   const voiceChunksRef = useRef([])
   const voiceRecordingStartedAtRef = useRef(0)
+  const speechAudioRef = useRef(null)
+  const speechAudioUrlRef = useRef('')
 
   const workspaces = useMemo(() => hosts.flatMap((host) => host.workspaces || []), [hosts])
   const selectedWorkspace = useMemo(
@@ -432,6 +476,9 @@ function MobileTerminalApp() {
   const canShowTerminal = !!(selectedWorkspace && selectedWindow && wsUrl)
   const isSecureContext = typeof window !== 'undefined' &&
     (window.isSecureContext || window.location.protocol === 'https:')
+  const selectedVoiceProviderUnavailable = voiceService === VOICE_SERVICES.DEEPGRAM &&
+    voiceProviderStatus.checked &&
+    !voiceProviderStatus.deepgramConfigured
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined
@@ -451,6 +498,48 @@ function MobileTerminalApp() {
       window.visualViewport?.removeEventListener('resize', updateHeight)
       window.visualViewport?.removeEventListener('scroll', updateHeight)
       root.style.removeProperty('--mobile-terminal-height')
+    }
+  }, [])
+
+  const releaseSpeechAudio = useCallback(() => {
+    if (speechAudioRef.current) {
+      try {
+        speechAudioRef.current.pause()
+      } catch {
+        // ignore
+      }
+      speechAudioRef.current = null
+    }
+    if (speechAudioUrlRef.current) {
+      window.URL.revokeObjectURL(speechAudioUrlRef.current)
+      speechAudioUrlRef.current = ''
+    }
+  }, [])
+
+  useEffect(() => () => releaseSpeechAudio(), [releaseSpeechAudio])
+
+  useEffect(() => {
+    let cancelled = false
+    const loadVoiceStatus = async () => {
+      try {
+        const base = detectVoiceProxyBase().replace(/\/$/, '')
+        const response = await fetch(`${base}/voice/status`)
+        const data = await response.json()
+        if (!cancelled) {
+          setVoiceProviderStatus({
+            checked: true,
+            deepgramConfigured: Boolean(data.deepgram?.configured),
+          })
+        }
+      } catch {
+        if (!cancelled) {
+          setVoiceProviderStatus({ checked: true, deepgramConfigured: false })
+        }
+      }
+    }
+    loadVoiceStatus()
+    return () => {
+      cancelled = true
     }
   }, [])
 
@@ -479,6 +568,16 @@ function MobileTerminalApp() {
     if (typeof window === 'undefined') return
     window.localStorage.setItem(FONT_SIZE_STORAGE_KEY, String(terminalFontSize))
   }, [terminalFontSize])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(VOICE_SERVICE_STORAGE_KEY, voiceService)
+  }, [voiceService])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(VOICE_LANGUAGE_STORAGE_KEY, voiceLanguage)
+  }, [voiceLanguage])
 
   const refreshInventory = useCallback(async () => {
     await loadInventory()
@@ -576,23 +675,24 @@ function MobileTerminalApp() {
     try {
       let transcriptText = ''
       const audioType = blob.type || 'audio/webm'
-      if (voiceService === VOICE_SERVICES.DEEPGRAM && DEEPGRAM_API_KEY) {
-        const deepgramResponse = await fetch(
-          `https://api.deepgram.com/v1/listen?model=nova-2&language=${voiceLanguage}&punctuate=true`,
-          {
-            method: 'POST',
-            headers: {
-              Authorization: `Token ${DEEPGRAM_API_KEY}`,
-              'Content-Type': audioType,
-            },
-            body: blob,
-          },
-        )
-        if (!deepgramResponse.ok) {
-          throw new Error('Deepgram transcription failed')
+      if (voiceService === VOICE_SERVICES.DEEPGRAM) {
+        const base = detectVoiceProxyBase().replace(/\/$/, '')
+        const params = new URLSearchParams()
+        if (voiceLanguage) {
+          params.set('language', voiceLanguage)
         }
-        const deepgramData = await deepgramResponse.json()
-        transcriptText = deepgramData.results?.channels?.[0]?.alternatives?.[0]?.transcript ?? ''
+        const deepgramResponse = await fetch(`${base}/voice/transcribe?${params}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': audioType,
+          },
+          body: blob,
+        })
+        const deepgramData = await deepgramResponse.json().catch(() => ({}))
+        if (!deepgramResponse.ok) {
+          throw new Error(deepgramData.error || 'Deepgram transcription failed')
+        }
+        transcriptText = deepgramData.text ?? ''
       } else {
         const formData = new FormData()
         formData.append('file', blob, `recording.${extensionForMimeType(audioType)}`)
@@ -629,6 +729,78 @@ function MobileTerminalApp() {
       setVoicePending(false)
     }
   }, [voiceLanguage, voiceService])
+
+  const readTerminalOutput = useCallback(async () => {
+    if (!canShowTerminal || speechPlaybackPending) {
+      return
+    }
+    releaseSpeechAudio()
+    setSpeechPlaybackPending(true)
+    setSpeechPlaybackError('')
+    setSpeechPlaybackStatus('Preparing audio...')
+    try {
+      const sessionId = selectedWorkspace.connection?.sessionId || selectedWorkspace.id
+      const base = detectVoiceProxyBase().replace(/\/$/, '')
+      const params = new URLSearchParams({
+        lines: '48',
+        includeVisible: 'true',
+      })
+      if (Number.isFinite(selectedWindowIndex)) {
+        params.set('windowIndex', String(selectedWindowIndex))
+      }
+      const historyResponse = await fetch(
+        `${base}/mobile/history/${encodeURIComponent(selectedWorkspace.hostId)}/${encodeURIComponent(sessionId)}?${params}`,
+      )
+      const historyData = await historyResponse.json().catch(() => ({}))
+      if (!historyResponse.ok) {
+        throw new Error(historyData.error || 'Unable to read terminal output.')
+      }
+      const speechText = tailTextForSpeech(historyData.text)
+      if (!speechText) {
+        throw new Error('No terminal text available to read.')
+      }
+
+      const ttsResponse = await fetch(`${base}/voice/tts`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ text: speechText }),
+      })
+      if (!ttsResponse.ok) {
+        const payload = await ttsResponse.json().catch(() => ({}))
+        throw new Error(payload.error || 'Speech playback failed.')
+      }
+      const audioBlob = await ttsResponse.blob()
+      const audioUrl = window.URL.createObjectURL(audioBlob)
+      const audio = new window.Audio(audioUrl)
+      speechAudioRef.current = audio
+      speechAudioUrlRef.current = audioUrl
+      audio.addEventListener('ended', () => {
+        releaseSpeechAudio()
+        setSpeechPlaybackStatus('Finished')
+      }, { once: true })
+      audio.addEventListener('error', () => {
+        releaseSpeechAudio()
+        setSpeechPlaybackError('Unable to play synthesized audio.')
+        setSpeechPlaybackStatus('')
+      }, { once: true })
+      await audio.play()
+      setSpeechPlaybackStatus('Playing terminal output')
+    } catch (playbackError) {
+      releaseSpeechAudio()
+      setSpeechPlaybackError(playbackError.message || 'Speech playback failed.')
+      setSpeechPlaybackStatus('')
+    } finally {
+      setSpeechPlaybackPending(false)
+    }
+  }, [
+    canShowTerminal,
+    releaseSpeechAudio,
+    selectedWindowIndex,
+    selectedWorkspace,
+    speechPlaybackPending,
+  ])
 
   const startBrowserSpeechRecognition = useCallback(() => {
     const Recognition = getSpeechRecognitionConstructor()
@@ -698,15 +870,16 @@ function MobileTerminalApp() {
       return
     }
     cleanupVoiceResources()
-    if (startBrowserSpeechRecognition()) {
-      return
-    }
     try {
       setVoiceError('')
       setVoiceTranscript('')
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       voiceStreamRef.current = stream
       if (typeof window.MediaRecorder === 'undefined') {
+        cleanupVoiceResources()
+        if (startBrowserSpeechRecognition()) {
+          return
+        }
         throw new Error('MediaRecorder is not supported in this browser.')
       }
       const mimeType = pickRecorderMimeType()
@@ -872,13 +1045,45 @@ function MobileTerminalApp() {
             ))}
           </select>
         </label>
+        <label className="mobile-font-control">
+          <span>STT</span>
+          <select
+            value={voiceService}
+            onChange={(event) => setVoiceService(event.target.value)}
+          >
+            <option value={VOICE_SERVICES.DEEPGRAM}>DG</option>
+            <option value={VOICE_SERVICES.LOCAL}>Local</option>
+          </select>
+        </label>
+        <label className="mobile-font-control">
+          <span>Lang</span>
+          <select
+            value={voiceLanguage}
+            onChange={(event) => setVoiceLanguage(event.target.value)}
+          >
+            <option value="pt-BR">PT-BR</option>
+            <option value="pt-PT">PT-PT</option>
+            <option value="en">EN</option>
+            <option value="es">ES</option>
+          </select>
+        </label>
         <button
           type="button"
           className={`mobile-record-btn ${voiceRecording ? 'recording' : ''}`}
           onClick={toggleRecording}
-          disabled={voicePending || !canShowTerminal}
+          disabled={voicePending || !canShowTerminal || selectedVoiceProviderUnavailable}
+          title={selectedVoiceProviderUnavailable ? 'Deepgram is not configured on the server' : 'Record voice input'}
         >
           {voiceRecording ? 'Stop' : voicePending ? 'Wait' : 'Voice'}
+        </button>
+        <button
+          type="button"
+          className="mobile-record-btn"
+          onClick={readTerminalOutput}
+          disabled={speechPlaybackPending || !canShowTerminal || !voiceProviderStatus.deepgramConfigured}
+          title={voiceProviderStatus.deepgramConfigured ? 'Read terminal output' : 'Deepgram is not configured on the server'}
+        >
+          {speechPlaybackPending ? 'Wait' : 'Read'}
         </button>
       </header>
 
@@ -916,9 +1121,9 @@ function MobileTerminalApp() {
 
       <VoicePanel
         transcript={voiceTranscript}
-        status={voiceStatus}
-        error={voiceError}
-        pending={voicePending}
+        status={speechPlaybackStatus || voiceStatus}
+        error={speechPlaybackError || voiceError}
+        pending={voicePending || speechPlaybackPending}
         onSend={sendTranscript}
         onCopy={copyTranscript}
         onClear={clearTranscript}

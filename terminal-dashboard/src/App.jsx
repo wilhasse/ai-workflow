@@ -38,7 +38,14 @@ const VOICE_SERVICES = {
   LOCAL: 'local',
   DEEPGRAM: 'deepgram',
 }
-const DEEPGRAM_API_KEY = import.meta.env.VITE_DEEPGRAM_API_KEY || ''
+const RECORDER_MIME_TYPES = [
+  'audio/webm;codecs=opus',
+  'audio/webm',
+  'audio/mp4',
+  'audio/aac',
+  'audio/ogg;codecs=opus',
+  'audio/ogg',
+]
 
 // API base detection for voice transcription
 const detectApiBase = () => {
@@ -54,7 +61,41 @@ const detectApiBase = () => {
   return `${protocol}//${hostname}${portSuffix}/api`
 }
 
+const detectWhisperApiBase = () => {
+  if (typeof window === 'undefined') {
+    return 'http://localhost:8000'
+  }
+  const { protocol, hostname, port, origin } = window.location
+  if (port === '5173') {
+    return `${protocol}//${hostname}:8000`
+  }
+  return `${origin}/api/whisper`
+}
+
+const normalizeWhisperLanguage = (language) => {
+  if (!language) return ''
+  return language.split('-')[0].toLowerCase()
+}
+
+const pickRecorderMimeType = () => {
+  if (typeof window === 'undefined' || typeof window.MediaRecorder === 'undefined') {
+    return ''
+  }
+  if (typeof window.MediaRecorder.isTypeSupported !== 'function') {
+    return ''
+  }
+  return RECORDER_MIME_TYPES.find((mimeType) => window.MediaRecorder.isTypeSupported(mimeType)) || ''
+}
+
+const extensionForMimeType = (mimeType) => {
+  if (mimeType.includes('mp4')) return 'm4a'
+  if (mimeType.includes('aac')) return 'aac'
+  if (mimeType.includes('ogg')) return 'ogg'
+  return 'webm'
+}
+
 const API_BASE = detectApiBase()
+const WHISPER_API_BASE = detectWhisperApiBase()
 
 const loadWindowUsage = () => {
   if (typeof window === 'undefined') {
@@ -161,6 +202,10 @@ function DashboardApp() {
   const [voiceError, setVoiceError] = useState('')
   const [voiceRecording, setVoiceRecording] = useState(false)
   const [voicePending, setVoicePending] = useState(false)
+  const [voiceProviderStatus, setVoiceProviderStatus] = useState({
+    checked: false,
+    deepgramConfigured: false,
+  })
   const voiceRecorderRef = useRef(null)
   const voiceStreamRef = useRef(null)
   const voiceChunksRef = useRef([])
@@ -183,6 +228,9 @@ function DashboardApp() {
   const [workspaceActivity, setWorkspaceActivity] = useState({})
 
   const overviewReadOnly = overviewMode && canUseOverview
+  const selectedVoiceProviderUnavailable = voiceService === VOICE_SERVICES.DEEPGRAM &&
+    voiceProviderStatus.checked &&
+    !voiceProviderStatus.deepgramConfigured
   const activeWorkspaces = useMemo(
     () => workspaces.filter((workspace) => workspace.active),
     [workspaces],
@@ -501,6 +549,31 @@ function DashboardApp() {
   }, [voiceLanguage])
 
   useEffect(() => {
+    let cancelled = false
+    const loadVoiceStatus = async () => {
+      try {
+        const base = API_BASE.endsWith('/') ? API_BASE.slice(0, -1) : API_BASE
+        const response = await fetch(`${base}/voice/status`)
+        const data = await response.json()
+        if (!cancelled) {
+          setVoiceProviderStatus({
+            checked: true,
+            deepgramConfigured: Boolean(data.deepgram?.configured),
+          })
+        }
+      } catch {
+        if (!cancelled) {
+          setVoiceProviderStatus({ checked: true, deepgramConfigured: false })
+        }
+      }
+    }
+    loadVoiceStatus()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
     if (typeof window === 'undefined') return
     window.localStorage.setItem(OVERVIEW_COLUMNS_STORAGE_KEY, String(overviewColumns))
   }, [overviewColumns])
@@ -612,39 +685,43 @@ function DashboardApp() {
     setVoiceStatus('Transcribing…')
     setVoiceError('')
     try {
-      const formData = new FormData()
-      formData.append('file', blob, 'recording.webm')
-      formData.append('language', voiceLanguage)
-      formData.append('translate', 'false')
-
       let transcriptText = ''
+      const audioType = blob.type || 'audio/webm'
 
-      if (voiceService === VOICE_SERVICES.DEEPGRAM && DEEPGRAM_API_KEY) {
-        const deepgramResponse = await fetch(
-          `https://api.deepgram.com/v1/listen?model=nova-2&language=${voiceLanguage}&punctuate=true`,
-          {
-            method: 'POST',
-            headers: {
-              Authorization: `Token ${DEEPGRAM_API_KEY}`,
-              'Content-Type': 'audio/webm',
-            },
-            body: blob,
-          }
-        )
-        if (!deepgramResponse.ok) {
-          throw new Error('Deepgram transcription failed')
-        }
-        const deepgramData = await deepgramResponse.json()
-        transcriptText =
-          deepgramData.results?.channels?.[0]?.alternatives?.[0]?.transcript ?? ''
-      } else {
+      if (voiceService === VOICE_SERVICES.DEEPGRAM) {
         const base = API_BASE.endsWith('/') ? API_BASE.slice(0, -1) : API_BASE
+        const params = new URLSearchParams()
+        if (voiceLanguage) {
+          params.set('language', voiceLanguage)
+        }
+        const deepgramResponse = await fetch(`${base}/voice/transcribe?${params}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': audioType,
+          },
+          body: blob,
+        })
+        const deepgramData = await deepgramResponse.json().catch(() => ({}))
+        if (!deepgramResponse.ok) {
+          throw new Error(deepgramData.error || 'Deepgram transcription failed')
+        }
+        transcriptText = deepgramData.text ?? ''
+      } else {
+        const formData = new FormData()
+        formData.append('file', blob, `recording.${extensionForMimeType(audioType)}`)
+        const whisperLanguage = normalizeWhisperLanguage(voiceLanguage)
+        if (whisperLanguage) {
+          formData.append('language', whisperLanguage)
+        }
+        formData.append('translate', 'false')
+        const base = WHISPER_API_BASE.endsWith('/') ? WHISPER_API_BASE.slice(0, -1) : WHISPER_API_BASE
         const response = await fetch(`${base}/transcribe`, {
           method: 'POST',
           body: formData,
         })
         if (!response.ok) {
-          throw new Error('Transcription service unavailable')
+          const message = await response.text()
+          throw new Error(message || 'Transcription service unavailable')
         }
         const data = await response.json()
         transcriptText = data.text ?? ''
@@ -694,7 +771,10 @@ function DashboardApp() {
       if (typeof window.MediaRecorder === 'undefined') {
         throw new Error('MediaRecorder is not supported in this browser.')
       }
-      const recorder = new window.MediaRecorder(stream, { mimeType: 'audio/webm' })
+      const mimeType = pickRecorderMimeType()
+      const recorder = mimeType
+        ? new window.MediaRecorder(stream, { mimeType })
+        : new window.MediaRecorder(stream)
       voiceChunksRef.current = []
       recorder.addEventListener('dataavailable', (event) => {
         if (event.data.size > 0) {
@@ -707,7 +787,8 @@ function DashboardApp() {
       })
       recorder.addEventListener('stop', async () => {
         setVoiceRecording(false)
-        const blobData = new Blob(voiceChunksRef.current, { type: 'audio/webm' })
+        const audioType = recorder.mimeType || mimeType || 'audio/webm'
+        const blobData = new Blob(voiceChunksRef.current, { type: audioType })
         cleanupVoiceResources()
         if (!blobData.size) {
           setVoiceError('No audio captured.')
@@ -1107,7 +1188,7 @@ function DashboardApp() {
           voiceError={voiceError}
           voiceRecording={voiceRecording}
           voicePending={voicePending}
-          hasDeepgramKey={!!DEEPGRAM_API_KEY}
+          hasDeepgramKey={voiceProviderStatus.deepgramConfigured}
           hasTerminal={!!activeWorkspace?.active}
           onStartRecording={() => handleVoiceRecordingStart(!overviewReadOnly)}
           onStopRecording={handleVoiceRecordingStop}
@@ -1219,10 +1300,12 @@ function DashboardApp() {
             type="button"
             className={`mic-toggle ${voiceRecording ? 'recording' : ''} ${voicePending ? 'pending' : ''}`}
             onClick={handleMicToggle}
-            disabled={voicePending || !isSecureContext || overviewReadOnly}
+            disabled={voicePending || !isSecureContext || overviewReadOnly || selectedVoiceProviderUnavailable}
             title={
               overviewReadOnly
                 ? 'Switch to single view to send voice input'
+                : selectedVoiceProviderUnavailable
+                  ? 'Deepgram is not configured on the server'
                 : voiceRecording
                   ? 'Stop recording'
                   : 'Start voice recording'
