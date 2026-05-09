@@ -659,6 +659,75 @@ const remoteCapturePaneHistory = async (host, sessionId, windowIndex, lines, { i
   return response.stdout
 }
 
+const splitTmuxInputPayload = (payload) => {
+  const chunks = []
+  let literal = ''
+  const flushLiteral = () => {
+    if (literal) {
+      chunks.push({ type: 'literal', value: literal })
+      literal = ''
+    }
+  }
+  const keyByCharacter = new Map([
+    ['\r', 'Enter'],
+    ['\n', 'Enter'],
+    ['\t', 'Tab'],
+    ['\x03', 'C-c'],
+    ['\x04', 'C-d'],
+    ['\x1a', 'C-z'],
+    ['\x1b', 'Escape'],
+    ['\x7f', 'BSpace'],
+    ['\b', 'BSpace'],
+  ])
+
+  Array.from(String(payload || '').replace(/\0/g, '')).forEach((character) => {
+    const key = keyByCharacter.get(character)
+    if (key) {
+      flushLiteral()
+      chunks.push({ type: 'key', value: key })
+      return
+    }
+    literal += character
+  })
+  flushLiteral()
+  return chunks
+}
+
+const tmuxSendInput = async (sessionId, windowIndex, payload) => {
+  const target = buildTmuxWindowTarget(sessionId, windowIndex)
+  const chunks = splitTmuxInputPayload(payload)
+  for (const chunk of chunks) {
+    const response = await runTmux(
+      chunk.type === 'literal'
+        ? ['send-keys', '-t', target, '-l', chunk.value]
+        : ['send-keys', '-t', target, chunk.value],
+    )
+    if (!response.ok) {
+      throw response.error
+    }
+  }
+}
+
+const remoteSendInput = async (host, sessionId, windowIndex, payload) => {
+  if (!host?.ssh) {
+    throw new Error('Host has no SSH target')
+  }
+  const target = buildTmuxWindowTarget(sessionId, windowIndex)
+  const chunks = splitTmuxInputPayload(payload)
+  const command = chunks.map((chunk) => (
+    chunk.type === 'literal'
+      ? `${config.tmuxBin} send-keys -t ${shellQuote(target)} -l ${shellQuote(chunk.value)}`
+      : `${config.tmuxBin} send-keys -t ${shellQuote(target)} ${shellQuote(chunk.value)}`
+  )).join(' && ')
+  if (!command) {
+    return
+  }
+  const response = await runSsh(host.ssh, command, 10000, { maxBuffer: 1024 * 1024 })
+  if (!response.ok) {
+    throw response.error
+  }
+}
+
 const normalizeScrollLines = (value) => {
   const parsed = Number.parseInt(value, 10)
   if (!Number.isFinite(parsed) || parsed === 0) {
@@ -1302,6 +1371,58 @@ const handleMobileHistory = async (res, hostIdRaw, sessionIdRaw, searchParams) =
   }
 }
 
+const handleMobileInput = async (req, res, hostIdRaw, sessionIdRaw) => {
+  const host = await findMobileHost(hostIdRaw)
+  const sanitizedSessionId = sanitizeId(sessionIdRaw)
+  if (!host) {
+    respond(res, 404, { error: 'Host not found' })
+    return
+  }
+  if (!sanitizedSessionId) {
+    respond(res, 400, { error: 'Invalid session id' })
+    return
+  }
+
+  let body
+  try {
+    body = await readBody(req)
+  } catch (error) {
+    respond(res, 400, { error: error.message })
+    return
+  }
+
+  const payload = String(body.payload || '').slice(0, 8000)
+  const windowIndex = body.windowIndex !== undefined && body.windowIndex !== null
+    ? Number.parseInt(body.windowIndex, 10)
+    : null
+
+  if (!payload) {
+    respond(res, 400, { error: 'Input payload is required' })
+    return
+  }
+  if (body.windowIndex !== undefined && body.windowIndex !== null && !Number.isFinite(windowIndex)) {
+    respond(res, 400, { error: 'Invalid window index' })
+    return
+  }
+
+  try {
+    if (isHostLocal(host)) {
+      await tmuxSendInput(sanitizedSessionId, windowIndex, payload)
+    } else {
+      await remoteSendInput(host, sanitizedSessionId, windowIndex, payload)
+    }
+    respond(res, 200, {
+      ok: true,
+      hostId: host.id,
+      sessionId: sanitizedSessionId,
+      windowIndex,
+      bytes: Buffer.byteLength(payload),
+    })
+  } catch (error) {
+    respond(res, 500, { error: safeErrorMessage(error) })
+  }
+}
+
 const handleMobileAgentAction = async (req, res, hostIdRaw, sessionIdRaw) => {
   const host = await findMobileHost(hostIdRaw)
   const sessionId = sanitizeId(sessionIdRaw)
@@ -1841,6 +1962,11 @@ const server = http.createServer(async (req, res) => {
   const mobileHistoryMatch = pathName.match(/^\/mobile\/history\/([^/]+)\/([^/]+)$/)
   if (mobileHistoryMatch && method === 'GET') {
     await handleMobileHistory(res, mobileHistoryMatch[1], mobileHistoryMatch[2], parsed.searchParams)
+    return
+  }
+  const mobileInputMatch = pathName.match(/^\/mobile\/input\/([^/]+)\/([^/]+)$/)
+  if (mobileInputMatch && method === 'POST') {
+    await handleMobileInput(req, res, mobileInputMatch[1], mobileInputMatch[2])
     return
   }
   const mobileAgentMatch = pathName.match(/^\/mobile\/agents\/([^/]+)\/([^/]+)$/)

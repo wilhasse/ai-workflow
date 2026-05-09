@@ -182,8 +182,8 @@ function TerminalViewer({
       convertEol: true,
       fontSize: fontSizeRef.current,
       fontFamily: 'Menlo, Monaco, "Courier New", monospace',
-      scrollback: 10000,
-      smoothScrollDuration: 100,
+      scrollback: disableKeyboardInput ? 2000 : 10000,
+      smoothScrollDuration: disableKeyboardInput ? 0 : 100,
       theme: {
         background: '#030712',
         foreground: '#f8fafc',
@@ -198,7 +198,10 @@ function TerminalViewer({
     configureMobileTextarea(term, container)
     let resizeFrame = null
     let resizeRetry = null
+    let resizePushTimer = null
     let textareaConfigRetry = null
+    let writeFrame = null
+    let pendingWrite = ''
 
     const fitTerminal = () => {
       if (monitorMode) {
@@ -233,6 +236,27 @@ function TerminalViewer({
           }
         })
       })
+    }
+
+    const flushPendingWrite = () => {
+      writeFrame = null
+      if (!pendingWrite) {
+        return
+      }
+      const chunk = pendingWrite
+      pendingWrite = ''
+      term.write(chunk)
+    }
+
+    const writeTerminalData = (value) => {
+      if (!disableKeyboardInput || typeof window === 'undefined') {
+        term.write(value)
+        return
+      }
+      pendingWrite += value
+      if (!writeFrame) {
+        writeFrame = window.requestAnimationFrame(flushPendingWrite)
+      }
     }
 
     if (!monitorMode) {
@@ -287,6 +311,19 @@ function TerminalViewer({
       sendMessage({ type: 'resize', cols: term.cols, rows: term.rows })
     }
 
+    const schedulePushResize = () => {
+      if (monitorMode || typeof window === 'undefined') {
+        return
+      }
+      if (resizePushTimer) {
+        window.clearTimeout(resizePushTimer)
+      }
+      resizePushTimer = window.setTimeout(() => {
+        resizePushTimer = null
+        pushResize()
+      }, disableKeyboardInput ? 160 : 80)
+    }
+
     socket.addEventListener('open', () => {
       setConnectionState({ status: 'connected', message: 'Connected' })
       if (!monitorMode) {
@@ -319,7 +356,7 @@ function TerminalViewer({
             onActivityRef.current()
           }
         }
-        term.write(payload.payload)
+        writeTerminalData(payload.payload)
         return
       }
       if (payload.type === 'ready') {
@@ -419,7 +456,7 @@ function TerminalViewer({
         if (monitorMode) {
           updateMonitorScale()
         } else {
-          pushResize()
+          schedulePushResize()
         }
       })
       observer.observe(container)
@@ -429,7 +466,7 @@ function TerminalViewer({
         if (monitorMode) {
           updateMonitorScale()
         } else {
-          pushResize()
+          schedulePushResize()
         }
       }
       window.addEventListener('resize', handleResize)
@@ -443,8 +480,15 @@ function TerminalViewer({
       if (resizeRetry) {
         window.clearTimeout(resizeRetry)
       }
+      if (resizePushTimer) {
+        window.clearTimeout(resizePushTimer)
+      }
       if (textareaConfigRetry) {
         window.clearTimeout(textareaConfigRetry)
+      }
+      if (writeFrame) {
+        window.cancelAnimationFrame(writeFrame)
+        flushPendingWrite()
       }
       container.removeEventListener('click', focusTerminal)
       container.removeEventListener('pointerdown', focusTerminal)

@@ -459,46 +459,74 @@ function MobileInputDock({
   value,
   disabled,
   error,
+  inputRef,
   onChange,
   onSend,
   onEnter,
+  onTab,
+  onEscape,
+  onCtrlC,
   onSpace,
   onBackspace,
   onClear,
 }) {
+  const fallbackTextareaRef = useRef(null)
+  const textareaRef = inputRef || fallbackTextareaRef
+  const focusTextarea = useCallback(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+    window.requestAnimationFrame(() => {
+      textareaRef.current?.focus({ preventScroll: true })
+    })
+  }, [textareaRef])
+  const runAction = useCallback((action) => {
+    action()
+    focusTextarea()
+  }, [focusTextarea])
+  const keepTextareaFocused = useCallback((event) => {
+    if (!disabled) {
+      event.preventDefault()
+    }
+  }, [disabled])
+
   return (
     <form
       className="mobile-input-dock"
       onSubmit={(event) => {
         event.preventDefault()
-        onEnter()
+        runAction(onEnter)
       }}
     >
       <textarea
+        ref={textareaRef}
         value={value}
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={(event) => {
           if (event.key === 'Enter' && !event.shiftKey) {
             event.preventDefault()
-            onEnter()
+            runAction(onEnter)
           }
         }}
-        rows={1}
-        placeholder="Type command; Enter runs"
+        rows={2}
+        placeholder="Command"
         autoComplete="off"
         autoCorrect="off"
         autoCapitalize="none"
         spellCheck="false"
         inputMode="text"
-        enterKeyHint="enter"
+        enterKeyHint="send"
         disabled={disabled}
       />
       <div className="mobile-input-actions">
-        <button type="submit" disabled={disabled}>Enter</button>
-        <button type="button" onClick={onSend} disabled={disabled || !value}>Type</button>
-        <button type="button" onClick={onSpace} disabled={disabled}>Space</button>
-        <button type="button" onClick={onBackspace} disabled={disabled}>Bksp</button>
-        <button type="button" onClick={onClear} disabled={disabled || !value}>Clear</button>
+        <button type="submit" onPointerDown={keepTextareaFocused} disabled={disabled}>Run</button>
+        <button type="button" onPointerDown={keepTextareaFocused} onClick={() => runAction(onSend)} disabled={disabled || !value}>Type</button>
+        <button type="button" onPointerDown={keepTextareaFocused} onClick={() => runAction(onTab)} disabled={disabled}>Tab</button>
+        <button type="button" onPointerDown={keepTextareaFocused} onClick={() => runAction(onEscape)} disabled={disabled}>Esc</button>
+        <button type="button" onPointerDown={keepTextareaFocused} onClick={() => runAction(onCtrlC)} disabled={disabled}>C-c</button>
+        <button type="button" onPointerDown={keepTextareaFocused} onClick={() => runAction(onSpace)} disabled={disabled}>Space</button>
+        <button type="button" onPointerDown={keepTextareaFocused} onClick={() => runAction(onBackspace)} disabled={disabled}>Bksp</button>
+        <button type="button" onPointerDown={keepTextareaFocused} onClick={() => runAction(onClear)} disabled={disabled || !value}>Clear</button>
       </div>
       {error && <p className="mobile-input-error">{error}</p>}
     </form>
@@ -540,6 +568,7 @@ function MobileTerminalApp() {
   const [agentActionKey, setAgentActionKey] = useState('')
   const [agentActionError, setAgentActionError] = useState('')
   const terminalBridgeRef = useRef(null)
+  const terminalDraftRef = useRef(null)
   const voiceRecorderRef = useRef(null)
   const voiceRecognitionRef = useRef(null)
   const voiceStreamRef = useRef(null)
@@ -666,6 +695,30 @@ function MobileTerminalApp() {
     if (typeof window === 'undefined') return
     window.localStorage.setItem(VOICE_LANGUAGE_STORAGE_KEY, voiceLanguage)
   }, [voiceLanguage])
+
+  const focusTerminalDraft = useCallback(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+    window.requestAnimationFrame(() => {
+      terminalDraftRef.current?.focus({ preventScroll: true })
+    })
+  }, [])
+
+  const appendTextToTerminalDraft = useCallback((text) => {
+    const cleaned = String(text || '').trim()
+    if (!cleaned) {
+      return false
+    }
+    setTerminalDraft((current) => {
+      if (!current) {
+        return cleaned
+      }
+      return `${current}${/\s$/.test(current) ? '' : ' '}${cleaned}`
+    })
+    focusTerminalDraft()
+    return true
+  }, [focusTerminalDraft])
 
   const refreshInventory = useCallback(async () => {
     await loadInventory()
@@ -804,10 +857,11 @@ function MobileTerminalApp() {
       }
 
       const trimmedTranscript = transcriptText.trim()
-      setVoiceTranscript(trimmedTranscript)
+      setVoiceTranscript('')
+      const addedToDraft = appendTextToTerminalDraft(trimmedTranscript)
       setVoiceStatus(
-        trimmedTranscript
-          ? 'Ready to send'
+        addedToDraft
+          ? 'Added to input'
           : `No speech detected${formatRecordingDetails({ ...recordingMeta, size: blob.size })}`,
       )
     } catch (transcriptionError) {
@@ -816,7 +870,7 @@ function MobileTerminalApp() {
     } finally {
       setVoicePending(false)
     }
-  }, [voiceLanguage, voiceService])
+  }, [appendTextToTerminalDraft, voiceLanguage, voiceService])
 
   const readTerminalOutput = useCallback(async () => {
     if (!canShowTerminal || speechPlaybackPending) {
@@ -930,8 +984,8 @@ function MobileTerminalApp() {
       }
       setVoiceRecording(false)
       const transcript = `${finalTranscript} ${interimTranscript}`.trim()
-      setVoiceTranscript(transcript)
-      setVoiceStatus(transcript ? 'Ready to send' : 'No speech detected by browser')
+      setVoiceTranscript('')
+      setVoiceStatus(appendTextToTerminalDraft(transcript) ? 'Added to input' : 'No speech detected by browser')
     }
 
     try {
@@ -950,7 +1004,7 @@ function MobileTerminalApp() {
       setVoiceStatus('')
       return true
     }
-  }, [voiceLanguage])
+  }, [appendTextToTerminalDraft, voiceLanguage])
 
   const startRecording = useCallback(async () => {
     if (!isSecureContext) {
@@ -1033,63 +1087,121 @@ function MobileTerminalApp() {
     }
   }, [startRecording, stopRecording, voicePending, voiceRecording])
 
-  const sendTerminalInput = useCallback((payload) => {
+  const sendTerminalInput = useCallback(async (payload) => {
     if (!payload) {
       return true
     }
     const bridge = terminalBridgeRef.current
-    if (!bridge?.sendInput?.(payload)) {
-      setTerminalInputError('Terminal connection is not ready.')
+    if (bridge?.sendInput?.(payload)) {
+      setTerminalInputError('')
+      return true
+    }
+
+    if (!selectedWorkspace) {
+      setTerminalInputError('Select a terminal first.')
       return false
     }
-    setTerminalInputError('')
-    return true
-  }, [])
 
-  const sendTerminalDraft = useCallback(() => {
+    try {
+      const sessionId = selectedWorkspace.connection?.sessionId || selectedWorkspace.id
+      const base = detectVoiceProxyBase().replace(/\/$/, '')
+      const response = await fetch(
+        `${base}/mobile/input/${encodeURIComponent(selectedWorkspace.hostId)}/${encodeURIComponent(sessionId)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            payload,
+            windowIndex: Number.isFinite(selectedWindowIndex) ? selectedWindowIndex : null,
+          }),
+        },
+      )
+      const body = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(body.error || 'Terminal input failed.')
+      }
+      setTerminalInputError('')
+      return true
+    } catch (inputError) {
+      setTerminalInputError(inputError.message || 'Terminal connection is not ready.')
+      return false
+    }
+  }, [selectedWindowIndex, selectedWorkspace])
+
+  const sendTerminalDraft = useCallback(async () => {
     const text = terminalDraft
     if (!text) {
       return
     }
-    if (sendTerminalInput(text)) {
+    if (await sendTerminalInput(text)) {
       setTerminalDraft('')
+      focusTerminalDraft()
     }
-  }, [sendTerminalInput, terminalDraft])
+  }, [focusTerminalDraft, sendTerminalInput, terminalDraft])
 
-  const sendTerminalEnter = useCallback(() => {
+  const sendTerminalEnter = useCallback(async () => {
     const payload = terminalDraft ? `${terminalDraft}\r` : '\r'
-    if (sendTerminalInput(payload)) {
+    if (await sendTerminalInput(payload)) {
+      setTerminalDraft('')
+      focusTerminalDraft()
+    }
+  }, [focusTerminalDraft, sendTerminalInput, terminalDraft])
+
+  const sendTerminalTab = useCallback(async () => {
+    const payload = terminalDraft ? `${terminalDraft}\t` : '\t'
+    if (await sendTerminalInput(payload)) {
+      setTerminalDraft('')
+      focusTerminalDraft()
+    }
+  }, [focusTerminalDraft, sendTerminalInput, terminalDraft])
+
+  const sendTerminalEscape = useCallback(async () => {
+    await sendTerminalInput('\x1b')
+    focusTerminalDraft()
+  }, [focusTerminalDraft, sendTerminalInput])
+
+  const sendTerminalCtrlC = useCallback(async () => {
+    if (await sendTerminalInput('\x03')) {
       setTerminalDraft('')
     }
-  }, [sendTerminalInput, terminalDraft])
+    focusTerminalDraft()
+  }, [focusTerminalDraft, sendTerminalInput])
 
   const appendTerminalSpace = useCallback(() => {
     setTerminalDraft((current) => `${current} `)
-  }, [])
+    focusTerminalDraft()
+  }, [focusTerminalDraft])
+
+  const clearTerminalDraft = useCallback(() => {
+    setTerminalDraft('')
+    focusTerminalDraft()
+  }, [focusTerminalDraft])
 
   const handleTerminalBackspace = useCallback(() => {
     setTerminalDraft((current) => {
       if (current.length > 0) {
         return current.slice(0, -1)
       }
-      sendTerminalInput('\x7f')
+      void sendTerminalInput('\x7f')
       return current
     })
-  }, [sendTerminalInput])
+    focusTerminalDraft()
+  }, [focusTerminalDraft, sendTerminalInput])
 
-  const sendTranscript = useCallback(() => {
+  const sendTranscript = useCallback(async () => {
     const text = voiceTranscript.trim()
     if (!text) {
       return
     }
-    if (!sendTerminalInput(`${text}\r`)) {
+    if (!(await sendTerminalInput(`${text}\r`))) {
       setVoiceError('Terminal connection is not ready.')
       return
     }
     setVoiceTranscript('')
     setVoiceError('')
     setVoiceStatus('Sent')
-  }, [sendTerminalInput, voiceTranscript])
+    focusTerminalDraft()
+  }, [focusTerminalDraft, sendTerminalInput, voiceTranscript])
 
   const copyTranscript = useCallback(async () => {
     const text = voiceTranscript.trim()
@@ -1195,15 +1307,19 @@ function MobileTerminalApp() {
 
       {canShowTerminal && (
         <MobileInputDock
+          inputRef={terminalDraftRef}
           value={terminalDraft}
           disabled={!canShowTerminal}
           error={terminalInputError}
           onChange={setTerminalDraft}
           onSend={sendTerminalDraft}
           onEnter={sendTerminalEnter}
+          onTab={sendTerminalTab}
+          onEscape={sendTerminalEscape}
+          onCtrlC={sendTerminalCtrlC}
           onSpace={appendTerminalSpace}
           onBackspace={handleTerminalBackspace}
-          onClear={() => setTerminalDraft('')}
+          onClear={clearTerminalDraft}
         />
       )}
 
