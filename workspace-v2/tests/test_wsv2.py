@@ -19,6 +19,7 @@ from wsv2.catalog import WorkspaceConfigError, load_config
 from wsv2.cli import build_popup_unavailable_message, can_launch_gui_popup, detect_popup_surface
 from wsv2.codex_parking import (
     _agent_kind,
+    _agent_row_inactive,
     _foreground_tmux_panes,
     build_remote_wsv2_command,
     format_agent_processes,
@@ -417,6 +418,57 @@ class CodexParkingTests(unittest.TestCase):
         self.assertEqual(run.call_args_list[0].args[0], ['tmux', 'send-keys', '-t', '%1', 'C-c'])
         self.assertEqual(run.call_args_list[1].args[0][:4], ['tmux', 'send-keys', '-t', '%1'])
         self.assertEqual(run.call_args_list[1].args[0][-2:], ['fg', 'Enter'])
+
+    def test_agent_row_inactive_ignores_lingering_non_agent_process_group(self) -> None:
+        row = {'agentPids': [123], 'processGroupId': 123}
+        with mock.patch(
+            'wsv2.codex_parking._process_table',
+            return_value={
+                456: {
+                    'pid': 456,
+                    'ppid': 1,
+                    'pgid': 123,
+                    'stat': 'S',
+                    'comm': 'bash',
+                    'args': 'bash',
+                },
+            },
+        ):
+            self.assertTrue(_agent_row_inactive(row))
+
+    def test_agent_row_inactive_keeps_running_agent_active(self) -> None:
+        row = {'agentPids': [123], 'processGroupId': 123}
+        with mock.patch(
+            'wsv2.codex_parking._process_table',
+            return_value={
+                123: {
+                    'pid': 123,
+                    'ppid': 100,
+                    'pgid': 123,
+                    'stat': 'S',
+                    'comm': 'codex',
+                    'args': 'codex --dangerously-bypass-approvals-and-sandbox',
+                },
+            },
+        ):
+            self.assertFalse(_agent_row_inactive(row))
+
+    def test_agent_row_inactive_treats_stopped_agent_as_inactive(self) -> None:
+        row = {'agentPids': [123], 'processGroupId': 123}
+        with mock.patch(
+            'wsv2.codex_parking._process_table',
+            return_value={
+                123: {
+                    'pid': 123,
+                    'ppid': 100,
+                    'pgid': 123,
+                    'stat': 'T',
+                    'comm': 'codex',
+                    'args': 'codex --dangerously-bypass-approvals-and-sandbox',
+                },
+            },
+        ):
+            self.assertTrue(_agent_row_inactive(row))
 
 
 class TerminalRankingTests(unittest.TestCase):

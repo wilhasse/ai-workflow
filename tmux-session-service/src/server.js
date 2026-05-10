@@ -1449,7 +1449,22 @@ const handleMobileAgentAction = async (req, res, hostIdRaw, sessionIdRaw) => {
   }
 
   try {
-    const stdout = await runHostAgentCommand(host, { action, sessionId })
+    let stdout = ''
+    try {
+      stdout = await runHostAgentCommand(host, { action, sessionId })
+    } catch (actionError) {
+      const rows = await listHostAgents(host).catch(() => [])
+      respond(res, 409, {
+        error: safeErrorMessage(actionError),
+        hostId: host.id,
+        hostName: host.name,
+        sessionId,
+        action,
+        agents: summarizeWorkspaceAgents(rows, sessionId),
+        rows: rows.filter((row) => row?.session === sessionId),
+      })
+      return
+    }
     const rows = await listHostAgents(host)
     respond(res, 200, {
       hostId: host.id,

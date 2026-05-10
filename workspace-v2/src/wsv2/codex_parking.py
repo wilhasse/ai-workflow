@@ -555,7 +555,6 @@ def _resume_candidates_for_rows(
 
 def _interrupt_agent_row(row: dict[str, Any]) -> list[str]:
     pane_id = str(row.get("paneId") or "").strip()
-    pgid = row.get("processGroupId")
     if not pane_id:
         return [f"{row.get('target')}: missing tmux pane id"]
     errors = []
@@ -572,12 +571,40 @@ def _interrupt_agent_row(row: dict[str, Any]) -> list[str]:
             return [f"{row.get('target')}: unable to interrupt agent: {error}"]
         if result.returncode not in (0, 1):
             return [result.stderr.strip() or f"{row.get('target')}: unable to interrupt agent"]
-        time.sleep(0.35)
-        if _process_group_exited(pgid):
-            return []
-    if pgid not in (None, "") and not _process_group_exited(pgid):
+        for _ in range(8):
+            time.sleep(0.25)
+            if _agent_row_inactive(row):
+                return []
+    if not _agent_row_inactive(row):
         return [f"{row.get('target')}: agent still running after Ctrl-C"]
     return errors
+
+
+def _agent_row_inactive(row: dict[str, Any]) -> bool:
+    agent_pids = {
+        parsed
+        for pid in row.get("agentPids") or []
+        if (parsed := _parse_int(pid)) is not None
+    }
+    pgid = _parse_int(row.get("processGroupId"))
+    try:
+        processes = _process_table()
+    except CodexParkingError:
+        if agent_pids and all(_pid_exited(pid) for pid in agent_pids):
+            return True
+        return _process_group_exited(pgid)
+
+    for pid in agent_pids:
+        process = processes.get(pid)
+        if process and _agent_kind(process) and _process_is_running(process):
+            return False
+
+    if pgid is not None:
+        for process in processes.values():
+            if int(process["pgid"]) == pgid and _agent_kind(process) and _process_is_running(process):
+                return False
+
+    return True
 
 
 def _resume_records_from_pane_output(
@@ -859,10 +886,34 @@ def _state_record_key(record: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
-def _process_group_exited(pgid: Any) -> bool:
+def _parse_int(value: Any) -> int | None:
     try:
-        pgid_int = int(pgid)
+        return int(value)
     except (TypeError, ValueError):
+        return None
+
+
+def _process_is_running(process: dict[str, Any]) -> bool:
+    stat = str(process.get("stat") or "")
+    return not any(state in stat for state in ("T", "Z", "X"))
+
+
+def _pid_exited(pid: Any) -> bool:
+    pid_int = _parse_int(pid)
+    if pid_int is None:
+        return False
+    try:
+        os.kill(pid_int, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False
+    return False
+
+
+def _process_group_exited(pgid: Any) -> bool:
+    pgid_int = _parse_int(pgid)
+    if pgid_int is None:
         return False
     try:
         os.killpg(pgid_int, 0)

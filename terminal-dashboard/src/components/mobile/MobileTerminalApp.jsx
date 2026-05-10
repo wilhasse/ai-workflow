@@ -769,6 +769,10 @@ function MobileTerminalApp() {
       )
       const payload = await response.json().catch(() => ({}))
       if (!response.ok) {
+        if (payload.agents) {
+          updateWorkspaceAgents(workspace.key, payload.agents)
+          await loadInventory()
+        }
         throw new Error(payload.error || `Unable to ${action} agents`)
       }
       updateWorkspaceAgents(workspace.key, payload.agents)
