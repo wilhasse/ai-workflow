@@ -1347,7 +1347,6 @@ function DashboardApp() {
           projectName={activeWorkspace?.name}
           isRecording={voiceRecording}
           isPending={voicePending}
-          planePendingCount={0}
         >
           {renderTerminalView()}
         </MobileLayout>

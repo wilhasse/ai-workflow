@@ -1,4 +1,4 @@
-function BottomNav({ activeSheet, onSheetChange, isRecording, isPending, planePendingCount }) {
+function BottomNav({ activeSheet, onSheetChange, isRecording, isPending }) {
   const items = [
     {
       id: 'terminals',
@@ -9,12 +9,6 @@ function BottomNav({ activeSheet, onSheetChange, isRecording, isPending, planePe
       id: 'projects',
       icon: '📁',
       label: 'Projects',
-    },
-    {
-      id: 'plane',
-      icon: '⚡',
-      label: 'Plane',
-      badge: planePendingCount > 0 ? planePendingCount : null,
     },
     {
       id: 'voice',
@@ -43,7 +37,6 @@ function BottomNav({ activeSheet, onSheetChange, isRecording, isPending, planePe
           >
             <span className="nav-icon">
               {item.icon}
-              {item.badge && <span className="nav-badge">{item.badge}</span>}
             </span>
             <span className="nav-label">{item.label}</span>
           </button>

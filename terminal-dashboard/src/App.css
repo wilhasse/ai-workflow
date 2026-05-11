@@ -1574,24 +1574,6 @@ button.danger:hover:not(:disabled) {
   position: relative;
 }
 
-.nav-badge {
-  position: absolute;
-  top: -4px;
-  right: -8px;
-  background: var(--color-error);
-  color: white;
-  font-size: 0.65rem;
-  font-weight: 600;
-  min-width: 16px;
-  height: 16px;
-  border-radius: 8px;
-  padding: 0 4px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: var(--shadow-lg);
-}
-
 .bottom-nav-item .nav-label {
   font-weight: 500;
 }
@@ -1771,80 +1753,6 @@ button.danger:hover:not(:disabled) {
   text-align: center;
   padding: 2rem 1rem;
   color: var(--color-text-muted);
-}
-
-/* Swipeable List Items */
-.swipeable-item-wrapper {
-  position: relative;
-  overflow: hidden;
-  border-radius: var(--radius-lg);
-}
-
-.swipeable-item {
-  position: relative;
-  z-index: 1;
-  background: rgba(19, 24, 39, 0.98);
-}
-
-.swipe-delete-action {
-  position: absolute;
-  right: 0;
-  top: 0;
-  bottom: 0;
-  width: 80px;
-  background: rgba(239, 68, 68, 0.3);
-  border: none;
-  color: #fecaca;
-  font-weight: 600;
-  font-size: 0.85rem;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: opacity var(--transition-base);
-}
-
-.swipe-delete-action:hover {
-  background: rgba(239, 68, 68, 0.5);
-}
-
-/* Sheet Form */
-.sheet-form {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  padding-top: 1rem;
-  border-top: 1px solid rgba(245, 158, 11, 0.15);
-}
-
-.sheet-form h3 {
-  margin: 0;
-  font-size: 1rem;
-  color: var(--color-text-primary);
-}
-
-.sheet-form input {
-  width: 100%;
-  padding: 0.75rem 1rem;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--color-border);
-  background: var(--color-bg-tertiary);
-  color: inherit;
-  font-size: 16px; /* Prevent iOS zoom */
-  min-height: 44px;
-  font-family: var(--font-mono);
-  transition: all var(--transition-base);
-}
-
-.sheet-form input:focus {
-  outline: 2px solid var(--color-accent-primary);
-  outline-offset: 2px;
-  border-color: var(--color-accent-primary);
-}
-
-.sheet-form button.primary {
-  min-height: 44px;
-  font-size: 1rem;
 }
 
 /* Voice Sheet */

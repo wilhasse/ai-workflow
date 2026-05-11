@@ -1,5 +1,3 @@
-version: '3.8'
-
 # Agent History collector — run on remote VMs that don't host the API
 # Points to the central API on 10.1.0.9:5002
 #

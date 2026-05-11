@@ -1,3 +1,7 @@
+# Archived Browser Cache Note
+
+This note is historical and was written for an older dashboard/Plane automation deployment. The current dashboard build still uses hashed Vite assets.
+
 # Browser Cache Issue - How to Fix
 
 ## Problem

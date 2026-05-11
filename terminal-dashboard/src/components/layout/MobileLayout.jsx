@@ -18,7 +18,6 @@ function MobileLayout({
   projectName,
   isRecording,
   isPending,
-  planePendingCount,
 }) {
   return (
     <div className="mobile-layout">
@@ -31,7 +30,6 @@ function MobileLayout({
         onSheetChange={onSheetChange}
         isRecording={isRecording}
         isPending={isPending}
-        planePendingCount={planePendingCount}
       />
     </div>
   )

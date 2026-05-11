@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # React frontend - exposed on port 80
   terminal-dashboard:
@@ -31,6 +29,13 @@ services:
       - LANG=pt_BR.UTF-8
       - LC_ALL=pt_BR.UTF-8
       - TERM=xterm-256color
+      - MOBILE_SELF_HOST_ID=${MOBILE_SELF_HOST_ID:-vm10}
+      - MOBILE_WORKSPACES_CONFIG=${MOBILE_WORKSPACES_CONFIG:-/home/cslog/ai-workflow/workspace-v2/catalog/workspaces.v2.json}
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}
+      - DEEPGRAM_STT_MODEL=${DEEPGRAM_STT_MODEL:-nova-3}
+      - DEEPGRAM_STT_LANGUAGE=${DEEPGRAM_STT_LANGUAGE:-pt-BR}
+      - DEEPGRAM_TTS_MODEL=${DEEPGRAM_TTS_MODEL:-aura-2-thalia-en}
+      - DEEPGRAM_TTS_ENCODING=${DEEPGRAM_TTS_ENCODING:-mp3}
     volumes:
       # Persist session data
       - tmux-session-data:/app/data
@@ -50,47 +55,10 @@ services:
       retries: 3
       start_period: 5s
 
-  # Plane-Claude orchestrator daemon - exposed on port 5002
-  plane-claude-orchestrator:
-    build:
-      context: ./plane-claude-orchestrator
-      dockerfile: Dockerfile
-    container_name: ai-workflow-plane-orchestrator
-    environment:
-      - PORT=5002
-      - HOST=0.0.0.0
-    volumes:
-      # Persist state and logs
-      - plane-orchestrator-data:/app/data
-      - plane-orchestrator-logs:/app/logs
-      # Mount Plane MCP config for API access
-      - /home/cslog/.claude.json:/root/.claude.json:ro
-      # Mount /tmp for completion signal files (written by host tmux sessions)
-      - /tmp:/tmp
-      # Mount workspace for potential file access
-      - /home/cslog/ai-workflow:/workspace:ro
-    ports:
-      - "5002:5002"  # Expose orchestrator API on port 5002
-    networks:
-      - ai-workflow-network
-    depends_on:
-      - tmux-session-service
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5002/health"]
-      interval: 30s
-      timeout: 3s
-      retries: 3
-      start_period: 10s
-
 networks:
   ai-workflow-network:
     driver: bridge
 
 volumes:
   tmux-session-data:
-    driver: local
-  plane-orchestrator-data:
-    driver: local
-  plane-orchestrator-logs:
     driver: local

@@ -1,3 +1,7 @@
+# Archived Plane Orchestrator Fix: Double API Call
+
+This note is historical. The dashboard Plane automation components and `plane-claude-orchestrator` service described here are no longer part of the current app.
+
 # Double API Call Fix - Plane Ticket Approval
 
 **Date:** 2025-12-10

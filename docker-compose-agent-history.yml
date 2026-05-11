@@ -1,5 +1,3 @@
-version: '3.8'
-
 # Agent History stack — run on each VM
 # API + collector on the main VM, collector-only on others
 #

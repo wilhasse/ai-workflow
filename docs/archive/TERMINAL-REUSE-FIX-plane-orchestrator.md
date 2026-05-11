@@ -1,3 +1,7 @@
+# Archived Plane Orchestrator Fix: Terminal Reuse
+
+This note is historical. The dashboard Plane automation components and `plane-claude-orchestrator` service described here are no longer part of the current app.
+
 # Terminal Reuse Fix - Unique Session IDs
 
 **Date:** 2025-12-10

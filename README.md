@@ -118,7 +118,12 @@ Mobile voice input posts recorded audio to `/api/voice/transcribe`. The `/mobile
 
 ### Tmux Tab Labels
 
-The desktop dashboard has an `Organize` view for app-only tmux window labels. Labels are stored in the shared launcher state at `~/.local/state/ai-workflow/workspace-v2.json`, show in Ctrl+Enter switchers and `/mobile`, and do not rename the real tmux windows.
+The desktop dashboard opens in `Organize` view by default for app-only tmux window labels and status flags. Labels and flags are stored in the shared launcher state at `~/.local/state/ai-workflow/workspace-v2.json`, show in Ctrl+Enter switchers and `/mobile`, and do not rename the real tmux windows.
+
+Available tab flags:
+- `Active` means the terminal is still normal working context.
+- `Check` means it needs follow-up or verification.
+- `Idle` means it can stay open, but no current action is pending.
 
 ### Architecture
 

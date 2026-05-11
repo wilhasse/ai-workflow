@@ -1,4 +1,8 @@
-# Docker Deployment Guide
+# Archived Plane Orchestrator Docker Deployment
+
+This note is historical. The current stack is documented in `README.md`, `DEPLOY.md`, and `docker-compose.yml`; the `plane-claude-orchestrator` service described below is no longer present in this repository.
+
+# Original Docker Deployment Guide
 
 Complete guide for deploying the AI workflow stack with Docker Compose, including the new plane-claude-orchestrator service.
 
