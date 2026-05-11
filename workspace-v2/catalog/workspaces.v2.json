@@ -6,14 +6,20 @@
       "id": "vm10",
       "name": "Main Desktop",
       "ssh": "cslog@10.1.0.10",
-      "hostnames": ["godev4"],
-      "legacy_ids": ["local"]
+      "hostnames": [
+        "godev4"
+      ],
+      "legacy_ids": [
+        "local"
+      ]
     },
     {
       "id": "vm9",
       "name": "Supersaber",
       "ssh": "cslog@10.1.0.9",
-      "hostnames": ["godev3"]
+      "hostnames": [
+        "godev3"
+      ]
     },
     {
       "id": "vm12",
@@ -30,15 +36,6 @@
       "icon": "folder",
       "description": "",
       "host": "vm9"
-    },
-    {
-      "id": "mysql",
-      "name": "MySQL Tests",
-      "path": "/home/cslog/mysql",
-      "color": "#3498db",
-      "icon": "folder",
-      "description": "",
-      "host": "vm10"
     },
     {
       "id": "olos",
@@ -95,15 +92,6 @@
       "host": "vm10"
     },
     {
-      "id": "doris-cdc",
-      "name": "Doris CDC",
-      "path": "/home/cslog/doris-cdc",
-      "color": "#3498db",
-      "icon": "folder",
-      "description": "",
-      "host": "vm10"
-    },
-    {
       "id": "es_cmd",
       "name": "ES Cmd",
       "path": "/home/cslog/siscob_trunk",
@@ -116,15 +104,6 @@
       "id": "monitorsql",
       "name": "MonitorSQL",
       "path": "/home/cslog/svn/ticslog_trunk/docker/csmonitorsql",
-      "color": "#3498db",
-      "icon": "folder",
-      "description": "",
-      "host": "vm10"
-    },
-    {
-      "id": "oci-oracle",
-      "name": "OCI Oracle",
-      "path": "/home/cslog/oci",
       "color": "#3498db",
       "icon": "folder",
       "description": "",
@@ -165,15 +144,6 @@
       "icon": "folder",
       "description": "",
       "host": "vm9"
-    },
-    {
-      "id": "intervalor",
-      "name": "Intervalor",
-      "path": "/home/cslog",
-      "color": "#3498db",
-      "icon": "folder",
-      "description": "",
-      "host": "vm10"
     },
     {
       "id": "aspect",
