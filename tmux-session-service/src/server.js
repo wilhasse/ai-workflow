@@ -213,7 +213,23 @@ const normalizeWindowStatus = (value) => {
   return ''
 }
 
-const windowLabelKey = (hostId, sessionId, windowIndex) => `${hostId}:${sessionId}#${windowIndex}`
+const normalizeWindowId = (value) => {
+  const raw = String(value ?? '').trim()
+  if (!raw) {
+    return ''
+  }
+  const normalized = raw.startsWith('@') ? raw.slice(1) : raw
+  return /^\d+$/.test(normalized) ? `@${normalized}` : ''
+}
+
+const legacyWindowLabelKey = (hostId, sessionId, windowIndex) => `${hostId}:${sessionId}#${windowIndex}`
+
+const windowLabelKey = (hostId, sessionId, windowIndex, windowId = '') => {
+  const normalizedWindowId = normalizeWindowId(windowId)
+  return normalizedWindowId
+    ? `${hostId}:${sessionId}${normalizedWindowId}`
+    : legacyWindowLabelKey(hostId, sessionId, windowIndex)
+}
 
 const readLauncherState = async () => {
   try {
@@ -237,17 +253,24 @@ const readWindowLabels = async () => {
   return state.windowLabels && typeof state.windowLabels === 'object' ? state.windowLabels : {}
 }
 
-const windowLabelCandidateKeys = (host, sessionId, windowIndex) => {
+const windowLabelCandidateKeys = (host, sessionId, windowIndex, windowId = '') => {
   const hostIds = new Set([host?.id, ...(host?.legacyIds || [])].filter(Boolean))
   if (isHostLocal(host)) {
     hostIds.add(config.mobileSelfHostId)
     hostIds.add('local')
   }
-  return Array.from(hostIds).map((hostId) => windowLabelKey(hostId, sessionId, windowIndex))
+  const stableKeys = []
+  const legacyKeys = []
+  Array.from(hostIds).forEach((hostId) => {
+    const stableKey = windowLabelKey(hostId, sessionId, windowIndex, windowId)
+    stableKeys.push(stableKey)
+    legacyKeys.push(legacyWindowLabelKey(hostId, sessionId, windowIndex))
+  })
+  return Array.from(new Set([...stableKeys, ...legacyKeys]))
 }
 
-const resolveWindowLabel = (labels, host, sessionId, windowIndex) => {
-  for (const key of windowLabelCandidateKeys(host, sessionId, windowIndex)) {
+const resolveWindowLabel = (labels, host, sessionId, windowIndex, windowId = '') => {
+  for (const key of windowLabelCandidateKeys(host, sessionId, windowIndex, windowId)) {
     const label = normalizeWindowLabel(labels[key]?.label)
     if (label) {
       return label
@@ -256,8 +279,8 @@ const resolveWindowLabel = (labels, host, sessionId, windowIndex) => {
   return ''
 }
 
-const resolveWindowStatus = (labels, host, sessionId, windowIndex) => {
-  for (const key of windowLabelCandidateKeys(host, sessionId, windowIndex)) {
+const resolveWindowStatus = (labels, host, sessionId, windowIndex, windowId = '') => {
+  for (const key of windowLabelCandidateKeys(host, sessionId, windowIndex, windowId)) {
     const status = normalizeWindowStatus(labels[key]?.status)
     if (status) {
       return status
@@ -266,15 +289,19 @@ const resolveWindowStatus = (labels, host, sessionId, windowIndex) => {
   return ''
 }
 
-const setWindowMetadata = async (hostId, sessionId, windowIndex, metadata = {}) => {
+const setWindowMetadata = async (host, sessionId, windowIndex, metadata = {}, windowId = '') => {
   const state = await readLauncherState()
   const labels = state.windowLabels && typeof state.windowLabels === 'object'
     ? state.windowLabels
     : {}
   state.windowLabels = labels
 
-  const key = windowLabelKey(hostId, sessionId, windowIndex)
-  const existing = labels[key] && typeof labels[key] === 'object' ? labels[key] : {}
+  const key = windowLabelKey(host.id, sessionId, windowIndex, windowId)
+  const candidateKeys = windowLabelCandidateKeys(host, sessionId, windowIndex, windowId)
+  const existingKey = candidateKeys.find((candidateKey) => (
+    labels[candidateKey] && typeof labels[candidateKey] === 'object'
+  ))
+  const existing = existingKey ? labels[existingKey] : {}
   const hasLabelUpdate = Object.prototype.hasOwnProperty.call(metadata, 'label')
   const hasStatusUpdate = Object.prototype.hasOwnProperty.call(metadata, 'status')
   const normalizedLabel = hasLabelUpdate
@@ -293,8 +320,15 @@ const setWindowMetadata = async (hostId, sessionId, windowIndex, metadata = {}) 
     if (normalizedStatus) {
       labels[key].status = normalizedStatus
     }
+    candidateKeys.forEach((candidateKey) => {
+      if (candidateKey !== key) {
+        delete labels[candidateKey]
+      }
+    })
   } else {
-    delete labels[key]
+    candidateKeys.forEach((candidateKey) => {
+      delete labels[candidateKey]
+    })
   }
   await writeLauncherState(state)
   return { label: normalizedLabel, status: normalizedStatus }
@@ -302,8 +336,8 @@ const setWindowMetadata = async (hostId, sessionId, windowIndex, metadata = {}) 
 
 const decorateWindowWithLabel = (window, host, labels, sessionId = window.sessionId) => {
   const tmuxName = window.tmuxName || window.name || `window-${window.index}`
-  const label = resolveWindowLabel(labels, host, sessionId, window.index)
-  const status = resolveWindowStatus(labels, host, sessionId, window.index)
+  const label = resolveWindowLabel(labels, host, sessionId, window.index, window.id)
+  const status = resolveWindowStatus(labels, host, sessionId, window.index, window.id)
   const displayName = label || tmuxName
   return {
     ...window,
@@ -315,10 +349,10 @@ const decorateWindowWithLabel = (window, host, labels, sessionId = window.sessio
   }
 }
 
-const recentScoreForWindow = (state, host, sessionId, windowIndex) => {
+const recentScoreForWindow = (state, host, sessionId, windowIndex, windowId = '') => {
   const recent = state.recent && typeof state.recent === 'object' ? state.recent : {}
   const keys = [
-    ...windowLabelCandidateKeys(host, sessionId, windowIndex),
+    ...windowLabelCandidateKeys(host, sessionId, windowIndex, windowId),
     `${host?.id}:${sessionId}`,
     sessionId,
   ]
@@ -616,7 +650,7 @@ const tmuxListWindows = async (sessionId, { host = null, labels = null } = {}) =
   const response = await runTmux([
     'list-windows',
     '-t', sessionId,
-    '-F', '#{window_index}|#{window_name}|#{window_active}|#{window_activity}|#{window_panes}',
+    '-F', '#{window_index}|#{window_id}|#{window_name}|#{window_active}|#{window_activity}|#{window_panes}',
   ])
   if (!response.ok) {
     if (response.error?.code === 1) {
@@ -628,11 +662,12 @@ const tmuxListWindows = async (sessionId, { host = null, labels = null } = {}) =
     .split('\n')
     .filter(Boolean)
     .map((line) => {
-      const [index, name, active, activity, panes] = line.split('|')
+      const [index, windowId, name, active, activity, panes] = line.split('|')
       const activitySeconds = Number.parseInt(activity, 10)
       const paneCount = Number.parseInt(panes, 10)
       return {
         index: Number.parseInt(index, 10),
+        id: normalizeWindowId(windowId),
         name: name || `window-${index}`,
         tmuxName: name || `window-${index}`,
         active: active === '1',
@@ -651,7 +686,7 @@ const parseTmuxWindowRows = (stdout) =>
     .split('\n')
     .filter(Boolean)
     .map((line) => {
-      const [sessionId, index, name, active, activity, panes] = line.split('|')
+      const [sessionId, index, windowId, name, active, activity, panes] = line.split('|')
       const windowIndex = Number.parseInt(index, 10)
       const activitySeconds = Number.parseInt(activity, 10)
       const paneCount = Number.parseInt(panes, 10)
@@ -661,6 +696,7 @@ const parseTmuxWindowRows = (stdout) =>
       return {
         sessionId,
         index: windowIndex,
+        id: normalizeWindowId(windowId),
         name: name || `window-${index}`,
         tmuxName: name || `window-${index}`,
         active: active === '1',
@@ -678,6 +714,7 @@ const groupWindowsBySession = (windows) => {
     }
     grouped.get(window.sessionId).push({
       index: window.index,
+      id: window.id || '',
       name: window.name,
       tmuxName: window.tmuxName || window.name,
       label: window.label || '',
@@ -699,7 +736,7 @@ const tmuxListAllWindows = async () => {
     'list-windows',
     '-a',
     '-F',
-    '#{session_name}|#{window_index}|#{window_name}|#{window_active}|#{window_activity}|#{window_panes}',
+    '#{session_name}|#{window_index}|#{window_id}|#{window_name}|#{window_active}|#{window_activity}|#{window_panes}',
   ])
   if (!response.ok) {
     if (response.error?.code === 1) {
@@ -736,7 +773,7 @@ const remoteListAllWindows = async (host) => {
   }
   const response = await runSsh(
     host.ssh,
-    `${config.tmuxBin} list-windows -a -F ${shellQuote('#{session_name}|#{window_index}|#{window_name}|#{window_active}|#{window_activity}|#{window_panes}')} 2>/dev/null || true`,
+    `${config.tmuxBin} list-windows -a -F ${shellQuote('#{session_name}|#{window_index}|#{window_id}|#{window_name}|#{window_active}|#{window_activity}|#{window_panes}')} 2>/dev/null || true`,
   )
   if (!response.ok) {
     throw response.error
@@ -752,11 +789,16 @@ const parseHistoryLines = (value) => {
   return Math.min(MAX_HISTORY_LINES, Math.max(100, parsed))
 }
 
-const buildTmuxWindowTarget = (sessionId, windowIndex) =>
-  Number.isFinite(windowIndex) ? `${sessionId}:${windowIndex}` : sessionId
+const buildTmuxWindowTarget = (sessionId, windowIndex, windowId = '') => {
+  const normalizedWindowId = normalizeWindowId(windowId)
+  if (normalizedWindowId) {
+    return normalizedWindowId
+  }
+  return Number.isFinite(windowIndex) ? `${sessionId}:${windowIndex}` : sessionId
+}
 
-const tmuxCapturePaneHistory = async (sessionId, windowIndex, lines, { includeVisible = true } = {}) => {
-  const target = buildTmuxWindowTarget(sessionId, windowIndex)
+const tmuxCapturePaneHistory = async (sessionId, windowIndex, windowId, lines, { includeVisible = true } = {}) => {
+  const target = buildTmuxWindowTarget(sessionId, windowIndex, windowId)
   const response = await runTmux(
     [
       'capture-pane',
@@ -777,11 +819,11 @@ const tmuxCapturePaneHistory = async (sessionId, windowIndex, lines, { includeVi
   return response.stdout
 }
 
-const remoteCapturePaneHistory = async (host, sessionId, windowIndex, lines, { includeVisible = true } = {}) => {
+const remoteCapturePaneHistory = async (host, sessionId, windowIndex, windowId, lines, { includeVisible = true } = {}) => {
   if (!host?.ssh) {
     throw new Error('Host has no SSH target')
   }
-  const target = buildTmuxWindowTarget(sessionId, windowIndex)
+  const target = buildTmuxWindowTarget(sessionId, windowIndex, windowId)
   const command = [
     config.tmuxBin,
     'capture-pane',
@@ -835,8 +877,8 @@ const splitTmuxInputPayload = (payload) => {
   return chunks
 }
 
-const tmuxSendInput = async (sessionId, windowIndex, payload) => {
-  const target = buildTmuxWindowTarget(sessionId, windowIndex)
+const tmuxSendInput = async (sessionId, windowIndex, windowId, payload) => {
+  const target = buildTmuxWindowTarget(sessionId, windowIndex, windowId)
   const chunks = splitTmuxInputPayload(payload)
   for (const chunk of chunks) {
     const response = await runTmux(
@@ -850,11 +892,11 @@ const tmuxSendInput = async (sessionId, windowIndex, payload) => {
   }
 }
 
-const remoteSendInput = async (host, sessionId, windowIndex, payload) => {
+const remoteSendInput = async (host, sessionId, windowIndex, windowId, payload) => {
   if (!host?.ssh) {
     throw new Error('Host has no SSH target')
   }
-  const target = buildTmuxWindowTarget(sessionId, windowIndex)
+  const target = buildTmuxWindowTarget(sessionId, windowIndex, windowId)
   const chunks = splitTmuxInputPayload(payload)
   const command = chunks.map((chunk) => (
     chunk.type === 'literal'
@@ -879,12 +921,12 @@ const normalizeScrollLines = (value) => {
   return bounded
 }
 
-const tmuxScrollPane = async (sessionId, windowIndex, lines) => {
+const tmuxScrollPane = async (sessionId, windowIndex, windowId, lines) => {
   const normalizedLines = normalizeScrollLines(lines)
   if (!normalizedLines) {
     return false
   }
-  const target = buildTmuxWindowTarget(sessionId, windowIndex)
+  const target = buildTmuxWindowTarget(sessionId, windowIndex, windowId)
   const count = Math.abs(normalizedLines)
   const command = normalizedLines > 0 ? 'scroll-up' : 'scroll-down'
   const copyMode = await runTmux(['copy-mode', '-t', target])
@@ -898,8 +940,8 @@ const tmuxScrollPane = async (sessionId, windowIndex, lines) => {
   return scroll.ok
 }
 
-const tmuxCancelCopyMode = async (sessionId, windowIndex) => {
-  const target = buildTmuxWindowTarget(sessionId, windowIndex)
+const tmuxCancelCopyMode = async (sessionId, windowIndex, windowId = '') => {
+  const target = buildTmuxWindowTarget(sessionId, windowIndex, windowId)
   const response = await runTmux(['send-keys', '-X', '-t', target, 'cancel'])
   if (!response.ok && response.error?.code !== 1) {
     throw response.error
@@ -917,12 +959,12 @@ const remoteRunTmux = async (host, command, timeout = 8000) => {
   return response
 }
 
-const remoteScrollPane = async (host, sessionId, windowIndex, lines) => {
+const remoteScrollPane = async (host, sessionId, windowIndex, windowId, lines) => {
   const normalizedLines = normalizeScrollLines(lines)
   if (!normalizedLines) {
     return false
   }
-  const target = buildTmuxWindowTarget(sessionId, windowIndex)
+  const target = buildTmuxWindowTarget(sessionId, windowIndex, windowId)
   const count = Math.abs(normalizedLines)
   const command = normalizedLines > 0 ? 'scroll-up' : 'scroll-down'
   await remoteRunTmux(
@@ -935,17 +977,21 @@ const remoteScrollPane = async (host, sessionId, windowIndex, lines) => {
   return true
 }
 
-const remoteCancelCopyMode = async (host, sessionId, windowIndex) => {
-  const target = buildTmuxWindowTarget(sessionId, windowIndex)
+const remoteCancelCopyMode = async (host, sessionId, windowIndex, windowId = '') => {
+  const target = buildTmuxWindowTarget(sessionId, windowIndex, windowId)
   await remoteRunTmux(
     host,
     `${config.tmuxBin} send-keys -X -t ${shellQuote(target)} cancel 2>/dev/null || true`,
   )
 }
 
-const buildAgentTarget = (sessionId, windowIndex = null) => {
+const buildAgentTarget = (sessionId, windowIndex = null, windowId = '') => {
   if (!sessionId) {
     return null
+  }
+  const normalizedWindowId = normalizeWindowId(windowId)
+  if (normalizedWindowId) {
+    return `${sessionId}${normalizedWindowId}`
   }
   return Number.isFinite(windowIndex) ? `${sessionId}#${windowIndex}` : sessionId
 }
@@ -954,13 +1000,14 @@ const buildAgentCommand = ({
   action,
   sessionId = null,
   windowIndex = null,
+  windowId = '',
   hostId,
   hostName,
   reason = null,
   jsonOutput = false,
   allTargets = false,
 }) => {
-  const target = buildAgentTarget(sessionId, windowIndex)
+  const target = buildAgentTarget(sessionId, windowIndex, windowId)
   return [
     'cd ~/ai-workflow',
     '&&',
@@ -983,17 +1030,18 @@ const buildAgentCommand = ({
 
 const runHostAgentCommand = async (
   host,
-  { action, sessionId = null, windowIndex = null, reason = null, jsonOutput = false, allTargets = false },
+  { action, sessionId = null, windowIndex = null, windowId = '', reason = null, jsonOutput = false, allTargets = false },
 ) => {
   if (!host?.id) {
     throw new Error('Host is required')
   }
-  const target = buildAgentTarget(sessionId, windowIndex)
+  const target = buildAgentTarget(sessionId, windowIndex, windowId)
   if (host.ssh) {
     const command = buildAgentCommand({
       action,
       sessionId,
       windowIndex,
+      windowId,
       hostId: host.id,
       hostName: host.name,
       reason,
@@ -1073,19 +1121,19 @@ const summarizeWorkspaceAgents = (rows, sessionId) => {
   }
 }
 
-const unparkLocalAgents = async (sessionId, windowIndex) => {
+const unparkLocalAgents = async (sessionId, windowIndex, windowId = '') => {
   const selfHost = await findMobileHost(config.mobileSelfHostId)
   if (!selfHost) {
     throw new Error(`Self host not found: ${config.mobileSelfHostId}`)
   }
-  await runHostAgentCommand(selfHost, { action: 'unpark', sessionId, windowIndex })
+  await runHostAgentCommand(selfHost, { action: 'unpark', sessionId, windowIndex, windowId })
 }
 
-const unparkRemoteAgents = async (host, sessionId, windowIndex) => {
-  await runHostAgentCommand(host, { action: 'unpark', sessionId, windowIndex })
+const unparkRemoteAgents = async (host, sessionId, windowIndex, windowId = '') => {
+  await runHostAgentCommand(host, { action: 'unpark', sessionId, windowIndex, windowId })
 }
 
-const syncWindowStatusAgents = async ({ host, sessionId, windowIndex, previousStatus, nextStatus }) => {
+const syncWindowStatusAgents = async ({ host, sessionId, windowIndex, windowId = '', previousStatus, nextStatus }) => {
   const previous = normalizeWindowStatus(previousStatus)
   const next = normalizeWindowStatus(nextStatus)
   if (previous === next || !Number.isFinite(windowIndex)) {
@@ -1096,29 +1144,26 @@ const syncWindowStatusAgents = async ({ host, sessionId, windowIndex, previousSt
       action: 'park',
       output: await runHostAgentCommand(
         host,
-        { action: 'park', sessionId, windowIndex, reason: 'idle-status' },
+        { action: 'park', sessionId, windowIndex, windowId, reason: 'idle-status' },
       ),
     }
   }
   if (previous === 'idle') {
     return {
       action: 'unpark',
-      output: await runHostAgentCommand(host, { action: 'unpark', sessionId, windowIndex }),
+      output: await runHostAgentCommand(host, { action: 'unpark', sessionId, windowIndex, windowId }),
     }
   }
   return null
 }
 
-const tmuxSelectWindow = async (sessionId, windowIndex) => {
-  const response = await runTmux(['select-window', '-t', `${sessionId}:${windowIndex}`])
+const tmuxSelectWindow = async (sessionId, windowIndex, windowId = '') => {
+  const response = await runTmux(['select-window', '-t', buildTmuxWindowTarget(sessionId, windowIndex, windowId)])
   return response.ok
 }
 
-const tmuxGetWindowSize = async (sessionId, windowIndex = null) => {
-  const target =
-    windowIndex !== null && Number.isFinite(windowIndex)
-      ? `${sessionId}:${windowIndex}`
-      : sessionId
+const tmuxGetWindowSize = async (sessionId, windowIndex = null, windowId = '') => {
+  const target = buildTmuxWindowTarget(sessionId, windowIndex, windowId)
   const response = await runTmux([
     'display-message',
     '-p',
@@ -1496,7 +1541,7 @@ const buildTerminalTabRecord = ({ host, workspace, window, selectedAt = 0 }) => 
   const workspaceDescription = workspace?.description ?? 'Discovered tmux session'
   const lastActivityAt = window.lastActivityAt || 0
   return {
-    id: windowLabelKey(host.id, window.sessionId, window.index),
+    id: windowLabelKey(host.id, window.sessionId, window.index, window.id),
     hostId: host.id,
     hostName: host.name,
     local: isHostLocal(host),
@@ -1506,6 +1551,7 @@ const buildTerminalTabRecord = ({ host, workspace, window, selectedAt = 0 }) => 
     workspaceDescription,
     discovered: !workspace,
     windowIndex: window.index,
+    windowId: window.id || '',
     tmuxName: window.tmuxName || window.name,
     label: window.label || '',
     status: window.status || '',
@@ -1530,7 +1576,7 @@ const buildTerminalTabsForHost = async (host, configuredWorkspaces, labels, laun
     host,
     workspace: workspaceLookup.get(window.sessionId),
     window,
-    selectedAt: recentScoreForWindow(launcherState, host, window.sessionId, window.index),
+    selectedAt: recentScoreForWindow(launcherState, host, window.sessionId, window.index, window.id),
   }))
 }
 
@@ -1622,7 +1668,10 @@ const handleSetTerminalTabLabel = async (req, res, hostIdRaw, sessionIdRaw, wind
   try {
     const labels = await readWindowLabels()
     const windows = await listHostSessionWindows(host, sanitizedSessionId, labels)
-    const existingWindow = windows.find((window) => window.index === windowIndex)
+    const requestedWindowId = normalizeWindowId(body.windowId)
+    const existingWindow = windows.find((window) => (
+      requestedWindowId && window.id === requestedWindowId
+    )) ?? windows.find((window) => window.index === windowIndex)
     if (!existingWindow) {
       respond(res, 404, { error: 'Window not found' })
       return
@@ -1634,8 +1683,8 @@ const handleSetTerminalTabLabel = async (req, res, hostIdRaw, sessionIdRaw, wind
     if (Object.prototype.hasOwnProperty.call(body, 'status')) {
       metadata.status = body.status
     }
-    const previousStatus = resolveWindowStatus(labels, host, sanitizedSessionId, windowIndex)
-    const savedMetadata = await setWindowMetadata(host.id, sanitizedSessionId, windowIndex, metadata)
+    const previousStatus = resolveWindowStatus(labels, host, sanitizedSessionId, windowIndex, existingWindow.id)
+    const savedMetadata = await setWindowMetadata(host, sanitizedSessionId, windowIndex, metadata, existingWindow.id)
     let agentAction = null
     let agentActionError = null
     if (Object.prototype.hasOwnProperty.call(metadata, 'status')) {
@@ -1644,6 +1693,7 @@ const handleSetTerminalTabLabel = async (req, res, hostIdRaw, sessionIdRaw, wind
           host,
           sessionId: sanitizedSessionId,
           windowIndex,
+          windowId: existingWindow.id,
           previousStatus,
           nextStatus: savedMetadata.status,
         })
@@ -1672,7 +1722,7 @@ const handleSetTerminalTabLabel = async (req, res, hostIdRaw, sessionIdRaw, wind
         host,
         workspace,
         window: { ...updatedWindow, sessionId: sanitizedSessionId },
-        selectedAt: recentScoreForWindow(launcherState, host, sanitizedSessionId, windowIndex),
+        selectedAt: recentScoreForWindow(launcherState, host, sanitizedSessionId, windowIndex, existingWindow.id),
       }),
       agentAction,
       agentActionError,
@@ -1686,6 +1736,7 @@ const handleMobileHistory = async (res, hostIdRaw, sessionIdRaw, searchParams) =
   const sanitizedSessionId = sanitizeId(sessionIdRaw)
   const windowIndexRaw = searchParams.get('windowIndex')
   const windowIndex = windowIndexRaw !== null ? Number.parseInt(windowIndexRaw, 10) : null
+  const windowId = normalizeWindowId(searchParams.get('windowId'))
   const lines = parseHistoryLines(searchParams.get('lines'))
   const includeVisible = ['1', 'true', 'yes'].includes(
     (searchParams.get('includeVisible') ?? '').toLowerCase(),
@@ -1707,14 +1758,15 @@ const handleMobileHistory = async (res, hostIdRaw, sessionIdRaw, searchParams) =
 
   try {
     const text = isHostLocal(host)
-      ? await tmuxCapturePaneHistory(sanitizedSessionId, windowIndex, lines, { includeVisible })
-      : await remoteCapturePaneHistory(host, sanitizedSessionId, windowIndex, lines, { includeVisible })
+      ? await tmuxCapturePaneHistory(sanitizedSessionId, windowIndex, windowId, lines, { includeVisible })
+      : await remoteCapturePaneHistory(host, sanitizedSessionId, windowIndex, windowId, lines, { includeVisible })
 
     respond(res, 200, {
       hostId: host.id,
       hostName: host.name,
       sessionId: sanitizedSessionId,
       windowIndex,
+      windowId,
       lines,
       includeVisible,
       text,
@@ -1749,6 +1801,7 @@ const handleMobileInput = async (req, res, hostIdRaw, sessionIdRaw) => {
   const windowIndex = body.windowIndex !== undefined && body.windowIndex !== null
     ? Number.parseInt(body.windowIndex, 10)
     : null
+  const windowId = normalizeWindowId(body.windowId)
 
   if (!payload) {
     respond(res, 400, { error: 'Input payload is required' })
@@ -1761,15 +1814,16 @@ const handleMobileInput = async (req, res, hostIdRaw, sessionIdRaw) => {
 
   try {
     if (isHostLocal(host)) {
-      await tmuxSendInput(sanitizedSessionId, windowIndex, payload)
+      await tmuxSendInput(sanitizedSessionId, windowIndex, windowId, payload)
     } else {
-      await remoteSendInput(host, sanitizedSessionId, windowIndex, payload)
+      await remoteSendInput(host, sanitizedSessionId, windowIndex, windowId, payload)
     }
     respond(res, 200, {
       ok: true,
       hostId: host.id,
       sessionId: sanitizedSessionId,
       windowIndex,
+      windowId,
       bytes: Buffer.byteLength(payload),
     })
   } catch (error) {
@@ -2264,7 +2318,11 @@ const handleRenameWindow = async (req, res, sessionId, windowIndexRaw) => {
     }
     const labels = await readWindowLabels()
     const existingWindows = await tmuxListWindows(sanitizedId, { host, labels })
-    if (!existingWindows.some((window) => window.index === windowIndex)) {
+    const requestedWindowId = normalizeWindowId(body.windowId)
+    const existingWindow = existingWindows.find((window) => (
+      requestedWindowId && window.id === requestedWindowId
+    )) ?? existingWindows.find((window) => window.index === windowIndex)
+    if (!existingWindow) {
       respond(res, 404, { error: 'Window not found' })
       return
     }
@@ -2275,8 +2333,8 @@ const handleRenameWindow = async (req, res, sessionId, windowIndexRaw) => {
     if (Object.prototype.hasOwnProperty.call(body, 'status')) {
       metadata.status = body.status
     }
-    const previousStatus = resolveWindowStatus(labels, host, sanitizedId, windowIndex)
-    const savedMetadata = await setWindowMetadata(host.id, sanitizedId, windowIndex, metadata)
+    const previousStatus = resolveWindowStatus(labels, host, sanitizedId, windowIndex, existingWindow.id)
+    const savedMetadata = await setWindowMetadata(host, sanitizedId, windowIndex, metadata, existingWindow.id)
     let agentAction = null
     let agentActionError = null
     if (Object.prototype.hasOwnProperty.call(metadata, 'status')) {
@@ -2285,6 +2343,7 @@ const handleRenameWindow = async (req, res, sessionId, windowIndexRaw) => {
           host,
           sessionId: sanitizedId,
           windowIndex,
+          windowId: existingWindow.id,
           previousStatus,
           nextStatus: savedMetadata.status,
         })
@@ -2437,11 +2496,13 @@ const sendWsMessage = (ws, payload) => {
 
 const parseTerminalSocketOptions = (searchParams) => {
   const windowIndexRaw = searchParams.get('windowIndex')
+  const windowId = normalizeWindowId(searchParams.get('windowId'))
   const initialColsRaw = searchParams.get('cols')
   const initialRowsRaw = searchParams.get('rows')
   const monitorFlag = (searchParams.get('monitor') ?? '').toLowerCase()
   return {
     windowIndex: windowIndexRaw !== null ? Number.parseInt(windowIndexRaw, 10) : null,
+    windowId,
     initialCols: initialColsRaw !== null ? Number.parseInt(initialColsRaw, 10) : null,
     initialRows: initialRowsRaw !== null ? Number.parseInt(initialRowsRaw, 10) : null,
     monitorMode: monitorFlag === '1' || monitorFlag === 'true',
@@ -2451,7 +2512,7 @@ const parseTerminalSocketOptions = (searchParams) => {
 const handleTerminalSocket = async (ws, sessionIdRaw, searchParams) => {
   const sanitizedSessionId = sanitizeId(sessionIdRaw)
   const sanitizedProjectId = sanitizeId(searchParams.get('projectId'))
-  const { windowIndex, initialCols, initialRows, monitorMode } = parseTerminalSocketOptions(searchParams)
+  const { windowIndex, windowId, initialCols, initialRows, monitorMode } = parseTerminalSocketOptions(searchParams)
 
   if (!sanitizedSessionId) {
     sendWsMessage(ws, { type: 'error', message: 'Invalid session id' })
@@ -2470,16 +2531,16 @@ const handleTerminalSocket = async (ws, sessionIdRaw, searchParams) => {
 
   if (!monitorMode) {
     try {
-      await unparkLocalAgents(sanitizedSessionId, windowIndex)
+      await unparkLocalAgents(sanitizedSessionId, windowIndex, windowId)
     } catch (error) {
       console.warn('Failed to unpark local Codex/Claude agents', safeErrorMessage(error))
     }
   }
 
   // Select specific window if requested
-  if (windowIndex !== null && Number.isFinite(windowIndex)) {
+  if (windowId || (windowIndex !== null && Number.isFinite(windowIndex))) {
     try {
-      await tmuxSelectWindow(sanitizedSessionId, windowIndex)
+      await tmuxSelectWindow(sanitizedSessionId, windowIndex, windowId)
     } catch (error) {
       console.warn('Failed to select window', error.message)
       // Continue anyway - will attach to current window
@@ -2489,7 +2550,7 @@ const handleTerminalSocket = async (ws, sessionIdRaw, searchParams) => {
   let initialSize = null
   if (monitorMode) {
     try {
-      initialSize = await tmuxGetWindowSize(sanitizedSessionId, windowIndex)
+      initialSize = await tmuxGetWindowSize(sanitizedSessionId, windowIndex, windowId)
     } catch (error) {
       console.warn('Failed to read tmux window size', error.message)
     }
@@ -2506,7 +2567,7 @@ const handleTerminalSocket = async (ws, sessionIdRaw, searchParams) => {
 
   let ptyProcess
   let copyModeActive = false
-  const attachTarget = buildTmuxWindowTarget(sanitizedSessionId, windowIndex)
+  const attachTarget = sanitizedSessionId
   try {
     ptyProcess = pty.spawn(
       config.tmuxBin,
@@ -2554,7 +2615,7 @@ const handleTerminalSocket = async (ws, sessionIdRaw, searchParams) => {
     if (copyModeActive) {
       copyModeActive = false
       try {
-        await tmuxCancelCopyMode(sanitizedSessionId, windowIndex)
+        await tmuxCancelCopyMode(sanitizedSessionId, windowIndex, windowId)
         await sleep(50)
       } catch (error) {
         console.warn('Failed to leave tmux copy mode', safeErrorMessage(error))
@@ -2565,7 +2626,7 @@ const handleTerminalSocket = async (ws, sessionIdRaw, searchParams) => {
 
   const scrollPane = async (lines) => {
     try {
-      const scrolled = await tmuxScrollPane(sanitizedSessionId, windowIndex, lines)
+      const scrolled = await tmuxScrollPane(sanitizedSessionId, windowIndex, windowId, lines)
       copyModeActive = copyModeActive || scrolled
     } catch (error) {
       console.warn('Failed to scroll tmux pane', safeErrorMessage(error))
@@ -2641,23 +2702,23 @@ const findMobileHost = async (hostId) => {
   return catalog.hosts.find((host) => hostMatchesId(host, sanitizedHostId)) ?? null
 }
 
-const buildRemoteAttachCommand = ({ sessionId, windowIndex }) => {
+const buildRemoteAttachCommand = ({ sessionId, windowIndex, windowId = '' }) => {
   const sessionTarget = shellQuote(sessionId)
-  const attachTarget = shellQuote(buildTmuxWindowTarget(sessionId, windowIndex))
+  const windowTarget = buildTmuxWindowTarget(sessionId, windowIndex, windowId)
   const commands = [
     `${config.tmuxBin} has-session -t ${sessionTarget} 2>/dev/null || ${config.tmuxBin} new-session -d -s ${sessionTarget}`,
   ]
-  if (windowIndex !== null && Number.isFinite(windowIndex)) {
-    commands.push(`${config.tmuxBin} select-window -t ${shellQuote(`${sessionId}:${windowIndex}`)} 2>/dev/null || true`)
+  if (windowTarget !== sessionId) {
+    commands.push(`${config.tmuxBin} select-window -t ${shellQuote(windowTarget)} 2>/dev/null || true`)
   }
-  commands.push(`exec ${config.tmuxBin} attach-session -t ${attachTarget}`)
+  commands.push(`exec ${config.tmuxBin} attach-session -t ${sessionTarget}`)
   return commands.join('; ')
 }
 
 const handleRemoteTerminalSocket = async (ws, hostIdRaw, sessionIdRaw, searchParams) => {
   const sanitizedSessionId = sanitizeId(sessionIdRaw)
   const host = await findMobileHost(hostIdRaw)
-  const { windowIndex, initialCols, initialRows, monitorMode } = parseTerminalSocketOptions(searchParams)
+  const { windowIndex, windowId, initialCols, initialRows, monitorMode } = parseTerminalSocketOptions(searchParams)
 
   if (!host || isHostLocal(host) || !host.ssh) {
     sendWsMessage(ws, { type: 'error', message: 'Invalid remote host' })
@@ -2677,7 +2738,7 @@ const handleRemoteTerminalSocket = async (ws, hostIdRaw, sessionIdRaw, searchPar
 
   if (!monitorMode) {
     try {
-      await unparkRemoteAgents(host, sanitizedSessionId, windowIndex)
+      await unparkRemoteAgents(host, sanitizedSessionId, windowIndex, windowId)
     } catch (error) {
       console.warn('Failed to unpark remote Codex/Claude agents', safeErrorMessage(error))
     }
@@ -2693,7 +2754,7 @@ const handleRemoteTerminalSocket = async (ws, hostIdRaw, sessionIdRaw, searchPar
         '-o',
         'ServerAliveCountMax=3',
         host.ssh,
-        buildRemoteAttachCommand({ sessionId: sanitizedSessionId, windowIndex }),
+        buildRemoteAttachCommand({ sessionId: sanitizedSessionId, windowIndex, windowId }),
       ],
       {
         name: 'xterm-256color',
@@ -2738,7 +2799,7 @@ const handleRemoteTerminalSocket = async (ws, hostIdRaw, sessionIdRaw, searchPar
     if (copyModeActive) {
       copyModeActive = false
       try {
-        await remoteCancelCopyMode(host, sanitizedSessionId, windowIndex)
+        await remoteCancelCopyMode(host, sanitizedSessionId, windowIndex, windowId)
         await sleep(50)
       } catch (error) {
         console.warn('Failed to leave remote tmux copy mode', safeErrorMessage(error))
@@ -2749,7 +2810,7 @@ const handleRemoteTerminalSocket = async (ws, hostIdRaw, sessionIdRaw, searchPar
 
   const scrollPane = async (lines) => {
     try {
-      const scrolled = await remoteScrollPane(host, sanitizedSessionId, windowIndex, lines)
+      const scrolled = await remoteScrollPane(host, sanitizedSessionId, windowIndex, windowId, lines)
       copyModeActive = copyModeActive || scrolled
     } catch (error) {
       console.warn('Failed to scroll remote tmux pane', safeErrorMessage(error))

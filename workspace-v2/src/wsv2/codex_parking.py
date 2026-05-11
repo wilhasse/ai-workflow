@@ -26,7 +26,7 @@ KNOWN_RESUME_FLAGS = {
     ),
 }
 PANE_FORMAT = (
-    "#{session_name}\t#{window_index}\t#{window_name}\t#{pane_index}\t"
+    "#{session_name}\t#{window_index}\t#{window_id}\t#{window_name}\t#{pane_index}\t"
     "#{pane_id}\t#{pane_pid}\t#{pane_current_command}\t#{pane_current_path}"
 )
 
@@ -39,6 +39,16 @@ class CodexParkingError(RuntimeError):
 class AgentTarget:
     session_id: str | None = None
     window_index: int | None = None
+    window_id: str | None = None
+
+
+def _normalize_window_id(value: Any) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return ""
+    if normalized.startswith("@"):
+        normalized = normalized[1:]
+    return f"@{normalized}" if normalized.isdigit() else ""
 
 
 def parse_agent_target(value: str | None) -> AgentTarget | None:
@@ -50,14 +60,21 @@ def parse_agent_target(value: str | None) -> AgentTarget | None:
 
     if "#" in raw:
         session_id, window_raw = raw.rsplit("#", 1)
+        window_id = None
+    elif "@" in raw and raw.rsplit("@", 1)[1].isdigit():
+        session_id, window_raw = raw.rsplit("@", 1)
+        window_id = _normalize_window_id(window_raw)
     elif ":" in raw and raw.rsplit(":", 1)[1].isdigit():
         session_id, window_raw = raw.rsplit(":", 1)
+        window_id = None
     else:
         return AgentTarget(session_id=raw)
 
     session_id = session_id.strip()
     if not session_id:
         raise CodexParkingError(f"Invalid tmux target: {value}")
+    if window_id:
+        return AgentTarget(session_id=session_id, window_id=window_id)
     try:
         window_index = int(window_raw)
     except ValueError as error:
@@ -132,6 +149,7 @@ def list_agent_processes(
                 "hostName": host_name,
                 "session": pane["session"],
                 "windowIndex": pane["windowIndex"],
+                "windowId": pane["windowId"],
                 "windowName": pane["windowName"],
                 "paneIndex": pane["paneIndex"],
                 "paneId": pane["paneId"],
@@ -143,7 +161,7 @@ def list_agent_processes(
                 "processGroupId": pgid,
                 "parked": parked,
                 "commands": group["commands"][:3],
-                "target": f"{pane['session']}#{pane['windowIndex']}",
+                "target": f"{pane['session']}{pane['windowId']}" if pane.get("windowId") else f"{pane['session']}#{pane['windowIndex']}",
             }
             rows.append(row)
             active_keys.add(_state_record_key(row))
@@ -359,14 +377,15 @@ def _list_tmux_panes() -> list[dict[str, Any]]:
         if not line.strip():
             continue
         parts = line.split("\t")
-        if len(parts) < 8:
+        if len(parts) < 9:
             continue
-        session, window_index, window_name, pane_index, pane_id, pane_pid, command, cwd = parts[:8]
+        session, window_index, window_id, window_name, pane_index, pane_id, pane_pid, command, cwd = parts[:9]
         try:
             panes.append(
                 {
                     "session": session,
                     "windowIndex": int(window_index),
+                    "windowId": _normalize_window_id(window_id),
                     "windowName": window_name or f"window-{window_index}",
                     "paneIndex": int(pane_index),
                     "paneId": pane_id,
@@ -465,6 +484,8 @@ def _target_matches_pane(pane: dict[str, Any], target: AgentTarget | None) -> bo
         return True
     if target.session_id and pane.get("session") != target.session_id:
         return False
+    if target.window_id and _normalize_window_id(pane.get("windowId")) != target.window_id:
+        return False
     if target.window_index is not None and int(pane.get("windowIndex") or -1) != target.window_index:
         return False
     return True
@@ -474,6 +495,8 @@ def _record_matches_target(record: dict[str, Any], target: AgentTarget | None) -
     if target is None:
         return True
     if target.session_id and record.get("session") != target.session_id:
+        return False
+    if target.window_id and _normalize_window_id(record.get("windowId")) != target.window_id:
         return False
     if target.window_index is not None and int(record.get("windowIndex") or -1) != target.window_index:
         return False
@@ -530,13 +553,13 @@ def _resume_candidates_for_rows(
     *,
     host_id: str | None,
     host_name: str | None,
-) -> dict[tuple[str, int, str], list[dict[str, Any]]]:
+) -> dict[tuple[str, str, str], list[dict[str, Any]]]:
     try:
         snapshot = scan_local_host(host_id=host_id or "local", host_name=host_name or host_id or "local")
     except Exception:
         return {}
 
-    candidates: dict[tuple[str, int, str], list[dict[str, Any]]] = {}
+    candidates: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
     rows = list(rows)
     for row in rows:
         pane_id = str(row.get("paneId") or "")
@@ -707,6 +730,7 @@ def _base_park_record(row: dict[str, Any], *, reason: str, parked_at: float) -> 
         "hostName": row.get("hostName"),
         "session": row.get("session"),
         "windowIndex": row.get("windowIndex"),
+        "windowId": row.get("windowId"),
         "windowName": row.get("windowName"),
         "paneId": row.get("paneId"),
         "panePid": row.get("panePid"),
@@ -836,6 +860,9 @@ def _record_tmux_target(record: dict[str, Any]) -> str | None:
     session = str(record.get("session") or "").strip()
     if not session:
         return None
+    window_id = _normalize_window_id(record.get("windowId"))
+    if window_id:
+        return window_id
     window_index = record.get("windowIndex")
     if str(window_index).lstrip("-").isdigit():
         return f"{session}:{int(window_index)}"
@@ -850,6 +877,7 @@ def _parked_record_to_row(record: dict[str, Any]) -> dict[str, Any]:
         "hostName": record.get("hostName"),
         "session": record.get("session"),
         "windowIndex": int(record.get("windowIndex") or 0),
+        "windowId": _normalize_window_id(record.get("windowId")),
         "windowName": record.get("windowName") or "parked",
         "paneIndex": int(record.get("paneIndex") or 0),
         "paneId": record.get("paneId"),
@@ -863,14 +891,22 @@ def _parked_record_to_row(record: dict[str, Any]) -> dict[str, Any]:
         "resumeCommand": record.get("resumeCommand"),
         "resumeId": record.get("resumeId"),
         "commands": [str(record.get("resumeCommand") or "")],
-        "target": record.get("target") or f"{record.get('session')}#{record.get('windowIndex')}",
+        "target": record.get("target") or (
+            f"{record.get('session')}{_normalize_window_id(record.get('windowId'))}"
+            if _normalize_window_id(record.get("windowId"))
+            else f"{record.get('session')}#{record.get('windowIndex')}"
+        ),
     }
 
 
-def _row_identity(row: dict[str, Any]) -> tuple[str, int, str]:
+def _row_window_identity(row: dict[str, Any]) -> str:
+    return _normalize_window_id(row.get("windowId")) or str(int(row.get("windowIndex") or 0))
+
+
+def _row_identity(row: dict[str, Any]) -> tuple[str, str, str]:
     return (
         str(row.get("session") or ""),
-        int(row.get("windowIndex") or 0),
+        _row_window_identity(row),
         str(row.get("paneId") or ""),
     )
 
@@ -879,7 +915,7 @@ def _state_record_key(record: dict[str, Any]) -> tuple[Any, ...]:
     return (
         record.get("hostId"),
         str(record.get("session") or ""),
-        int(record.get("windowIndex") or 0),
+        _row_window_identity(record),
         str(record.get("paneId") or ""),
         str(record.get("resumeId") or record.get("processGroupId") or ""),
         str(record.get("kind") or "+".join(record.get("kinds") or [])),

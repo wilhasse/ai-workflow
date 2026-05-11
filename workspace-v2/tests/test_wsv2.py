@@ -265,6 +265,16 @@ class CommandBuilderTests(unittest.TestCase):
         self.assertIn('tmux attach-session -t dbtools:3', local_command)
         self.assertIn('tmux attach -t dbtools:3', remote_command)
 
+        stable_command = build_terminal_attach_command(
+            config.get_host('vm10'),
+            session_id='dbtools',
+            window_index=3,
+            window_id='@44',
+            run_local=True,
+        )
+        self.assertIn('tmux select-window -t @44', stable_command)
+        self.assertIn('tmux attach-session -t dbtools', stable_command)
+
     def test_build_terminal_command_uses_terminal_specific_flags(self) -> None:
         xfce = build_terminal_command('xfce4-terminal', 'echo hi', 'mysql')
         gnome = build_terminal_command('gnome-terminal', 'echo hi', 'mysql')
@@ -324,12 +334,29 @@ class LauncherStateTests(unittest.TestCase):
         self.assertNotIn('label', labels_after_label_clear['vm9:dbtools#2'])
         self.assertNotIn('vm9:dbtools#2', labels_after_status_clear)
 
+    def test_stable_window_metadata_migrates_legacy_index_record(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'state.json'
+            state = LauncherState(path)
+            state.set_window_metadata('vm9', 'dbtools', 2, label='RENAC calls', status='check')
+            metadata = state.set_window_metadata('vm9', 'dbtools', 2, status='idle', window_id='@42')
+
+            labels = state.window_labels()
+            shifted_label = state.window_label('vm9', 'dbtools', 7, '@42')
+
+        self.assertEqual(metadata, {'label': 'RENAC calls', 'status': 'idle'})
+        self.assertIn('vm9:dbtools@42', labels)
+        self.assertNotIn('vm9:dbtools#2', labels)
+        self.assertEqual(labels['vm9:dbtools@42']['label'], 'RENAC calls')
+        self.assertEqual(shifted_label, 'RENAC calls')
+
 
 class CodexParkingTests(unittest.TestCase):
     def test_parse_agent_target_accepts_session_and_window_forms(self) -> None:
         session_target = parse_agent_target('docker')
         window_hash_target = parse_agent_target('docker#4')
         window_colon_target = parse_agent_target('docker:6')
+        window_id_target = parse_agent_target('docker@42')
 
         self.assertEqual(session_target.session_id, 'docker')
         self.assertIsNone(session_target.window_index)
@@ -337,6 +364,8 @@ class CodexParkingTests(unittest.TestCase):
         self.assertEqual(window_hash_target.window_index, 4)
         self.assertEqual(window_colon_target.session_id, 'docker')
         self.assertEqual(window_colon_target.window_index, 6)
+        self.assertEqual(window_id_target.session_id, 'docker')
+        self.assertEqual(window_id_target.window_id, '@42')
         self.assertIsNone(parse_agent_target('all'))
 
     def test_format_agent_processes_marks_parked_rows(self) -> None:
@@ -396,7 +425,7 @@ class CodexParkingTests(unittest.TestCase):
             mock.patch('wsv2.codex_parking._save_state') as save_state, \
             mock.patch(
                 'wsv2.codex_parking._resume_candidates_for_rows',
-                return_value={('docker', 1, '%1'): [candidate]},
+                return_value={('docker', '1', '%1'): [candidate]},
             ), \
             mock.patch('wsv2.codex_parking._interrupt_agent_row', return_value=[]) as interrupt, \
             mock.patch('wsv2.codex_parking._resume_records_from_pane_output', return_value=[]):
@@ -638,6 +667,7 @@ class TerminalRankingTests(unittest.TestCase):
                     {
                         'session_id': 'mysql',
                         'window_index': 1,
+                        'window_id': '@24',
                         'window_name': 'node',
                         'window_active': True,
                         'activity': 20,
@@ -652,6 +682,7 @@ class TerminalRankingTests(unittest.TestCase):
                         {
                             'session_id': 'dbtools',
                             'window_index': 2,
+                            'window_id': '@42',
                             'window_name': 'api-task',
                             'window_active': False,
                             'activity': 10,
@@ -663,7 +694,7 @@ class TerminalRankingTests(unittest.TestCase):
             ):
                 statuses = actions.list_terminal_statuses()
 
-        self.assertEqual(statuses[0].target, 'vm9:dbtools#2')
+        self.assertEqual(statuses[0].target, 'vm9:dbtools@42')
 
     def test_list_terminal_statuses_prefers_window_label_for_display(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, \
@@ -682,6 +713,7 @@ class TerminalRankingTests(unittest.TestCase):
                             {
                                 'session_id': 'dbtools',
                                 'window_index': 2,
+                                'window_id': '@42',
                                 'window_name': 'codex bash',
                                 'window_active': False,
                                 'activity': 10,
@@ -693,7 +725,7 @@ class TerminalRankingTests(unittest.TestCase):
                 ):
                 statuses = actions.list_terminal_statuses()
 
-        status = next(item for item in statuses if item.target == 'vm9:dbtools#2')
+        status = next(item for item in statuses if item.target == 'vm9:dbtools@42')
         self.assertEqual(status.window_name, 'RENAC calls')
         self.assertEqual(status.tmux_window_name, 'codex bash')
         self.assertEqual(status.window_label, 'RENAC calls')
@@ -711,6 +743,7 @@ class TerminalRankingTests(unittest.TestCase):
                 host=workspace.host,
                 session_id=workspace.id,
                 window_index=1,
+                window_id='@42',
                 window_name='codex bash',
                 workspace=workspace,
             )
@@ -719,6 +752,7 @@ class TerminalRankingTests(unittest.TestCase):
                 host=workspace.host,
                 session_id=workspace.id,
                 window_index=1,
+                window_id='@42',
                 window_name='codex bash',
                 window_status='idle',
                 workspace=workspace,
@@ -730,12 +764,12 @@ class TerminalRankingTests(unittest.TestCase):
                 actions.set_terminal_metadata(idle, status='')
 
         park.assert_called_once_with(
-            'mysql#1',
+            'mysql@42',
             host_id='vm10',
             host_name='Main Desktop',
             reason='idle-status',
         )
-        unpark.assert_called_once_with('mysql#1', host_id='vm10', host_name='Main Desktop')
+        unpark.assert_called_once_with('mysql@42', host_id='vm10', host_name='Main Desktop')
 
 
 class PopupEnvironmentTests(unittest.TestCase):

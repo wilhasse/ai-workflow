@@ -199,15 +199,27 @@ const terminalTextForSpeech = (value) => {
   return fallbackTextForSpeech(lines)
 }
 
-const buildMobileSocketUrl = (workspace, windowIndex) => {
+const normalizeWindowId = (value) => {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  const normalized = raw.startsWith('@') ? raw.slice(1) : raw
+  return /^\d+$/.test(normalized) ? `@${normalized}` : ''
+}
+
+const buildMobileSocketUrl = (workspace, selectedWindow) => {
   if (!workspace) {
     return null
   }
+  const windowIndex = selectedWindow?.index
+  const windowId = normalizeWindowId(selectedWindow?.id)
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const port = window.location.port ? `:${window.location.port}` : ''
   const params = new URLSearchParams()
   if (Number.isFinite(windowIndex)) {
     params.set('windowIndex', String(windowIndex))
+  }
+  if (windowId) {
+    params.set('windowId', windowId)
   }
   const sessionId = encodeURIComponent(workspace.connection?.sessionId || workspace.id)
   const path = workspace.connection?.type === 'remote'
@@ -587,8 +599,8 @@ function MobileTerminalApp() {
     [selectedWindowIndex, selectedWorkspace],
   )
   const wsUrl = useMemo(
-    () => buildMobileSocketUrl(selectedWorkspace, selectedWindowIndex),
-    [selectedWorkspace, selectedWindowIndex],
+    () => buildMobileSocketUrl(selectedWorkspace, selectedWindow),
+    [selectedWorkspace, selectedWindow],
   )
   const canShowTerminal = !!(selectedWorkspace && selectedWindow && wsUrl)
   const isSecureContext = typeof window !== 'undefined' &&
@@ -894,6 +906,9 @@ function MobileTerminalApp() {
       if (Number.isFinite(selectedWindowIndex)) {
         params.set('windowIndex', String(selectedWindowIndex))
       }
+      if (selectedWindow?.id) {
+        params.set('windowId', selectedWindow.id)
+      }
       const historyResponse = await fetch(
         `${base}/mobile/history/${encodeURIComponent(selectedWorkspace.hostId)}/${encodeURIComponent(sessionId)}?${params}`,
       )
@@ -943,6 +958,7 @@ function MobileTerminalApp() {
   }, [
     canShowTerminal,
     releaseSpeechAudio,
+    selectedWindow,
     selectedWindowIndex,
     selectedWorkspace,
     speechPlaybackPending,
@@ -1117,6 +1133,7 @@ function MobileTerminalApp() {
           body: JSON.stringify({
             payload,
             windowIndex: Number.isFinite(selectedWindowIndex) ? selectedWindowIndex : null,
+            windowId: selectedWindow?.id || '',
           }),
         },
       )
@@ -1130,7 +1147,7 @@ function MobileTerminalApp() {
       setTerminalInputError(inputError.message || 'Terminal connection is not ready.')
       return false
     }
-  }, [selectedWindowIndex, selectedWorkspace])
+  }, [selectedWindow, selectedWindowIndex, selectedWorkspace])
 
   const sendTerminalDraft = useCallback(async () => {
     const text = terminalDraft
@@ -1293,7 +1310,7 @@ function MobileTerminalApp() {
 
       {canShowTerminal ? (
         <TerminalViewer
-          key={`${selectedWorkspace.key}-${selectedWindowIndex}`}
+          key={`${selectedWorkspace.key}-${selectedWindowIndex}-${selectedWindow?.id || ''}`}
           wsUrl={wsUrl}
           fontSize={terminalFontSize}
           showShortcutBar={false}

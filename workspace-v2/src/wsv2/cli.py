@@ -454,6 +454,7 @@ def main(argv: list[str] | None = None) -> int:
                     'host': status.host_id,
                     'hostName': status.host.name,
                     'windowIndex': status.window_index,
+                    'windowId': status.window_id,
                     'windowName': status.window_name,
                     'tmuxName': status.tmux_window_name or status.window_name,
                     'label': status.window_label,

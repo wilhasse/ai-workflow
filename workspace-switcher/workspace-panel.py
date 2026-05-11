@@ -53,6 +53,15 @@ def normalize_terminal_status(value):
     return ''
 
 
+def normalize_window_id(value):
+    normalized = str(value or '').strip()
+    if not normalized:
+        return ''
+    if normalized.startswith('@'):
+        normalized = normalized[1:]
+    return f"@{normalized}" if normalized.isdigit() else ''
+
+
 def load_window_labels():
     try:
         with open(LAUNCHER_STATE_FILE, 'r') as f:
@@ -70,12 +79,20 @@ def window_label_keys_for_entry(entry):
     state_host_id = entry.get('state_host_id') or host_id
     session_name = entry.get('session_name', '')
     window_index = entry.get('window_index')
-    return [
-        entry.get('target'),
+    window_id = normalize_window_id(entry.get('window_id'))
+    stable_keys = []
+    if window_id:
+        stable_keys.extend([
+            f"{state_host_id}:{session_name}{window_id}",
+            f"{host_id}:{session_name}{window_id}",
+            f"local:{session_name}{window_id}",
+        ])
+    legacy_keys = [
         f"{state_host_id}:{session_name}#{window_index}",
         f"{host_id}:{session_name}#{window_index}",
         f"local:{session_name}#{window_index}",
     ]
+    return [key for key in dict.fromkeys([entry.get('target'), *stable_keys, *legacy_keys]) if key]
 
 
 def window_metadata_for_entry(entry, labels=None):
@@ -99,7 +116,7 @@ def window_status_for_entry(entry, labels=None):
     return window_metadata_for_entry(entry, labels).get('status', '')
 
 
-def save_window_metadata(host_id, session_name, window_index, label=None, status=None):
+def save_window_metadata(host_id, session_name, window_index, label=None, status=None, window_id=''):
     payload = {'recent': {}}
     try:
         with open(LAUNCHER_STATE_FILE, 'r') as f:
@@ -110,8 +127,18 @@ def save_window_metadata(host_id, session_name, window_index, label=None, status
     if not isinstance(labels, dict):
         labels = {}
         payload['windowLabels'] = labels
-    key = f"{host_id}:{session_name}#{window_index}"
-    existing = labels.get(key) if isinstance(labels.get(key), dict) else {}
+    normalized_window_id = normalize_window_id(window_id)
+    key = (
+        f"{host_id}:{session_name}{normalized_window_id}"
+        if normalized_window_id
+        else f"{host_id}:{session_name}#{window_index}"
+    )
+    candidate_keys = [key, f"{host_id}:{session_name}#{window_index}"]
+    existing = {}
+    for candidate_key in candidate_keys:
+        if isinstance(labels.get(candidate_key), dict):
+            existing = labels[candidate_key]
+            break
     normalized_label = normalize_window_label(label if label is not None else existing.get('label'))
     normalized_status = normalize_terminal_status(status if status is not None else existing.get('status'))
     if normalized_label or normalized_status:
@@ -120,16 +147,20 @@ def save_window_metadata(host_id, session_name, window_index, label=None, status
             labels[key]['label'] = normalized_label
         if normalized_status:
             labels[key]['status'] = normalized_status
+        for candidate_key in candidate_keys:
+            if candidate_key != key:
+                labels.pop(candidate_key, None)
     else:
-        labels.pop(key, None)
+        for candidate_key in candidate_keys:
+            labels.pop(candidate_key, None)
     os.makedirs(os.path.dirname(LAUNCHER_STATE_FILE), exist_ok=True)
     with open(LAUNCHER_STATE_FILE, 'w') as f:
         json.dump(payload, f, indent=2, sort_keys=True)
     return {'label': normalized_label, 'status': normalized_status}
 
 
-def save_window_label(host_id, session_name, window_index, label):
-    return save_window_metadata(host_id, session_name, window_index, label=label)['label']
+def save_window_label(host_id, session_name, window_index, label, window_id=''):
+    return save_window_metadata(host_id, session_name, window_index, label=label, window_id=window_id)['label']
 
 
 def save_recent_score(target):
@@ -146,9 +177,16 @@ def save_recent_score(target):
         json.dump(payload, f, indent=2, sort_keys=True)
 
 
-def signal_tmux_agents(host_id, host_info, session_name, window_index=None, action='unpark'):
+def signal_tmux_agents(host_id, host_info, session_name, window_index=None, action='unpark', window_id=''):
     """Park or resume Codex/Claude processes for a tmux session/window target."""
-    target = f"{session_name}#{window_index}" if window_index is not None else session_name
+    normalized_window_id = normalize_window_id(window_id)
+    target = (
+        f"{session_name}{normalized_window_id}"
+        if normalized_window_id
+        else f"{session_name}#{window_index}"
+        if window_index is not None
+        else session_name
+    )
     host_id = host_id or 'local'
     host_name = (host_info or {}).get('name') or host_id
     ssh_target = (host_info or {}).get('ssh')
@@ -198,9 +236,9 @@ def signal_tmux_agents(host_id, host_info, session_name, window_index=None, acti
         return
 
 
-def unpark_tmux_agents(host_id, host_info, session_name, window_index=None):
+def unpark_tmux_agents(host_id, host_info, session_name, window_index=None, window_id=''):
     """Resume parked Codex/Claude processes before opening a tmux target."""
-    signal_tmux_agents(host_id, host_info, session_name, window_index, action='unpark')
+    signal_tmux_agents(host_id, host_info, session_name, window_index, action='unpark', window_id=window_id)
 
 
 def sync_terminal_idle_agents(entry, previous_status, next_status):
@@ -214,9 +252,9 @@ def sync_terminal_idle_agents(entry, previous_status, next_status):
     host_id = entry.get('host_id', 'local')
     host_info = entry.get('host_info')
     if next_status == 'idle':
-        signal_tmux_agents(host_id, host_info, entry['session_name'], window_index, action='park')
+        signal_tmux_agents(host_id, host_info, entry['session_name'], window_index, action='park', window_id=entry.get('window_id'))
     elif previous_status == 'idle':
-        signal_tmux_agents(host_id, host_info, entry['session_name'], window_index, action='unpark')
+        signal_tmux_agents(host_id, host_info, entry['session_name'], window_index, action='unpark', window_id=entry.get('window_id'))
 
 
 def default_agent_summary():
@@ -229,8 +267,12 @@ def terminal_recent_score(entry, recent_scores=None):
     state_host_id = entry.get('state_host_id') or host_id
     session_name = entry.get('session_name', '')
     window_index = entry.get('window_index')
+    window_id = normalize_window_id(entry.get('window_id'))
     keys = [
         entry.get('target'),
+        f"{state_host_id}:{session_name}{window_id}" if window_id else '',
+        f"{host_id}:{session_name}{window_id}" if window_id else '',
+        f"local:{session_name}{window_id}" if window_id else '',
         f"{state_host_id}:{session_name}#{window_index}",
         f"{host_id}:{session_name}#{window_index}",
         f"{state_host_id}:{session_name}",
@@ -1877,7 +1919,12 @@ class WorkspaceSwitcher(Gtk.Window):
                     'workspace_description': workspace_description,
                     'discovered': discovered,
                 }
-                entry['target'] = f"{state_host_id}:{session_name}#{window['window_index']}"
+                window_id = normalize_window_id(window.get('window_id'))
+                entry['target'] = (
+                    f"{state_host_id}:{session_name}{window_id}"
+                    if window_id
+                    else f"{state_host_id}:{session_name}#{window['window_index']}"
+                )
                 entry['tmux_window_name'] = window.get('window_name') or f"window-{window['window_index']}"
                 metadata = window_metadata_for_entry(entry, labels)
                 entry['window_label'] = metadata.get('label', '')
@@ -1893,6 +1940,7 @@ class WorkspaceSwitcher(Gtk.Window):
                     session_name,
                     str(window['window_index']),
                     f"#{window['window_index']}",
+                    window_id,
                     entry.get('window_label', ''),
                     entry.get('window_status', ''),
                     entry.get('tmux_window_name', ''),
@@ -1919,7 +1967,7 @@ class WorkspaceSwitcher(Gtk.Window):
 
     def _get_windows_for_host(self, host_id, host_info):
         """Return tmux windows for a host, local or SSH remote."""
-        format_string = '#{session_name}|#{window_index}|#{window_name}|#{window_active}|#{window_activity}|#{window_panes}'
+        format_string = '#{session_name}|#{window_index}|#{window_id}|#{window_name}|#{window_active}|#{window_activity}|#{window_panes}'
         if host_id == 'local' or not host_info or not host_info.get('ssh'):
             cmd = ['tmux', 'list-windows', '-a', '-F', format_string]
             result = subprocess.run(
@@ -1948,9 +1996,9 @@ class WorkspaceSwitcher(Gtk.Window):
             if not line or '|' not in line:
                 continue
             parts = line.split('|')
-            if len(parts) < 6:
+            if len(parts) < 7:
                 continue
-            session_name, index, name, active, activity, panes = parts[:6]
+            session_name, index, window_id, name, active, activity, panes = parts[:7]
             try:
                 window_index = int(index)
             except ValueError:
@@ -1966,6 +2014,7 @@ class WorkspaceSwitcher(Gtk.Window):
             windows.append({
                 'session_name': session_name,
                 'window_index': window_index,
+                'window_id': normalize_window_id(window_id),
                 'window_name': name or f'window-{window_index}',
                 'window_active': active == '1',
                 'activity': activity_value,
@@ -2043,21 +2092,29 @@ class WorkspaceSwitcher(Gtk.Window):
         host_info = entry.get('host_info')
         session_name = entry['session_name']
         window_index = entry['window_index']
-        session_target = f"{session_name}:{window_index}"
+        window_id = normalize_window_id(entry.get('window_id'))
+        session_target = window_id or f"{session_name}:{window_index}"
+        attach_target = session_name if window_id else session_target
 
-        unpark_tmux_agents(host_id, host_info, session_name, window_index)
+        unpark_tmux_agents(host_id, host_info, session_name, window_index, window_id)
 
         if host_id == 'local' or not host_info or not host_info.get('ssh'):
             self._switch_local_tmux_clients_to_window(session_name, session_target)
             if self._focus_existing_window(session_name):
                 return
-            cmd = f"tmux attach-session -t {shlex.quote(session_target)}"
+            cmd = (
+                f"tmux select-window -t {shlex.quote(session_target)} 2>/dev/null || true; "
+                f"tmux attach-session -t {shlex.quote(attach_target)}"
+            )
         else:
             ssh_target = host_info['ssh']
             self._switch_remote_tmux_clients_to_window(host_info, session_name, session_target)
             if self._focus_existing_window(session_name):
                 return
-            remote_attach = f"tmux select-window -t {shlex.quote(session_target)} 2>/dev/null || true; tmux attach -t {shlex.quote(session_target)}"
+            remote_attach = (
+                f"tmux select-window -t {shlex.quote(session_target)} 2>/dev/null || true; "
+                f"tmux attach -t {shlex.quote(attach_target)}"
+            )
             cmd = f"ssh -t -o ServerAliveInterval=60 -o ServerAliveCountMax=3 {ssh_target} {shlex.quote(remote_attach)}"
 
         terminal = self._get_terminal()
@@ -2127,7 +2184,14 @@ class WorkspaceSwitcher(Gtk.Window):
 
         host_id = entry.get('state_host_id') or entry.get('host_id', 'local')
         previous_status = normalize_terminal_status(entry.get('window_status'))
-        save_window_metadata(host_id, entry['session_name'], entry['window_index'], label=new_name, status=new_status)
+        save_window_metadata(
+            host_id,
+            entry['session_name'],
+            entry['window_index'],
+            label=new_name,
+            status=new_status,
+            window_id=entry.get('window_id'),
+        )
         sync_terminal_idle_agents(entry, previous_status, new_status)
         self.refresh_workspaces()
 
@@ -2141,6 +2205,7 @@ class WorkspaceSwitcher(Gtk.Window):
             entry['window_index'],
             label=entry.get('window_label', ''),
             status=status,
+            window_id=entry.get('window_id'),
         )
         sync_terminal_idle_agents(entry, previous_status, status)
         self.refresh_workspaces()

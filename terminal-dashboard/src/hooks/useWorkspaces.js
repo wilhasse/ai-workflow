@@ -87,8 +87,11 @@ export function useWorkspaces() {
     }
   }, [])
 
-  const setWindowLabel = useCallback(async ({ hostId, sessionId, windowIndex, label, status }) => {
+  const setWindowLabel = useCallback(async ({ hostId, sessionId, windowIndex, windowId, label, status }) => {
     const payload = { label }
+    if (windowId) {
+      payload.windowId = windowId
+    }
     if (status !== undefined) {
       payload.status = status
     }

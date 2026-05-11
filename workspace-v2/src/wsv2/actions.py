@@ -10,7 +10,12 @@ from typing import Iterable
 
 from .catalog import HostRecord, WorkspaceConfigError, WorkspaceRecord, load_config
 from .codex_parking import CodexParkingError, build_remote_wsv2_command, park_target, unpark_target
-from .state import LauncherState, normalize_terminal_status
+from .state import (
+    LauncherState,
+    normalize_terminal_status,
+    normalize_window_id,
+    window_metadata_candidate_keys,
+)
 
 
 @dataclass(slots=True, frozen=True)
@@ -31,6 +36,7 @@ class TerminalStatus:
     session_id: str
     window_index: int
     window_name: str
+    window_id: str = ""
     tmux_window_name: str | None = None
     window_label: str = ""
     window_status: str = ""
@@ -64,6 +70,8 @@ class TerminalStatus:
     def target(self) -> str:
         if self.window_index <= 0 and self.workspace:
             return self.workspace.target
+        if self.window_id:
+            return f"{self.host_id}:{self.session_id}{self.window_id}"
         return f"{self.host_id}:{self.session_id}#{self.window_index}"
 
     @property
@@ -80,6 +88,7 @@ class TerminalStatus:
                 self.workspace_name,
                 str(self.window_index),
                 f"#{self.window_index}",
+                self.window_id,
                 self.window_name,
                 self.tmux_window_name or "",
                 self.window_label,
@@ -94,6 +103,7 @@ class TerminalTarget:
     host_id: str | None
     session_id: str
     window_index: int | None
+    window_id: str | None = None
 
 
 def terminal_selected_score(status: TerminalStatus, recent_scores: dict[str, float] | None = None) -> float:
@@ -101,6 +111,7 @@ def terminal_selected_score(status: TerminalStatus, recent_scores: dict[str, flo
     keys = [
         status.recent_key,
         status.target,
+        f"{status.host_id}:{status.session_id}#{status.window_index}",
         f"{status.host_id}:{status.session_id}",
         status.session_id,
     ]
@@ -140,20 +151,33 @@ def _format_discovered_name(session_id: str) -> str:
 
 
 def parse_terminal_target(target: str) -> TerminalTarget | None:
-    if "#" not in target:
+    if "#" not in target and "@" not in target:
         return None
-    left, window_raw = target.rsplit("#", 1)
-    try:
-        window_index = int(window_raw)
-    except ValueError:
-        return None
+    window_index = None
+    window_id = None
+    if "#" in target:
+        left, window_raw = target.rsplit("#", 1)
+        try:
+            window_index = int(window_raw)
+        except ValueError:
+            return None
+    else:
+        left, window_raw = target.rsplit("@", 1)
+        window_id = normalize_window_id(window_raw)
+        if not window_id:
+            return None
     host_id = None
     session_id = left
     if ":" in left:
         host_id, session_id = left.split(":", 1)
     if not session_id:
         return None
-    return TerminalTarget(host_id=host_id or None, session_id=session_id, window_index=window_index)
+    return TerminalTarget(
+        host_id=host_id or None,
+        session_id=session_id,
+        window_index=window_index,
+        window_id=window_id,
+    )
 
 
 def build_attach_command(
@@ -194,11 +218,16 @@ def build_terminal_attach_command(
     *,
     session_id: str,
     window_index: int | None = None,
+    window_id: str | None = None,
     run_local: bool,
     within_tmux: bool = False,
 ) -> str:
     session_name = shlex.quote(session_id)
-    target = shlex.quote(f"{session_id}:{window_index}") if window_index is not None else session_name
+    normalized_window_id = normalize_window_id(window_id)
+    target = shlex.quote(normalized_window_id) if normalized_window_id else (
+        shlex.quote(f"{session_id}:{window_index}") if window_index is not None else session_name
+    )
+    attach_target = session_name if normalized_window_id else target
 
     if run_local and within_tmux:
         return (
@@ -210,13 +239,13 @@ def build_terminal_attach_command(
     if run_local:
         return (
             f"tmux select-window -t {target} 2>/dev/null || true; "
-            f"tmux attach-session -t {target}"
+            f"tmux attach-session -t {attach_target}"
         )
 
     ssh_target = shlex.quote(host.ssh or "")
     remote_tmux_cmd = (
         f"tmux select-window -t {target} 2>/dev/null || true; "
-        f"tmux attach -t {target}"
+        f"tmux attach -t {attach_target}"
     )
     return (
         "ssh -t -o ServerAliveInterval=60 -o ServerAliveCountMax=3 "
@@ -229,12 +258,14 @@ def switch_attached_tmux_clients(
     *,
     session_id: str,
     window_index: int | None,
+    window_id: str | None = None,
     run_local: bool,
 ) -> None:
-    if window_index is None:
+    normalized_window_id = normalize_window_id(window_id)
+    if window_index is None and not normalized_window_id:
         return
 
-    target = f"{session_id}:{window_index}"
+    target = normalized_window_id or f"{session_id}:{window_index}"
     if run_local:
         env = {**os.environ, "TMUX": ""}
         try:
@@ -401,12 +432,14 @@ class WorkspaceActions:
                     host.id,
                     window["session_id"],
                     window["window_index"],
+                    window["window_id"],
                 )
                 window_status = _window_status_for(
                     window_labels,
                     host.id,
                     window["session_id"],
                     window["window_index"],
+                    window["window_id"],
                 )
                 tmux_window_name = window["window_name"]
                 statuses.append(
@@ -415,6 +448,7 @@ class WorkspaceActions:
                         host=host,
                         session_id=window["session_id"],
                         window_index=window["window_index"],
+                        window_id=window["window_id"],
                         window_name=window_label or tmux_window_name,
                         tmux_window_name=tmux_window_name,
                         window_label=window_label,
@@ -458,6 +492,7 @@ class WorkspaceActions:
                 host,
                 session_id=terminal_target.session_id,
                 window_index=terminal_target.window_index,
+                window_id=terminal_target.window_id,
                 run_local=self.config.host_runs_local(host_id),
                 within_tmux=within_tmux,
             )
@@ -477,6 +512,9 @@ class WorkspaceActions:
                 return
             host = self.config.get_host(host_id)
             tmux_target = (
+                f"{terminal_target.session_id}{terminal_target.window_id}"
+                if terminal_target.window_id
+                else
                 f"{terminal_target.session_id}#{terminal_target.window_index}"
                 if terminal_target.window_index is not None
                 else terminal_target.session_id
@@ -530,6 +568,7 @@ class WorkspaceActions:
             terminal.window_index,
             label=label,
             status=status,
+            window_id=terminal.window_id,
         )
         if status is not None:
             self._sync_terminal_status_agents(terminal, metadata["status"])
@@ -540,9 +579,21 @@ class WorkspaceActions:
         if previous_status == next_status or terminal.window_index <= 0:
             return
         if next_status == "idle":
-            self._signal_tmux_target_agents(terminal.host, terminal.session_id, terminal.window_index, "park")
+            self._signal_tmux_target_agents(
+                terminal.host,
+                terminal.session_id,
+                terminal.window_index,
+                "park",
+                window_id=terminal.window_id,
+            )
         elif previous_status == "idle":
-            self._signal_tmux_target_agents(terminal.host, terminal.session_id, terminal.window_index, "unpark")
+            self._signal_tmux_target_agents(
+                terminal.host,
+                terminal.session_id,
+                terminal.window_index,
+                "unpark",
+                window_id=terminal.window_id,
+            )
 
     def _signal_tmux_target_agents(
         self,
@@ -550,8 +601,10 @@ class WorkspaceActions:
         session_id: str,
         window_index: int,
         action: str,
+        window_id: str = "",
     ) -> None:
-        tmux_target = f"{session_id}#{window_index}"
+        normalized_window_id = normalize_window_id(window_id)
+        tmux_target = f"{session_id}{normalized_window_id}" if normalized_window_id else f"{session_id}#{window_index}"
         try:
             if self.config.host_runs_local(host):
                 if action == "park":
@@ -592,12 +645,17 @@ class WorkspaceActions:
             if not host_id:
                 raise WorkspaceConfigError(f"Host is required for terminal target: {target}")
             host = self.config.get_host(host_id)
-            title = f"{terminal_target.session_id}:{terminal_target.window_index}"
+            title = (
+                f"{terminal_target.session_id}{terminal_target.window_id}"
+                if terminal_target.window_id
+                else f"{terminal_target.session_id}:{terminal_target.window_index}"
+            )
             self.unpark_workspace_target(target)
             switch_attached_tmux_clients(
                 host,
                 session_id=terminal_target.session_id,
                 window_index=terminal_target.window_index,
+                window_id=terminal_target.window_id,
                 run_local=self.config.host_runs_local(host),
             )
             if focus_existing and self.focus_workspace_window(terminal_target.session_id):
@@ -781,7 +839,7 @@ class WorkspaceActions:
         return _parse_windows(result.stdout.splitlines()), True
 
 
-_WINDOW_FORMAT = "#{session_name}|#{window_index}|#{window_name}|#{window_active}|#{window_activity}|#{window_panes}"
+_WINDOW_FORMAT = "#{session_name}|#{window_index}|#{window_id}|#{window_name}|#{window_active}|#{window_activity}|#{window_panes}"
 
 
 def _parse_session_names(lines: Iterable[str]) -> set[str]:
@@ -794,9 +852,9 @@ def _parse_windows(lines: Iterable[str]) -> list[dict]:
         if not line.strip() or "|" not in line:
             continue
         parts = line.split("|")
-        if len(parts) < 6:
+        if len(parts) < 7:
             continue
-        session_id, index, name, active, activity, panes = parts[:6]
+        session_id, index, window_id, name, active, activity, panes = parts[:7]
         try:
             window_index = int(index)
         except ValueError:
@@ -813,6 +871,7 @@ def _parse_windows(lines: Iterable[str]) -> list[dict]:
             {
                 "session_id": session_id,
                 "window_index": window_index,
+                "window_id": normalize_window_id(window_id),
                 "window_name": name or f"window-{window_index}",
                 "window_active": active == "1",
                 "activity": activity_value,
@@ -827,9 +886,14 @@ def _window_label_for(
     host_id: str,
     session_id: str,
     window_index: int,
+    window_id: str = "",
 ) -> str:
-    record = labels.get(f"{host_id}:{session_id}#{window_index}") or {}
-    return str(record.get("label") or "").strip()
+    for key in window_metadata_candidate_keys(host_id, session_id, window_index, window_id):
+        record = labels.get(key) or {}
+        label = str(record.get("label") or "").strip()
+        if label:
+            return label
+    return ""
 
 
 def _window_status_for(
@@ -837,6 +901,11 @@ def _window_status_for(
     host_id: str,
     session_id: str,
     window_index: int,
+    window_id: str = "",
 ) -> str:
-    record = labels.get(f"{host_id}:{session_id}#{window_index}") or {}
-    return normalize_terminal_status(record.get("status"))
+    for key in window_metadata_candidate_keys(host_id, session_id, window_index, window_id):
+        record = labels.get(key) or {}
+        status = normalize_terminal_status(record.get("status"))
+        if status:
+            return status
+    return ""

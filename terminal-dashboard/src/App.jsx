@@ -111,8 +111,20 @@ const loadWindowUsage = () => {
   }
 }
 
-const buildWindowUsageKey = (workspaceId, windowIndex, hostId = null) =>
-  hostId ? `${hostId}:${workspaceId}:${windowIndex}` : `${workspaceId}:${windowIndex}`
+const normalizeWindowId = (value) => {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  const normalized = raw.startsWith('@') ? raw.slice(1) : raw
+  return /^\d+$/.test(normalized) ? `@${normalized}` : ''
+}
+
+const buildWindowUsageKey = (workspaceId, windowIndex, hostId = null, windowId = null) => {
+  const normalizedWindowId = normalizeWindowId(windowId)
+  if (normalizedWindowId) {
+    return hostId ? `${hostId}:${workspaceId}${normalizedWindowId}` : `${workspaceId}${normalizedWindowId}`
+  }
+  return hostId ? `${hostId}:${workspaceId}:${windowIndex}` : `${workspaceId}:${windowIndex}`
+}
 
 const terminalStatusRank = (status) => {
   if (status === 'check') return 0
@@ -121,6 +133,7 @@ const terminalStatusRank = (status) => {
 
 const tabToWindowItem = (tab) => ({
   index: tab.windowIndex,
+  windowId: tab.windowId || '',
   name: tab.windowName || tab.displayName || tab.tmuxName || `window-${tab.windowIndex}`,
   tmuxName: tab.tmuxName || tab.windowName || '',
   label: tab.label || '',
@@ -140,6 +153,10 @@ const buildWorkspaceSocketUrl = (workspaceId, windowIndex = null, options = {}) 
   const params = new URLSearchParams()
   if (windowIndex !== null && Number.isFinite(windowIndex)) {
     params.set('windowIndex', String(windowIndex))
+  }
+  const windowId = normalizeWindowId(options.windowId)
+  if (windowId) {
+    params.set('windowId', windowId)
   }
   if (options.monitor) {
     params.set('monitor', '1')
@@ -303,6 +320,11 @@ function DashboardApp() {
       },
     }
   }, [activeTerminalConnection, activeWorkspaceId, workspaces])
+
+  const activeWindow = useMemo(
+    () => windows.find((window) => window.index === activeWindowIndex) ?? null,
+    [activeWindowIndex, windows],
+  )
 
   const applyWorkspaceWindows = useCallback((workspaceId, windowList) => {
     if (workspaceId !== activeWorkspaceId) {
@@ -499,6 +521,7 @@ function DashboardApp() {
         hostId: tab.hostId,
         sessionId: tab.sessionId,
         windowIndex: tab.windowIndex,
+        windowId: tab.windowId,
         label: tab.label,
         status: tab.status || '',
       })
@@ -521,12 +544,12 @@ function DashboardApp() {
     return true
   }, [activeWorkspaceId, applyWorkspaceWindows, fetchWindows, loadTerminalTabs, setWindowLabel])
 
-  const recordWindowUsage = useCallback((workspaceId, windowIndex, hostId = null) => {
+  const recordWindowUsage = useCallback((workspaceId, windowIndex, hostId = null, windowId = null) => {
     if (!workspaceId || !Number.isFinite(windowIndex)) {
       return null
     }
 
-    const usageKey = buildWindowUsageKey(workspaceId, windowIndex, hostId)
+    const usageKey = buildWindowUsageKey(workspaceId, windowIndex, hostId, windowId)
     setWindowUsage((prev) => ({
       ...prev,
       [usageKey]: {
@@ -562,6 +585,7 @@ function DashboardApp() {
       hostName: entry.hostName,
       local: entry.local !== false,
       sessionId,
+      windowId: entry.windowId || '',
       workspaceName: entry.workspaceName,
       workspaceDescription: entry.workspaceDescription,
     })
@@ -570,20 +594,28 @@ function DashboardApp() {
       sessionId,
       entry.windowIndex,
       entry.local === false ? entry.hostId : null,
+      entry.windowId,
     )
     closeTerminalSwitcher()
   }, [closeTerminalSwitcher, recordWindowUsage])
 
   const handleSelectWindow = useCallback((windowIndex) => {
+    const selectedWindow = windows.find((window) => window.index === windowIndex) ?? null
     setActiveWindowIndex(windowIndex)
+    setActiveTerminalConnection((current) => (
+      current?.sessionId === activeWorkspaceId
+        ? { ...current, windowId: selectedWindow?.windowId || '' }
+        : current
+    ))
     if (activeWorkspaceId) {
       lastTrackedWindowKeyRef.current = recordWindowUsage(
         activeWorkspaceId,
         windowIndex,
         activeTerminalConnection?.local === false ? activeTerminalConnection.hostId : null,
+        selectedWindow?.windowId,
       )
     }
-  }, [activeTerminalConnection, activeWorkspaceId, recordWindowUsage])
+  }, [activeTerminalConnection, activeWorkspaceId, recordWindowUsage, windows])
 
   const handleRenameWindowEntry = useCallback(async (entry) => {
     if (typeof window === 'undefined') {
@@ -608,6 +640,7 @@ function DashboardApp() {
       hostId: entry.hostId || 'local',
       sessionId,
       windowIndex: entry.windowIndex,
+      windowId: entry.windowId,
       label: trimmedName,
     })
     if (!result) {
@@ -628,6 +661,7 @@ function DashboardApp() {
       hostId: entry.hostId || 'local',
       sessionId,
       windowIndex: entry.windowIndex,
+      windowId: entry.windowId,
       label: entry.label || '',
       status,
     })
@@ -647,7 +681,10 @@ function DashboardApp() {
     const query = terminalSwitcherQuery.trim().toLowerCase()
     const entries = terminalTabs.map((tab) => {
       const sessionId = tab.sessionId || tab.workspaceId
-      const usage = windowUsage[buildWindowUsageKey(sessionId, tab.windowIndex, tab.local === false ? tab.hostId : null)] ?? {}
+      const usageHostId = tab.local === false ? tab.hostId : null
+      const usage = windowUsage[buildWindowUsageKey(sessionId, tab.windowIndex, usageHostId, tab.windowId)] ??
+        windowUsage[buildWindowUsageKey(sessionId, tab.windowIndex, usageHostId)] ??
+        {}
       const lastUsedAt = usage.lastUsedAt ?? 0
       const lastActivityAt = tab.lastActivityAt ?? 0
       const windowName = tab.displayName || tab.windowName || tab.tmuxName || `window-${tab.windowIndex}`
@@ -662,6 +699,7 @@ function DashboardApp() {
         workspaceDescription: tab.workspaceDescription || '',
         workspaceActive: tab.active,
         windowIndex: tab.windowIndex,
+        windowId: tab.windowId || '',
         windowName,
         tmuxName: tab.tmuxName || tab.windowName || '',
         label: tab.label || '',
@@ -680,6 +718,7 @@ function DashboardApp() {
           tab.workspaceDescription || '',
           String(tab.windowIndex),
           '#' + tab.windowIndex,
+          tab.windowId || '',
           tab.label || '',
           tab.status || '',
           tab.tmuxName || '',
@@ -1058,8 +1097,9 @@ function DashboardApp() {
     return buildWorkspaceSocketUrl(activeWorkspaceId, activeWindowIndex, {
       hostId: selectedConnection?.hostId,
       local: selectedConnection ? selectedConnection.local !== false : true,
+      windowId: activeWindow?.windowId || selectedConnection?.windowId,
     })
-  }, [activeTerminalConnection, activeWorkspaceId, activeWindowIndex])
+  }, [activeTerminalConnection, activeWindow, activeWorkspaceId, activeWindowIndex])
 
   // Render terminal view
   const renderTerminalView = () => {
@@ -1221,7 +1261,10 @@ function DashboardApp() {
                   wsUrl={buildWorkspaceSocketUrl(
                     workspace.id,
                     workspace.id === activeWorkspaceId ? activeWindowIndex : null,
-                    { monitor: true },
+                    {
+                      monitor: true,
+                      windowId: workspace.id === activeWorkspaceId ? activeWindow?.windowId : '',
+                    },
                   )}
                   fontSize={overviewFontSize}
                   monitorMode
@@ -1326,7 +1369,7 @@ function DashboardApp() {
         )}
 
         <TerminalViewer
-          key={`${activeWorkspaceId}-${activeWindowIndex}`}
+          key={`${activeWorkspaceId}-${activeWindowIndex}-${activeWindow?.windowId || ''}`}
           wsUrl={wsUrl}
           fontSize={terminalFontSize}
           onBridgeReady={handleTerminalBridgeReady}
