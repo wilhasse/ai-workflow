@@ -56,13 +56,53 @@ export function useWorkspaces() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({ label: name }),
       })
       if (!response.ok) {
         return null
       }
       const data = await response.json()
       return data.windows || []
+    } catch {
+      return null
+    }
+  }, [])
+
+  const fetchTerminalTabs = useCallback(async () => {
+    try {
+      const response = await fetch('/api/terminal-tabs')
+      if (!response.ok) {
+        throw new Error(`Failed to fetch terminal tabs: ${response.status}`)
+      }
+      const data = await response.json()
+      return {
+        tabs: data.tabs || [],
+        errors: data.errors || [],
+      }
+    } catch (err) {
+      return {
+        tabs: [],
+        errors: [{ error: err.message || 'Unable to load terminal tabs' }],
+      }
+    }
+  }, [])
+
+  const setWindowLabel = useCallback(async ({ hostId, sessionId, windowIndex, label }) => {
+    try {
+      const response = await fetch(
+        `/api/terminal-tabs/${encodeURIComponent(hostId)}/${encodeURIComponent(sessionId)}/${encodeURIComponent(windowIndex)}/label`,
+        {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ label }),
+        },
+      )
+      if (!response.ok) {
+        return null
+      }
+      return response.json()
     } catch {
       return null
     }
@@ -88,5 +128,7 @@ export function useWorkspaces() {
     refresh: fetchWorkspaces,
     fetchWindows,
     renameWindow,
+    fetchTerminalTabs,
+    setWindowLabel,
   }
 }

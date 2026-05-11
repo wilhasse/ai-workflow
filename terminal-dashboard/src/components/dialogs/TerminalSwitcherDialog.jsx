@@ -153,6 +153,7 @@ function TerminalSwitcherDialog({
                     <span className="terminal-switcher-window-name">{entry.windowName}</span>
                   </div>
                   <div className="terminal-switcher-item-meta">
+                    {entry.label ? `tmux ${entry.tmuxName} · ` : ''}
                     {entry.workspaceDescription ? `${entry.workspaceDescription} · ` : ''}
                     {entry.windowActive ? 'active tab' : 'background tab'} · recent {formatRelativeTime(entry.recentAt)} · selected {entry.useCount}x
                   </div>
@@ -165,7 +166,7 @@ function TerminalSwitcherDialog({
                     onRenameEntry(entry)
                   }}
                 >
-                  Rename
+                  Label
                 </button>
               </div>
             ))

@@ -35,10 +35,10 @@ function WindowTabs({
           type="button"
           className={`window-tab ${activeWindowIndex === window.index ? 'active' : ''}`}
           onClick={() => onSelectWindow(window.index)}
-          title={`Window ${window.index}: ${window.name}`}
+          title={`Window ${window.index}: ${window.displayName || window.name}${window.label ? ` (tmux: ${window.tmuxName})` : ''}`}
         >
           <span className="window-index">{window.index}</span>
-          <span className="window-name">{window.name}</span>
+          <span className="window-name">{window.displayName || window.name}</span>
         </button>
       ))}
       <button

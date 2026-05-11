@@ -48,7 +48,7 @@ function WindowSheet({
               }}
             >
               <span className="window-item-index">{window.index}</span>
-              <span className="window-item-name">{window.name}</span>
+              <span className="window-item-name">{window.displayName || window.name}</span>
               {window.active && <span className="window-item-active">*</span>}
             </button>
           ))}

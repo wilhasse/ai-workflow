@@ -116,6 +116,10 @@ DEEPGRAM_TTS_ENCODING=mp3
 
 Mobile voice input posts recorded audio to `/api/voice/transcribe`. The `/mobile` terminal also has a `Read` control that captures recent terminal output and plays it through `/api/voice/tts`.
 
+### Tmux Tab Labels
+
+The desktop dashboard has an `Organize` view for app-only tmux window labels. Labels are stored in the shared launcher state at `~/.local/state/ai-workflow/workspace-v2.json`, show in Ctrl+Enter switchers and `/mobile`, and do not rename the real tmux windows.
+
 ### Architecture
 
 ```

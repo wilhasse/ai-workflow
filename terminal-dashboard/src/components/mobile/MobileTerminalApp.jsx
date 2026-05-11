@@ -413,7 +413,7 @@ function WindowList({ workspace, selectedIndex, onSelectWindow, onBack, onRefres
               onClick={() => onSelectWindow(window)}
             >
               <span className="mobile-window-index">#{window.index}</span>
-              <span className="mobile-window-name">{window.name}</span>
+              <span className="mobile-window-name">{window.displayName || window.name}</span>
               <span className="mobile-window-meta">{formatActivity(window.lastActivityAt)}</span>
             </button>
           ))}
@@ -1234,7 +1234,7 @@ function MobileTerminalApp() {
           <strong>{selectedWorkspace?.name || 'No terminal selected'}</strong>
           <small>
             {selectedWorkspace && selectedWindow
-              ? `${selectedWorkspace.hostName} / #${selectedWindow.index} ${selectedWindow.name}`
+              ? `${selectedWorkspace.hostName} / #${selectedWindow.index} ${selectedWindow.displayName || selectedWindow.name}`
               : 'Choose a workspace and tmux tab'}
           </small>
         </div>

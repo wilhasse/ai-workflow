@@ -14,6 +14,7 @@ import VoiceSheet from './components/sheets/VoiceSheet'
 import SettingsSheet from './components/sheets/SettingsSheet'
 import WorkspaceCard from './components/workspace/WorkspaceCard'
 import WindowTabs from './components/workspace/WindowTabs'
+import TerminalOrganizer from './components/workspace/TerminalOrganizer'
 
 // Hooks
 import { useIsMobile, useMediaQuery } from './hooks/useMediaQuery'
@@ -146,6 +147,8 @@ function DashboardApp() {
     refresh: refreshWorkspaces,
     fetchWindows,
     renameWindow,
+    fetchTerminalTabs,
+    setWindowLabel,
   } = useWorkspaces()
 
   // Active workspace and window state
@@ -154,6 +157,11 @@ function DashboardApp() {
   const [windows, setWindows] = useState([])
   const [windowsByWorkspace, setWindowsByWorkspace] = useState({})
   const [windowsLoading, setWindowsLoading] = useState(false)
+  const [desktopView, setDesktopView] = useState('terminal')
+  const [terminalTabs, setTerminalTabs] = useState([])
+  const [terminalTabsLoading, setTerminalTabsLoading] = useState(false)
+  const [terminalTabErrors, setTerminalTabErrors] = useState([])
+  const [terminalLabelSavingId, setTerminalLabelSavingId] = useState(null)
 
   // Terminal state
   const [terminalFontSize, setTerminalFontSize] = useState(() => {
@@ -393,6 +401,41 @@ function DashboardApp() {
     setWindowsLoading(false)
   }, [activeWorkspaceId, applyWorkspaceWindows, fetchWindows])
 
+  const loadTerminalTabs = useCallback(async () => {
+    setTerminalTabsLoading(true)
+    const result = await fetchTerminalTabs()
+    setTerminalTabs(result.tabs)
+    setTerminalTabErrors(result.errors)
+    setTerminalTabsLoading(false)
+  }, [fetchTerminalTabs])
+
+  useEffect(() => {
+    if (desktopView !== 'organizer' || isMobile) {
+      return
+    }
+    loadTerminalTabs()
+  }, [desktopView, isMobile, loadTerminalTabs])
+
+  const handleSaveTerminalLabel = useCallback(async (tab, label) => {
+    setTerminalLabelSavingId(tab.id)
+    const result = await setWindowLabel({
+      hostId: tab.hostId,
+      sessionId: tab.sessionId,
+      windowIndex: tab.windowIndex,
+      label,
+    })
+    setTerminalLabelSavingId(null)
+    if (!result) {
+      setTerminalTabErrors([{ error: 'Unable to save terminal label.' }])
+      return
+    }
+    await loadTerminalTabs()
+    if (tab.sessionId === activeWorkspaceId) {
+      const windowList = await fetchWindows(activeWorkspaceId)
+      applyWorkspaceWindows(activeWorkspaceId, windowList)
+    }
+  }, [activeWorkspaceId, applyWorkspaceWindows, fetchWindows, loadTerminalTabs, setWindowLabel])
+
   const recordWindowUsage = useCallback((workspaceId, windowIndex) => {
     if (!workspaceId || !Number.isFinite(windowIndex)) {
       return null
@@ -438,6 +481,7 @@ function DashboardApp() {
   const handleSelectTerminalEntry = useCallback((entry) => {
     setActiveWorkspaceId(entry.workspaceId)
     setActiveWindowIndex(entry.windowIndex)
+    setDesktopView('terminal')
     lastTrackedWindowKeyRef.current = recordWindowUsage(entry.workspaceId, entry.windowIndex)
     closeTerminalSwitcher()
   }, [closeTerminalSwitcher, recordWindowUsage])
@@ -455,21 +499,21 @@ function DashboardApp() {
     }
 
     const nextName = window.prompt(
-      'Rename tmux tab #' + entry.windowIndex + ' in ' + entry.workspaceName,
-      entry.windowName,
+      'Label tmux tab #' + entry.windowIndex + ' in ' + entry.workspaceName + ' (empty clears the label)',
+      entry.label || '',
     )
     if (nextName === null) {
       return
     }
 
     const trimmedName = nextName.trim()
-    if (!trimmedName || trimmedName === entry.windowName) {
+    if (trimmedName === (entry.label || '')) {
       return
     }
 
     const renamedWindows = await renameWindow(entry.workspaceId, entry.windowIndex, trimmedName)
     if (!renamedWindows) {
-      window.alert('Unable to rename the tmux tab.')
+      window.alert('Unable to save the tmux tab label.')
       return
     }
 
@@ -491,7 +535,9 @@ function DashboardApp() {
           workspaceDescription: workspace.description || '',
           workspaceActive: workspace.active,
           windowIndex: windowItem.index,
-          windowName: windowItem.name,
+          windowName: windowItem.displayName || windowItem.name,
+          tmuxName: windowItem.tmuxName || windowItem.name,
+          label: windowItem.label || '',
           windowActive: windowItem.active,
           useCount: usage.useCount ?? 0,
           lastUsedAt,
@@ -503,6 +549,8 @@ function DashboardApp() {
             workspace.description || '',
             String(windowItem.index),
             '#' + windowItem.index,
+            windowItem.label || '',
+            windowItem.tmuxName || '',
             windowItem.name,
           ].join(' ').toLowerCase(),
         }
@@ -1280,6 +1328,14 @@ function DashboardApp() {
         <div className="header-right">
           <button
             type="button"
+            className={`secondary switcher-btn ${desktopView === 'organizer' ? 'active' : ''}`}
+            onClick={() => setDesktopView((view) => (view === 'organizer' ? 'terminal' : 'organizer'))}
+            title="Organize tmux tab labels"
+          >
+            {desktopView === 'organizer' ? 'Terminal' : 'Organize'}
+          </button>
+          <button
+            type="button"
             className="secondary switcher-btn"
             onClick={openTerminalSwitcher}
             title="Jump between terminals and tmux tabs (Ctrl+Enter)"
@@ -1326,7 +1382,16 @@ function DashboardApp() {
 
       {/* Main content */}
       <main className="app-main">
-        {renderTerminalView()}
+        {desktopView === 'organizer' ? (
+          <TerminalOrganizer
+            tabs={terminalTabs}
+            loading={terminalTabsLoading}
+            errors={terminalTabErrors}
+            savingId={terminalLabelSavingId}
+            onRefresh={loadTerminalTabs}
+            onSaveLabel={handleSaveTerminalLabel}
+          />
+        ) : renderTerminalView()}
       </main>
 
       {/* Voice status bar */}

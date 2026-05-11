@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 import time
 
+WINDOW_LABEL_MAX_LENGTH = 80
+
 
 DEFAULT_STATE_PATH = Path(
     os.environ.get(
@@ -13,6 +15,15 @@ DEFAULT_STATE_PATH = Path(
         Path.home() / ".local" / "state" / "ai-workflow" / "workspace-v2.json",
     )
 )
+
+
+def normalize_window_label(value: object) -> str:
+    normalized = " ".join(str(value or "").split())
+    return normalized[:WINDOW_LABEL_MAX_LENGTH]
+
+
+def window_label_key(host_id: str, session_id: str, window_index: int) -> str:
+    return f"{host_id}:{session_id}#{window_index}"
 
 
 @dataclass(slots=True)
@@ -34,6 +45,39 @@ class LauncherState:
         payload = self._load_payload()
         recent = payload.get("recent") or {}
         return {str(key): float(value) for key, value in recent.items()}
+
+    def window_labels(self) -> dict[str, dict]:
+        payload = self._load_payload()
+        labels = payload.get("windowLabels") or {}
+        if not isinstance(labels, dict):
+            return {}
+        return {
+            str(key): value
+            for key, value in labels.items()
+            if isinstance(value, dict) and normalize_window_label(value.get("label"))
+        }
+
+    def window_label(self, host_id: str, session_id: str, window_index: int) -> str:
+        record = self.window_labels().get(window_label_key(host_id, session_id, window_index))
+        return normalize_window_label(record.get("label") if record else "")
+
+    def set_window_label(self, host_id: str, session_id: str, window_index: int, label: object) -> str:
+        payload = self._load_payload()
+        labels = payload.setdefault("windowLabels", {})
+        if not isinstance(labels, dict):
+            labels = {}
+            payload["windowLabels"] = labels
+
+        key = window_label_key(host_id, session_id, window_index)
+        normalized = normalize_window_label(label)
+        if normalized:
+            labels[key] = {"label": normalized, "updatedAt": int(time.time())}
+        else:
+            labels.pop(key, None)
+
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        return normalized
 
     def mark_recent(self, workspace_target: str) -> None:
         payload = self._load_payload()

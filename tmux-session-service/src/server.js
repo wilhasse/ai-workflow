@@ -22,6 +22,7 @@ const config = {
   workspacesConfig: process.env.WORKSPACES_CONFIG ?? path.join(os.homedir(), 'ai-workflow', 'workspace-switcher', 'workspaces.json'),
   mobileWorkspacesConfig: process.env.MOBILE_WORKSPACES_CONFIG ?? path.join(os.homedir(), 'ai-workflow', 'workspace-v2', 'catalog', 'workspaces.v2.json'),
   mobileSelfHostId: process.env.MOBILE_SELF_HOST_ID ?? process.env.WSV2_SELF_HOST ?? 'vm10',
+  launcherStatePath: process.env.WSV2_STATE_PATH ?? path.join(os.homedir(), '.local', 'state', 'ai-workflow', 'workspace-v2.json'),
   sessionArchivePath: process.env.WSV2_SESSION_ARCHIVE_PATH ?? path.join(os.homedir(), '.local', 'state', 'ai-workflow', 'workspace-session-archive.json'),
   wsv2Script: process.env.WSV2_SCRIPT ?? path.join(os.homedir(), 'ai-workflow', 'workspace-v2', 'scripts', 'wsv2'),
   deepgramApiKey: process.env.DEEPGRAM_API_KEY ?? '',
@@ -195,6 +196,101 @@ const normalizePath = (value) => {
 }
 
 const isHostLocal = (host) => host?.id === config.mobileSelfHostId || host?.id === 'local'
+
+const normalizeWindowLabel = (value) => {
+  const normalized = String(value || '').replace(/\s+/g, ' ').trim()
+  return normalized.slice(0, 80)
+}
+
+const windowLabelKey = (hostId, sessionId, windowIndex) => `${hostId}:${sessionId}#${windowIndex}`
+
+const readLauncherState = async () => {
+  try {
+    const parsed = JSON.parse(await fs.readFile(config.launcherStatePath, 'utf8'))
+    return parsed && typeof parsed === 'object' ? parsed : { recent: {} }
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      console.warn(`Failed to load launcher state ${config.launcherStatePath}:`, safeErrorMessage(error))
+    }
+    return { recent: {} }
+  }
+}
+
+const writeLauncherState = async (payload) => {
+  await fs.mkdir(path.dirname(config.launcherStatePath), { recursive: true })
+  await fs.writeFile(config.launcherStatePath, JSON.stringify(payload, null, 2), 'utf8')
+}
+
+const readWindowLabels = async () => {
+  const state = await readLauncherState()
+  return state.windowLabels && typeof state.windowLabels === 'object' ? state.windowLabels : {}
+}
+
+const windowLabelCandidateKeys = (host, sessionId, windowIndex) => {
+  const hostIds = new Set([host?.id, ...(host?.legacyIds || [])].filter(Boolean))
+  if (isHostLocal(host)) {
+    hostIds.add(config.mobileSelfHostId)
+    hostIds.add('local')
+  }
+  return Array.from(hostIds).map((hostId) => windowLabelKey(hostId, sessionId, windowIndex))
+}
+
+const resolveWindowLabel = (labels, host, sessionId, windowIndex) => {
+  for (const key of windowLabelCandidateKeys(host, sessionId, windowIndex)) {
+    const label = normalizeWindowLabel(labels[key]?.label)
+    if (label) {
+      return label
+    }
+  }
+  return ''
+}
+
+const setWindowLabel = async (hostId, sessionId, windowIndex, label) => {
+  const state = await readLauncherState()
+  const labels = state.windowLabels && typeof state.windowLabels === 'object'
+    ? state.windowLabels
+    : {}
+  state.windowLabels = labels
+
+  const key = windowLabelKey(hostId, sessionId, windowIndex)
+  const normalized = normalizeWindowLabel(label)
+  if (normalized) {
+    labels[key] = {
+      label: normalized,
+      updatedAt: Math.floor(Date.now() / 1000),
+    }
+  } else {
+    delete labels[key]
+  }
+  await writeLauncherState(state)
+  return normalized
+}
+
+const decorateWindowWithLabel = (window, host, labels, sessionId = window.sessionId) => {
+  const tmuxName = window.tmuxName || window.name || `window-${window.index}`
+  const label = resolveWindowLabel(labels, host, sessionId, window.index)
+  const displayName = label || tmuxName
+  return {
+    ...window,
+    tmuxName,
+    label,
+    displayName,
+    name: displayName,
+  }
+}
+
+const recentScoreForWindow = (state, host, sessionId, windowIndex) => {
+  const recent = state.recent && typeof state.recent === 'object' ? state.recent : {}
+  const keys = [
+    ...windowLabelCandidateKeys(host, sessionId, windowIndex),
+    `${host?.id}:${sessionId}`,
+    sessionId,
+  ]
+  return Math.max(
+    ...keys.map((key) => Number(recent[key] || 0)).filter((value) => Number.isFinite(value)),
+    0,
+  ) * 1000
+}
 
 const safeErrorMessage = (error) => {
   const message = error?.message ?? String(error)
@@ -480,7 +576,7 @@ const tmuxKillSession = async (sessionId) => {
   return true
 }
 
-const tmuxListWindows = async (sessionId) => {
+const tmuxListWindows = async (sessionId, { host = null, labels = null } = {}) => {
   const response = await runTmux([
     'list-windows',
     '-t', sessionId,
@@ -492,7 +588,7 @@ const tmuxListWindows = async (sessionId) => {
     }
     throw response.error
   }
-  return response.stdout
+  const rows = response.stdout
     .split('\n')
     .filter(Boolean)
     .map((line) => {
@@ -502,11 +598,16 @@ const tmuxListWindows = async (sessionId) => {
       return {
         index: Number.parseInt(index, 10),
         name: name || `window-${index}`,
+        tmuxName: name || `window-${index}`,
         active: active === '1',
         lastActivityAt: Number.isFinite(activitySeconds) ? activitySeconds * 1000 : 0,
         paneCount: Number.isFinite(paneCount) ? paneCount : 0,
       }
     })
+  if (!labels || !host) {
+    return rows
+  }
+  return rows.map((window) => decorateWindowWithLabel(window, host, labels, sessionId))
 }
 
 const parseTmuxWindowRows = (stdout) =>
@@ -525,6 +626,7 @@ const parseTmuxWindowRows = (stdout) =>
         sessionId,
         index: windowIndex,
         name: name || `window-${index}`,
+        tmuxName: name || `window-${index}`,
         active: active === '1',
         lastActivityAt: Number.isFinite(activitySeconds) ? activitySeconds * 1000 : 0,
         paneCount: Number.isFinite(paneCount) ? paneCount : 0,
@@ -541,6 +643,9 @@ const groupWindowsBySession = (windows) => {
     grouped.get(window.sessionId).push({
       index: window.index,
       name: window.name,
+      tmuxName: window.tmuxName || window.name,
+      label: window.label || '',
+      displayName: window.displayName || window.name,
       active: window.active,
       lastActivityAt: window.lastActivityAt,
       paneCount: window.paneCount,
@@ -941,28 +1046,6 @@ const tmuxSelectWindow = async (sessionId, windowIndex) => {
   return response.ok
 }
 
-const sanitizeWindowName = (value) => {
-  if (!value) {
-    return null
-  }
-  const normalized = String(value).replace(/\s+/g, ' ').trim()
-  if (!normalized) {
-    return null
-  }
-  return normalized.slice(0, 80)
-}
-
-const tmuxRenameWindow = async (sessionId, windowIndex, windowName) => {
-  const response = await runTmux(['rename-window', '-t', `${sessionId}:${windowIndex}`, windowName])
-  if (!response.ok) {
-    if (response.error?.code === 1) {
-      return false
-    }
-    throw response.error
-  }
-  return true
-}
-
 const tmuxGetWindowSize = async (sessionId, windowIndex = null) => {
   const target =
     windowIndex !== null && Number.isFinite(windowIndex)
@@ -1196,10 +1279,11 @@ const decorateMobileWorkspace = ({ workspace, host, windows, active, agentSummar
   }
 }
 
-const buildHostMobileInventory = async (host, configuredWorkspaces) => {
-  const windowRows = isHostLocal(host)
+const buildHostMobileInventory = async (host, configuredWorkspaces, labels = {}) => {
+  const rawWindowRows = isHostLocal(host)
     ? await tmuxListAllWindows()
     : await remoteListAllWindows(host)
+  const windowRows = rawWindowRows.map((window) => decorateWindowWithLabel(window, host, labels))
   let agentRows = []
   try {
     agentRows = await listHostAgents(host)
@@ -1268,6 +1352,7 @@ const buildHostMobileInventory = async (host, configuredWorkspaces) => {
 const handleMobileWorkspaces = async (res) => {
   try {
     const catalog = await loadMobileCatalog()
+    const labels = await readWindowLabels()
     const workspacesByHost = new Map()
     catalog.hosts.forEach((host) => workspacesByHost.set(host.id, []))
     catalog.workspaces.forEach((workspace) => {
@@ -1280,7 +1365,7 @@ const handleMobileWorkspaces = async (res) => {
     const hosts = []
     for (const host of catalog.hosts) {
       try {
-        hosts.push(await buildHostMobileInventory(host, workspacesByHost.get(host.id) ?? []))
+        hosts.push(await buildHostMobileInventory(host, workspacesByHost.get(host.id) ?? [], labels))
       } catch (error) {
         hosts.push({
           id: host.id,
@@ -1325,6 +1410,180 @@ const handleMobileWorkspaces = async (res) => {
     })
   } catch (error) {
     respond(res, 500, { error: safeErrorMessage(error), hosts: [], workspaces: [] })
+  }
+}
+
+const workspaceBySessionForHost = (workspaces) => {
+  const lookup = new Map()
+  workspaces.forEach((workspace) => {
+    if (!lookup.has(workspace.id)) {
+      lookup.set(workspace.id, workspace)
+    }
+  })
+  return lookup
+}
+
+const buildTerminalTabRecord = ({ host, workspace, window, selectedAt = 0 }) => {
+  const workspaceName = workspace?.name ?? formatDiscoveredWorkspaceName(window.sessionId)
+  const workspaceDescription = workspace?.description ?? 'Discovered tmux session'
+  const lastActivityAt = window.lastActivityAt || 0
+  return {
+    id: windowLabelKey(host.id, window.sessionId, window.index),
+    hostId: host.id,
+    hostName: host.name,
+    local: isHostLocal(host),
+    sessionId: window.sessionId,
+    workspaceId: window.sessionId,
+    workspaceName,
+    workspaceDescription,
+    discovered: !workspace,
+    windowIndex: window.index,
+    tmuxName: window.tmuxName || window.name,
+    label: window.label || '',
+    displayName: window.displayName || window.name,
+    windowName: window.displayName || window.name,
+    windowActive: window.active,
+    active: true,
+    lastActivityAt,
+    selectedAt,
+    recentAt: Math.max(lastActivityAt, selectedAt),
+    paneCount: window.paneCount ?? 0,
+  }
+}
+
+const buildTerminalTabsForHost = async (host, configuredWorkspaces, labels, launcherState) => {
+  const rawWindows = isHostLocal(host)
+    ? await tmuxListAllWindows()
+    : await remoteListAllWindows(host)
+  const windows = rawWindows.map((window) => decorateWindowWithLabel(window, host, labels))
+  const workspaceLookup = workspaceBySessionForHost(configuredWorkspaces)
+  return windows.map((window) => buildTerminalTabRecord({
+    host,
+    workspace: workspaceLookup.get(window.sessionId),
+    window,
+    selectedAt: recentScoreForWindow(launcherState, host, window.sessionId, window.index),
+  }))
+}
+
+const listHostSessionWindows = async (host, sessionId, labels) => {
+  if (isHostLocal(host)) {
+    return tmuxListWindows(sessionId, { host, labels })
+  }
+  const windows = await remoteListAllWindows(host)
+  return windows
+    .filter((window) => window.sessionId === sessionId)
+    .map((window) => decorateWindowWithLabel(window, host, labels))
+}
+
+const handleTerminalTabs = async (res) => {
+  try {
+    const catalog = await loadMobileCatalog()
+    const launcherState = await readLauncherState()
+    const labels = launcherState.windowLabels && typeof launcherState.windowLabels === 'object'
+      ? launcherState.windowLabels
+      : {}
+    const workspacesByHost = new Map()
+    catalog.hosts.forEach((host) => workspacesByHost.set(host.id, []))
+    catalog.workspaces.forEach((workspace) => {
+      if (!workspacesByHost.has(workspace.hostId)) {
+        workspacesByHost.set(workspace.hostId, [])
+      }
+      workspacesByHost.get(workspace.hostId).push(workspace)
+    })
+
+    const tabs = []
+    const errors = []
+    for (const host of catalog.hosts) {
+      try {
+        tabs.push(...await buildTerminalTabsForHost(
+          host,
+          workspacesByHost.get(host.id) ?? [],
+          labels,
+          launcherState,
+        ))
+      } catch (error) {
+        errors.push({ hostId: host.id, hostName: host.name, error: safeErrorMessage(error) })
+      }
+    }
+
+    tabs.sort((left, right) => {
+      if (right.recentAt !== left.recentAt) {
+        return right.recentAt - left.recentAt
+      }
+      if (left.hostName !== right.hostName) {
+        return left.hostName.localeCompare(right.hostName)
+      }
+      if (left.workspaceName !== right.workspaceName) {
+        return left.workspaceName.localeCompare(right.workspaceName)
+      }
+      return left.windowIndex - right.windowIndex
+    })
+
+    respond(res, 200, {
+      scannedAt: new Date().toISOString(),
+      tabs,
+      errors,
+    })
+  } catch (error) {
+    respond(res, 500, { error: safeErrorMessage(error), tabs: [] })
+  }
+}
+
+const handleSetTerminalTabLabel = async (req, res, hostIdRaw, sessionIdRaw, windowIndexRaw) => {
+  const sanitizedSessionId = sanitizeId(sessionIdRaw)
+  const windowIndex = Number.parseInt(windowIndexRaw, 10)
+  const host = await findMobileHost(hostIdRaw)
+  if (!host) {
+    respond(res, 404, { error: 'Host not found' })
+    return
+  }
+  if (!sanitizedSessionId || !Number.isFinite(windowIndex)) {
+    respond(res, 400, { error: 'Invalid session or window index' })
+    return
+  }
+
+  let body
+  try {
+    body = await readBody(req)
+  } catch (error) {
+    respond(res, 400, { error: error.message })
+    return
+  }
+
+  try {
+    const labels = await readWindowLabels()
+    const windows = await listHostSessionWindows(host, sanitizedSessionId, labels)
+    const existingWindow = windows.find((window) => window.index === windowIndex)
+    if (!existingWindow) {
+      respond(res, 404, { error: 'Window not found' })
+      return
+    }
+    await setWindowLabel(host.id, sanitizedSessionId, windowIndex, body.label ?? body.name ?? '')
+    const updatedLabels = await readWindowLabels()
+    const catalog = await loadMobileCatalog()
+    const workspace = catalog.workspaces.find(
+      (item) => item.hostId === host.id && item.id === sanitizedSessionId,
+    )
+    const updatedWindow = decorateWindowWithLabel(
+      {
+        ...existingWindow,
+        name: existingWindow.tmuxName || existingWindow.name,
+      },
+      host,
+      updatedLabels,
+      sanitizedSessionId,
+    )
+    const launcherState = await readLauncherState()
+    respond(res, 200, {
+      tab: buildTerminalTabRecord({
+        host,
+        workspace,
+        window: { ...updatedWindow, sessionId: sanitizedSessionId },
+        selectedAt: recentScoreForWindow(launcherState, host, sanitizedSessionId, windowIndex),
+      }),
+    })
+  } catch (error) {
+    respond(res, 500, { error: safeErrorMessage(error) })
   }
 }
 
@@ -1871,7 +2130,14 @@ const handleListWindows = async (res, sessionId) => {
       respond(res, 404, { error: 'Session not found', windows: [] })
       return
     }
-    const windows = await tmuxListWindows(sanitizedId)
+    const catalog = await loadMobileCatalog()
+    const host = catalog.hosts.find((item) => isHostLocal(item)) ?? {
+      id: config.mobileSelfHostId,
+      name: 'Local',
+      legacyIds: ['local'],
+    }
+    const labels = await readWindowLabels()
+    const windows = await tmuxListWindows(sanitizedId, { host, labels })
     respond(res, 200, { sessionId: sanitizedId, windows })
   } catch (error) {
     respond(res, 500, { error: error.message })
@@ -1894,19 +2160,22 @@ const handleRenameWindow = async (req, res, sessionId, windowIndexRaw) => {
     return
   }
 
-  const windowName = sanitizeWindowName(body.name)
-  if (!windowName) {
-    respond(res, 400, { error: 'Window name is required' })
-    return
-  }
-
   try {
-    const renamed = await tmuxRenameWindow(sanitizedId, windowIndex, windowName)
-    if (!renamed) {
+    const catalog = await loadMobileCatalog()
+    const host = catalog.hosts.find((item) => isHostLocal(item)) ?? {
+      id: config.mobileSelfHostId,
+      name: 'Local',
+      legacyIds: ['local'],
+    }
+    const labels = await readWindowLabels()
+    const existingWindows = await tmuxListWindows(sanitizedId, { host, labels })
+    if (!existingWindows.some((window) => window.index === windowIndex)) {
       respond(res, 404, { error: 'Window not found' })
       return
     }
-    const windows = await tmuxListWindows(sanitizedId)
+    await setWindowLabel(host.id, sanitizedId, windowIndex, body.label ?? body.name ?? '')
+    const updatedLabels = await readWindowLabels()
+    const windows = await tmuxListWindows(sanitizedId, { host, labels: updatedLabels })
     respond(res, 200, { sessionId: sanitizedId, windows })
   } catch (error) {
     respond(res, 500, { error: error.message })
@@ -1960,6 +2229,21 @@ const server = http.createServer(async (req, res) => {
   }
   if (method === 'GET' && pathName === '/mobile/workspaces') {
     await handleMobileWorkspaces(res)
+    return
+  }
+  if (method === 'GET' && pathName === '/terminal-tabs') {
+    await handleTerminalTabs(res)
+    return
+  }
+  const terminalTabLabelMatch = pathName.match(/^\/terminal-tabs\/([^/]+)\/([^/]+)\/([^/]+)\/label$/)
+  if (terminalTabLabelMatch && method === 'PUT') {
+    await handleSetTerminalTabLabel(
+      req,
+      res,
+      terminalTabLabelMatch[1],
+      terminalTabLabelMatch[2],
+      terminalTabLabelMatch[3],
+    )
     return
   }
   if (method === 'GET' && pathName === '/voice/status') {
@@ -2234,7 +2518,7 @@ const findMobileHost = async (hostId) => {
     return null
   }
   const catalog = await loadMobileCatalog()
-  return catalog.hosts.find((host) => host.id === sanitizedHostId) ?? null
+  return catalog.hosts.find((host) => hostMatchesId(host, sanitizedHostId)) ?? null
 }
 
 const buildRemoteAttachCommand = ({ sessionId, windowIndex }) => {

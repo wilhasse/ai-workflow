@@ -31,6 +31,8 @@ class TerminalStatus:
     session_id: str
     window_index: int
     window_name: str
+    tmux_window_name: str | None = None
+    window_label: str = ""
     window_active: bool = False
     activity: int = 0
     pane_count: int = 0
@@ -78,6 +80,8 @@ class TerminalStatus:
                 str(self.window_index),
                 f"#{self.window_index}",
                 self.window_name,
+                self.tmux_window_name or "",
+                self.window_label,
                 self.display_path,
             ]
         ).lower()
@@ -278,6 +282,7 @@ class WorkspaceActions:
 
     def list_terminal_statuses(self) -> list[TerminalStatus]:
         statuses: list[TerminalStatus] = []
+        window_labels = self.state.window_labels()
         workspace_lookup = {(workspace.host_id, workspace.id): workspace for workspace in self.config.workspaces}
         workspace_by_session: dict[str, WorkspaceRecord] = {}
         for workspace in self.config.workspaces:
@@ -310,13 +315,22 @@ class WorkspaceActions:
                     workspace = workspace_by_session.get(window["session_id"])
                 if workspace:
                     seen_configured.add(workspace.id)
+                window_label = _window_label_for(
+                    window_labels,
+                    host.id,
+                    window["session_id"],
+                    window["window_index"],
+                )
+                tmux_window_name = window["window_name"]
                 statuses.append(
                     TerminalStatus(
                         host_id=host.id,
                         host=host,
                         session_id=window["session_id"],
                         window_index=window["window_index"],
-                        window_name=window["window_name"],
+                        window_name=window_label or tmux_window_name,
+                        tmux_window_name=tmux_window_name,
+                        window_label=window_label,
                         window_active=window["window_active"],
                         activity=window["activity"],
                         pane_count=window["pane_count"],
@@ -643,3 +657,13 @@ def _parse_windows(lines: Iterable[str]) -> list[dict]:
             }
         )
     return windows
+
+
+def _window_label_for(
+    labels: dict[str, dict],
+    host_id: str,
+    session_id: str,
+    window_index: int,
+) -> str:
+    record = labels.get(f"{host_id}:{session_id}#{window_index}") or {}
+    return str(record.get("label") or "").strip()

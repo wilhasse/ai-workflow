@@ -39,6 +39,66 @@ def load_recent_scores():
         return {}
 
 
+def normalize_window_label(value):
+    return ' '.join(str(value or '').split())[:80]
+
+
+def load_window_labels():
+    try:
+        with open(LAUNCHER_STATE_FILE, 'r') as f:
+            payload = json.load(f)
+        labels = payload.get('windowLabels') or {}
+        if not isinstance(labels, dict):
+            return {}
+        return labels
+    except (FileNotFoundError, json.JSONDecodeError, TypeError, ValueError):
+        return {}
+
+
+def window_label_for_entry(entry, labels=None):
+    labels = labels or {}
+    host_id = entry.get('host_id', 'local')
+    state_host_id = entry.get('state_host_id') or host_id
+    session_name = entry.get('session_name', '')
+    window_index = entry.get('window_index')
+    keys = [
+        entry.get('target'),
+        f"{state_host_id}:{session_name}#{window_index}",
+        f"{host_id}:{session_name}#{window_index}",
+        f"local:{session_name}#{window_index}",
+    ]
+    for key in keys:
+        if not key:
+            continue
+        label = normalize_window_label((labels.get(key) or {}).get('label'))
+        if label:
+            return label
+    return ''
+
+
+def save_window_label(host_id, session_name, window_index, label):
+    payload = {'recent': {}}
+    try:
+        with open(LAUNCHER_STATE_FILE, 'r') as f:
+            payload = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    labels = payload.setdefault('windowLabels', {})
+    if not isinstance(labels, dict):
+        labels = {}
+        payload['windowLabels'] = labels
+    key = f"{host_id}:{session_name}#{window_index}"
+    normalized = normalize_window_label(label)
+    if normalized:
+        labels[key] = {'label': normalized, 'updatedAt': int(time.time())}
+    else:
+        labels.pop(key, None)
+    os.makedirs(os.path.dirname(LAUNCHER_STATE_FILE), exist_ok=True)
+    with open(LAUNCHER_STATE_FILE, 'w') as f:
+        json.dump(payload, f, indent=2, sort_keys=True)
+    return normalized
+
+
 def save_recent_score(target):
     payload = {'recent': {}}
     try:
@@ -1019,7 +1079,7 @@ class TerminalSwitcherDialog(Gtk.Dialog):
         box.pack_start(scrolled, True, True, 0)
 
         action_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        self.rename_button = Gtk.Button(label='Rename tab')
+        self.rename_button = Gtk.Button(label='Label tab')
         self.rename_button.connect('clicked', self._rename_selected)
         action_box.pack_start(self.rename_button, False, False, 0)
 
@@ -1098,7 +1158,7 @@ class TerminalSwitcherDialog(Gtk.Dialog):
             host = GLib.markup_escape_text(entry.get('host_name', entry.get('host_id', 'local')))
             workspace = entry.get('workspace_name') or entry['session_name']
             tab = GLib.markup_escape_text(f"#{entry['window_index']}")
-            task = GLib.markup_escape_text(entry.get('window_name') or f"window-{entry['window_index']}")
+            task = GLib.markup_escape_text(entry.get('display_window_name') or entry.get('window_name') or f"window-{entry['window_index']}")
             if entry.get('discovered'):
                 workspace = f"{workspace} *"
             workspace = GLib.markup_escape_text(workspace)
@@ -1141,7 +1201,7 @@ class TerminalSwitcherDialog(Gtk.Dialog):
         if not self.selected_entry:
             return
         self.parent.rename_tmux_window_from_entry(self.selected_entry, self)
-        # Refresh entries after rename while keeping dialog open.
+        # Refresh entries after label edits while keeping dialog open.
         self.all_entries = self.parent.build_terminal_switcher_entries()
         self._on_search_changed(self.search_entry)
 
@@ -1679,6 +1739,7 @@ class WorkspaceSwitcher(Gtk.Window):
         """Build all-host tmux window entries using the web UI row format."""
         entries = []
         recent_scores = load_recent_scores()
+        labels = load_window_labels()
 
         for host in self._display_hosts():
             host_id = host.get('id', 'local')
@@ -1702,6 +1763,9 @@ class WorkspaceSwitcher(Gtk.Window):
                     'discovered': discovered,
                 }
                 entry['target'] = f"{state_host_id}:{session_name}#{window['window_index']}"
+                entry['tmux_window_name'] = window.get('window_name') or f"window-{window['window_index']}"
+                entry['window_label'] = window_label_for_entry(entry, labels)
+                entry['display_window_name'] = entry['window_label'] or entry['tmux_window_name']
                 entry['recent_at'] = terminal_recent_score(entry, recent_scores)
                 entry['search_text'] = ' '.join([
                     host_name,
@@ -1712,7 +1776,8 @@ class WorkspaceSwitcher(Gtk.Window):
                     session_name,
                     str(window['window_index']),
                     f"#{window['window_index']}",
-                    window.get('window_name', ''),
+                    entry.get('window_label', ''),
+                    entry.get('tmux_window_name', ''),
                 ]).lower()
                 entries.append(entry)
 
@@ -1824,9 +1889,9 @@ class WorkspaceSwitcher(Gtk.Window):
         GLib.timeout_add(1000, self._delayed_refresh)
 
     def rename_tmux_window_from_entry(self, entry, dialog_parent=None):
-        """Rename a tmux window from the terminal switcher."""
+        """Set an app-only label for a tmux window from the terminal switcher."""
         rename_dialog = Gtk.Dialog(
-            title='Rename tmux tab',
+            title='Label tmux tab',
             transient_for=dialog_parent or self,
             flags=0
         )
@@ -1843,27 +1908,23 @@ class WorkspaceSwitcher(Gtk.Window):
         label = Gtk.Label(label=f"{entry.get('host_name')} / {entry.get('workspace_name')} · #{entry['window_index']}")
         label.set_xalign(0)
         box.pack_start(label, False, False, 6)
+        hint = Gtk.Label(label=f"tmux name: {entry.get('tmux_window_name') or entry.get('window_name', '')} · leave empty to clear")
+        hint.set_xalign(0)
+        box.pack_start(hint, False, False, 6)
         name_entry = Gtk.Entry()
-        name_entry.set_text(entry.get('window_name', ''))
+        name_entry.set_text(entry.get('window_label', ''))
         name_entry.select_region(0, -1)
         name_entry.connect('activate', lambda _entry: rename_dialog.response(Gtk.ResponseType.OK))
         box.pack_start(name_entry, False, False, 0)
         rename_dialog.show_all()
         response = rename_dialog.run()
-        new_name = name_entry.get_text().strip()
+        new_name = name_entry.get_text()
         rename_dialog.destroy()
-        if response != Gtk.ResponseType.OK or not new_name:
+        if response != Gtk.ResponseType.OK:
             return
 
-        session_target = f"{entry['session_name']}:{entry['window_index']}"
-        host_id = entry.get('host_id', 'local')
-        host_info = entry.get('host_info')
-        if host_id == 'local' or not host_info or not host_info.get('ssh'):
-            subprocess.run(['tmux', 'rename-window', '-t', session_target, new_name], env={**os.environ, 'TMUX': ''})
-        else:
-            remote_cmd = f"tmux rename-window -t {shlex.quote(session_target)} {shlex.quote(new_name)}"
-            subprocess.run(['ssh', '-o', 'ConnectTimeout=3', '-o', 'BatchMode=yes', host_info['ssh'], remote_cmd], capture_output=True, timeout=6)
-            self.remote_session_cache.invalidate(host_id)
+        host_id = entry.get('state_host_id') or entry.get('host_id', 'local')
+        save_window_label(host_id, entry['session_name'], entry['window_index'], new_name)
         self.refresh_workspaces()
 
     def _focus_existing_window(self, search_term):

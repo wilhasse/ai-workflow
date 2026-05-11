@@ -262,6 +262,30 @@ class LauncherStateTests(unittest.TestCase):
         self.assertIn('vm9:dbtools', scores)
         self.assertGreater(scores['vm9:dbtools'], 0)
 
+    def test_window_label_preserves_recent_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'state.json'
+            state = LauncherState(path)
+            state.mark_recent('vm9:dbtools#2')
+            label = state.set_window_label('vm9', 'dbtools', 2, '  RENAC   calls  ')
+
+            payload = json.loads(path.read_text(encoding='utf-8'))
+
+        self.assertEqual(label, 'RENAC calls')
+        self.assertIn('vm9:dbtools#2', payload['recent'])
+        self.assertEqual(payload['windowLabels']['vm9:dbtools#2']['label'], 'RENAC calls')
+
+    def test_empty_window_label_clears_record(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'state.json'
+            state = LauncherState(path)
+            state.set_window_label('vm9', 'dbtools', 2, 'api task')
+            state.set_window_label('vm9', 'dbtools', 2, '   ')
+
+            labels = state.window_labels()
+
+        self.assertNotIn('vm9:dbtools#2', labels)
+
 
 class CodexParkingTests(unittest.TestCase):
     def test_parse_agent_target_accepts_session_and_window_forms(self) -> None:
@@ -533,6 +557,39 @@ class TerminalRankingTests(unittest.TestCase):
                 statuses = actions.list_terminal_statuses()
 
         self.assertEqual(statuses[0].target, 'vm9:dbtools#2')
+
+    def test_list_terminal_statuses_prefers_window_label_for_display(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, \
+            mock.patch.dict(os.environ, {'WSV2_SELF_HOST': 'vm10'}, clear=True):
+            config_path = write_v2_config(Path(tmp))
+            state_path = Path(tmp) / 'state.json'
+            actions = WorkspaceActions(config_path=config_path, state_path=state_path)
+            actions.state.set_window_label('vm9', 'dbtools', 2, 'RENAC calls')
+
+            with mock.patch.object(actions, '_list_local_windows', return_value=[]), \
+                mock.patch.object(
+                    actions,
+                    '_list_remote_windows',
+                    return_value=(
+                        [
+                            {
+                                'session_id': 'dbtools',
+                                'window_index': 2,
+                                'window_name': 'codex bash',
+                                'window_active': False,
+                                'activity': 10,
+                                'pane_count': 1,
+                            }
+                        ],
+                        True,
+                    ),
+                ):
+                statuses = actions.list_terminal_statuses()
+
+        status = next(item for item in statuses if item.target == 'vm9:dbtools#2')
+        self.assertEqual(status.window_name, 'RENAC calls')
+        self.assertEqual(status.tmux_window_name, 'codex bash')
+        self.assertEqual(status.window_label, 'RENAC calls')
 
 
 class PopupEnvironmentTests(unittest.TestCase):
