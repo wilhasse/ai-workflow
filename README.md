@@ -125,6 +125,8 @@ Available tab flags:
 - `Check` means it needs follow-up or verification.
 - `Idle` means it can stay open, but no current action is pending.
 
+New workspaces added through the GTK panel seed the first tmux tab label from the workspace display name, so the workspace is immediately promoted in Ctrl+Enter and `/mobile` without needing a manual label for the first tab.
+
 ### Architecture
 
 ```

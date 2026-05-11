@@ -27,6 +27,7 @@ LAUNCHER_STATE_FILE = os.path.expanduser("~/.local/state/ai-workflow/workspace-v
 REFRESH_INTERVAL = 2000  # ms
 SSH_HEALTH_INTERVAL = 30  # seconds
 SSH_CACHE_TTL = 1  # seconds - short TTL for responsive activity detection
+DEFAULT_WORKSPACE_WINDOW_INDEXES = (0, 1)
 
 
 def load_recent_scores():
@@ -2606,6 +2607,28 @@ class WorkspaceSwitcher(Gtk.Window):
         self._save_full_config(self.config)
         self._update_host_workspace_counts()
 
+    def _ensure_default_workspace_window_labels(self, workspace):
+        """Seed app-only labels for the first tmux window of a newly added workspace."""
+        session_name = workspace.get('id')
+        label = normalize_window_label(workspace.get('name') or session_name)
+        if not session_name or not label:
+            return
+
+        workspace_host_id = workspace.get('host', 'local')
+        state_host_id = self._state_host_id(workspace_host_id)
+        labels = load_window_labels()
+        for window_index in DEFAULT_WORKSPACE_WINDOW_INDEXES:
+            entry = {
+                'host_id': workspace_host_id,
+                'state_host_id': state_host_id,
+                'session_name': session_name,
+                'window_index': window_index,
+                'target': f"{state_host_id}:{session_name}#{window_index}",
+            }
+            if window_label_for_entry(entry, labels):
+                continue
+            save_window_metadata(state_host_id, session_name, window_index, label=label)
+
     def _remove_workspace_from_file(self, config_path, workspace_id, host_id):
         try:
             with open(config_path, 'r') as f:
@@ -2856,6 +2879,7 @@ class WorkspaceSwitcher(Gtk.Window):
                 workspaces = self.config.get('workspaces', [])
                 workspaces.append(ws)
                 self.save_config(workspaces)
+                self._ensure_default_workspace_window_labels(ws)
                 self.refresh_workspaces()
 
         dialog.destroy()
