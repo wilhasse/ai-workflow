@@ -116,7 +116,6 @@ const buildWindowUsageKey = (workspaceId, windowIndex, hostId = null) =>
 
 const terminalStatusRank = (status) => {
   if (status === 'check') return 0
-  if (status === 'idle') return 2
   return 1
 }
 

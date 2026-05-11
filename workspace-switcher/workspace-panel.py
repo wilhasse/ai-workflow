@@ -224,8 +224,6 @@ def terminal_status_rank(status):
     normalized = normalize_terminal_status(status)
     if normalized == 'check':
         return 0
-    if normalized == 'idle':
-        return 2
     return 1
 
 

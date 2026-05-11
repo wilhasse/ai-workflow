@@ -583,7 +583,7 @@ class TerminalRankingTests(unittest.TestCase):
 
         self.assertEqual(sorted([unlabeled, labeled], key=terminal_sort_key), [labeled, unlabeled])
 
-    def test_terminal_sort_places_check_first_and_idle_last(self) -> None:
+    def test_terminal_sort_places_check_first_without_demoting_idle(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, \
             mock.patch.dict(os.environ, {'WSV2_SELF_HOST': 'vm10'}, clear=True):
             config = load_config(write_v2_config(Path(tmp)))
@@ -615,12 +615,13 @@ class TerminalRankingTests(unittest.TestCase):
             session_id=workspace.id,
             window_index=4,
             window_name='idle task',
+            window_label='idle task',
             window_status='idle',
             activity=1000,
             workspace=workspace,
         )
 
-        self.assertEqual(sorted([idle, active, check], key=terminal_sort_key), [check, active, idle])
+        self.assertEqual(sorted([active, check, idle], key=terminal_sort_key), [check, idle, active])
 
     def test_list_terminal_statuses_orders_manual_selection_before_stale_activity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, \

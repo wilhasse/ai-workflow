@@ -30,13 +30,11 @@ const statusLabels = {
 
 const sectionKeyForEntry = (entry) => {
   if (entry.status === 'check') return 'check'
-  if (entry.status === 'idle') return 'idle'
   return entry.label ? 'labeled' : 'other'
 }
 
 const sectionLabelForEntry = (entry) => {
   if (entry.status === 'check') return 'Needs check'
-  if (entry.status === 'idle') return 'Idle tabs'
   return entry.label ? 'Labeled tabs' : 'Other active tabs'
 }
 
