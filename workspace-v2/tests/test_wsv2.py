@@ -11,6 +11,7 @@ from wsv2.actions import (
     TerminalStatus,
     WorkspaceActions,
     build_attach_command,
+    build_terminal_attach_command,
     build_terminal_command,
     build_workspace_command,
     terminal_recent_score,
@@ -243,6 +244,26 @@ class CommandBuilderTests(unittest.TestCase):
         )
         self.assertIn('tmux switch-client -t mysql', command)
         self.assertIn('tmux new-session -d -s mysql', command)
+
+    def test_terminal_attach_command_targets_selected_window(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp,             mock.patch('wsv2.catalog._runtime_identity_tokens', return_value={'godev4', 'godev4.local'}):
+            config = load_config(write_v2_config(Path(tmp)))
+
+        local_command = build_terminal_attach_command(
+            config.get_host('vm10'),
+            session_id='dbtools',
+            window_index=3,
+            run_local=True,
+        )
+        remote_command = build_terminal_attach_command(
+            config.get_host('vm9'),
+            session_id='dbtools',
+            window_index=3,
+            run_local=False,
+        )
+
+        self.assertIn('tmux attach-session -t dbtools:3', local_command)
+        self.assertIn('tmux attach -t dbtools:3', remote_command)
 
     def test_build_terminal_command_uses_terminal_specific_flags(self) -> None:
         xfce = build_terminal_command('xfce4-terminal', 'echo hi', 'mysql')

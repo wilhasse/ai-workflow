@@ -2387,10 +2387,11 @@ const handleTerminalSocket = async (ws, sessionIdRaw, searchParams) => {
 
   let ptyProcess
   let copyModeActive = false
+  const attachTarget = buildTmuxWindowTarget(sanitizedSessionId, windowIndex)
   try {
     ptyProcess = pty.spawn(
       config.tmuxBin,
-      ['attach-session', '-t', sanitizedSessionId],
+      ['attach-session', '-t', attachTarget],
       {
         name: 'xterm-256color',
         cols: ptyCols,
@@ -2523,13 +2524,14 @@ const findMobileHost = async (hostId) => {
 
 const buildRemoteAttachCommand = ({ sessionId, windowIndex }) => {
   const sessionTarget = shellQuote(sessionId)
+  const attachTarget = shellQuote(buildTmuxWindowTarget(sessionId, windowIndex))
   const commands = [
     `${config.tmuxBin} has-session -t ${sessionTarget} 2>/dev/null || ${config.tmuxBin} new-session -d -s ${sessionTarget}`,
   ]
   if (windowIndex !== null && Number.isFinite(windowIndex)) {
     commands.push(`${config.tmuxBin} select-window -t ${shellQuote(`${sessionId}:${windowIndex}`)} 2>/dev/null || true`)
   }
-  commands.push(`exec ${config.tmuxBin} attach-session -t ${sessionTarget}`)
+  commands.push(`exec ${config.tmuxBin} attach-session -t ${attachTarget}`)
   return commands.join('; ')
 }
 

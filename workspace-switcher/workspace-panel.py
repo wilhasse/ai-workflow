@@ -1854,6 +1854,67 @@ class WorkspaceSwitcher(Gtk.Window):
             })
         return windows
 
+    def _switch_local_tmux_clients_to_window(self, session_name, session_target):
+        """Point existing tmux clients for a session at the selected window."""
+        env = {**os.environ, 'TMUX': ''}
+        try:
+            subprocess.run(
+                ['tmux', 'select-window', '-t', session_target],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                env=env
+            )
+            result = subprocess.run(
+                ['tmux', 'list-clients', '-t', session_name, '-F', '#{client_name}'],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                env=env
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return
+        if result.returncode != 0:
+            return
+        for client_name in result.stdout.splitlines():
+            client_name = client_name.strip()
+            if not client_name:
+                continue
+            try:
+                subprocess.run(
+                    ['tmux', 'switch-client', '-c', client_name, '-t', session_target],
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                    env=env
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+
+    def _switch_remote_tmux_clients_to_window(self, host_info, session_name, session_target):
+        """Point existing remote tmux clients for a session at the selected window."""
+        if not host_info or not host_info.get('ssh'):
+            return
+        ssh_target = host_info['ssh']
+        quoted_session = shlex.quote(session_name)
+        quoted_target = shlex.quote(session_target)
+        remote_command = (
+            f"tmux select-window -t {quoted_target} 2>/dev/null || true; "
+            f"tmux list-clients -t {quoted_session} -F '#{{client_name}}' 2>/dev/null | "
+            f"while IFS= read -r client; do "
+            f"[ -n \"$client\" ] && tmux switch-client -c \"$client\" -t {quoted_target} 2>/dev/null || true; "
+            f"done"
+        )
+        try:
+            subprocess.run(
+                ['ssh', '-o', 'ConnectTimeout=3', '-o', 'BatchMode=yes', ssh_target, remote_command],
+                capture_output=True,
+                text=True,
+                timeout=6
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return
+
     def open_tmux_window_entry(self, entry):
         """Select and open a tmux session/window entry from the switcher."""
         if entry.get('target'):
@@ -1868,17 +1929,16 @@ class WorkspaceSwitcher(Gtk.Window):
         unpark_tmux_agents(host_id, host_info, session_name, window_index)
 
         if host_id == 'local' or not host_info or not host_info.get('ssh'):
-            subprocess.run(['tmux', 'select-window', '-t', session_target], env={**os.environ, 'TMUX': ''})
+            self._switch_local_tmux_clients_to_window(session_name, session_target)
             if self._focus_existing_window(session_name):
                 return
-            cmd = f"tmux attach-session -t {shlex.quote(session_name)}"
+            cmd = f"tmux attach-session -t {shlex.quote(session_target)}"
         else:
             ssh_target = host_info['ssh']
-            remote_select = f"tmux select-window -t {shlex.quote(session_target)}"
-            subprocess.run(['ssh', '-o', 'ConnectTimeout=3', '-o', 'BatchMode=yes', ssh_target, remote_select], capture_output=True, timeout=6)
+            self._switch_remote_tmux_clients_to_window(host_info, session_name, session_target)
             if self._focus_existing_window(session_name):
                 return
-            remote_attach = f"tmux select-window -t {shlex.quote(session_target)}; tmux attach -t {shlex.quote(session_name)}"
+            remote_attach = f"tmux select-window -t {shlex.quote(session_target)} 2>/dev/null || true; tmux attach -t {shlex.quote(session_target)}"
             cmd = f"ssh -t -o ServerAliveInterval=60 -o ServerAliveCountMax=3 {ssh_target} {shlex.quote(remote_attach)}"
 
         terminal = self._get_terminal()

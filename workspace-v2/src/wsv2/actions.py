@@ -200,18 +200,88 @@ def build_terminal_attach_command(
     if run_local:
         return (
             f"tmux select-window -t {target} 2>/dev/null || true; "
-            f"tmux attach-session -t {session_name}"
+            f"tmux attach-session -t {target}"
         )
 
     ssh_target = shlex.quote(host.ssh or "")
     remote_tmux_cmd = (
         f"tmux select-window -t {target} 2>/dev/null || true; "
-        f"tmux attach -t {session_name}"
+        f"tmux attach -t {target}"
     )
     return (
         "ssh -t -o ServerAliveInterval=60 -o ServerAliveCountMax=3 "
         f"{ssh_target} {shlex.quote(remote_tmux_cmd)}"
     )
+
+
+def switch_attached_tmux_clients(
+    host: HostRecord,
+    *,
+    session_id: str,
+    window_index: int | None,
+    run_local: bool,
+) -> None:
+    if window_index is None:
+        return
+
+    target = f"{session_id}:{window_index}"
+    if run_local:
+        env = {**os.environ, "TMUX": ""}
+        try:
+            subprocess.run(
+                ["tmux", "select-window", "-t", target],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                env=env,
+            )
+            result = subprocess.run(
+                ["tmux", "list-clients", "-t", session_id, "-F", "#{client_name}"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                env=env,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return
+        if result.returncode != 0:
+            return
+        for client_name in result.stdout.splitlines():
+            client_name = client_name.strip()
+            if not client_name:
+                continue
+            try:
+                subprocess.run(
+                    ["tmux", "switch-client", "-c", client_name, "-t", target],
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                    env=env,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+        return
+
+    if not host.ssh:
+        return
+    session_target = shlex.quote(session_id)
+    window_target = shlex.quote(target)
+    remote_command = (
+        f"tmux select-window -t {window_target} 2>/dev/null || true; "
+        f"tmux list-clients -t {session_target} -F '#{{client_name}}' 2>/dev/null | "
+        f"while IFS= read -r client; do "
+        f"[ -n \"$client\" ] && tmux switch-client -c \"$client\" -t {window_target} 2>/dev/null || true; "
+        f"done"
+    )
+    try:
+        subprocess.run(
+            ["ssh", "-o", "ConnectTimeout=3", "-o", "BatchMode=yes", host.ssh, remote_command],
+            capture_output=True,
+            text=True,
+            timeout=6,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return
 
 
 def build_workspace_command(workspace: WorkspaceRecord, *, run_local: bool) -> str:
@@ -436,8 +506,15 @@ class WorkspaceActions:
             host_id = self.config.normalize_host_id(terminal_target.host_id) or self.config.self_host_id
             if not host_id:
                 raise WorkspaceConfigError(f"Host is required for terminal target: {target}")
+            host = self.config.get_host(host_id)
             title = f"{terminal_target.session_id}:{terminal_target.window_index}"
             self.unpark_workspace_target(target)
+            switch_attached_tmux_clients(
+                host,
+                session_id=terminal_target.session_id,
+                window_index=terminal_target.window_index,
+                run_local=self.config.host_runs_local(host),
+            )
             if focus_existing and self.focus_workspace_window(terminal_target.session_id):
                 self.state.mark_recent(target)
                 return "focused"
