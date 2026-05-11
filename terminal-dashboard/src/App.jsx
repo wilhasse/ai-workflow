@@ -114,11 +114,18 @@ const loadWindowUsage = () => {
 const buildWindowUsageKey = (workspaceId, windowIndex, hostId = null) =>
   hostId ? `${hostId}:${workspaceId}:${windowIndex}` : `${workspaceId}:${windowIndex}`
 
+const terminalStatusRank = (status) => {
+  if (status === 'check') return 0
+  if (status === 'idle') return 2
+  return 1
+}
+
 const tabToWindowItem = (tab) => ({
   index: tab.windowIndex,
   name: tab.windowName || tab.displayName || tab.tmuxName || `window-${tab.windowIndex}`,
   tmuxName: tab.tmuxName || tab.windowName || '',
   label: tab.label || '',
+  status: tab.status || '',
   displayName: tab.displayName || tab.windowName || tab.tmuxName || `window-${tab.windowIndex}`,
   active: tab.windowActive,
   lastActivityAt: tab.lastActivityAt ?? 0,
@@ -478,7 +485,10 @@ function DashboardApp() {
   }, [desktopView, isMobile, loadTerminalTabs])
 
   const handleSaveTerminalLabels = useCallback(async (updates) => {
-    const changedUpdates = updates.filter((tab) => tab.label.trim() !== (tab.labelBeforeSave ?? (tab.label || '')))
+    const changedUpdates = updates.filter((tab) => (
+      tab.label.trim() !== (tab.labelBeforeSave ?? (tab.label || '')) ||
+      (tab.status || '') !== (tab.statusBeforeSave ?? '')
+    ))
     if (!changedUpdates.length) {
       return true
     }
@@ -491,6 +501,7 @@ function DashboardApp() {
         sessionId: tab.sessionId,
         windowIndex: tab.windowIndex,
         label: tab.label,
+        status: tab.status || '',
       })
       if (!result) {
         failures.push(tab)
@@ -505,7 +516,7 @@ function DashboardApp() {
     }
 
     if (failures.length > 0) {
-      setTerminalTabErrors([{ error: `Unable to save ${failures.length} terminal label${failures.length === 1 ? '' : 's'}.` }])
+      setTerminalTabErrors([{ error: `Unable to save ${failures.length} terminal tab update${failures.length === 1 ? '' : 's'}.` }])
       return false
     }
     return true
@@ -612,6 +623,27 @@ function DashboardApp() {
     }
   }, [activeWorkspaceId, applyWorkspaceWindows, fetchWindows, loadTerminalTabs, setWindowLabel])
 
+  const handleSetTerminalEntryStatus = useCallback(async (entry, status) => {
+    const sessionId = entry.sessionId || entry.workspaceId
+    const result = await setWindowLabel({
+      hostId: entry.hostId || 'local',
+      sessionId,
+      windowIndex: entry.windowIndex,
+      label: entry.label || '',
+      status,
+    })
+    if (!result) {
+      window.alert('Unable to save the tmux tab flag.')
+      return
+    }
+
+    await loadTerminalTabs()
+    if (entry.local !== false && sessionId === activeWorkspaceId) {
+      const updatedWindows = await fetchWindows(sessionId)
+      applyWorkspaceWindows(sessionId, updatedWindows)
+    }
+  }, [activeWorkspaceId, applyWorkspaceWindows, fetchWindows, loadTerminalTabs, setWindowLabel])
+
   const terminalSwitcherEntries = useMemo(() => {
     const query = terminalSwitcherQuery.trim().toLowerCase()
     const entries = terminalTabs.map((tab) => {
@@ -634,6 +666,7 @@ function DashboardApp() {
         windowName,
         tmuxName: tab.tmuxName || tab.windowName || '',
         label: tab.label || '',
+        status: tab.status || '',
         windowActive: tab.windowActive,
         useCount: usage.useCount ?? 0,
         lastUsedAt,
@@ -649,6 +682,7 @@ function DashboardApp() {
           String(tab.windowIndex),
           '#' + tab.windowIndex,
           tab.label || '',
+          tab.status || '',
           tab.tmuxName || '',
           tab.windowName || '',
           windowName,
@@ -661,6 +695,10 @@ function DashboardApp() {
       : entries
 
     return filteredEntries.sort((left, right) => {
+      const statusComparison = terminalStatusRank(left.status) - terminalStatusRank(right.status)
+      if (statusComparison !== 0) {
+        return statusComparison
+      }
       const labelComparison = Number(Boolean(right.label)) - Number(Boolean(left.label))
       if (labelComparison !== 0) {
         return labelComparison
@@ -1398,6 +1436,7 @@ function DashboardApp() {
             onQueryChange={setTerminalSwitcherQuery}
             onSelectEntry={handleSelectTerminalEntry}
             onRenameEntry={handleRenameWindowEntry}
+            onStatusChange={handleSetTerminalEntryStatus}
           />
         )}
 
@@ -1540,6 +1579,7 @@ function DashboardApp() {
         onQueryChange={setTerminalSwitcherQuery}
         onSelectEntry={handleSelectTerminalEntry}
         onRenameEntry={handleRenameWindowEntry}
+        onStatusChange={handleSetTerminalEntryStatus}
       />
 
       <ConfirmDialog

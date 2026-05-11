@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from .actions import TerminalStatus, WorkspaceActions, terminal_recent_score
+from .actions import TerminalStatus, WorkspaceActions, terminal_recent_score, terminal_status_rank
 
 
 @dataclass(slots=True)
@@ -61,6 +61,7 @@ def filter_tui_items(items: list[TuiItem], query: str) -> list[TuiItem]:
 def _sort_key(item: TuiItem):
     status = item.status
     return (
+        terminal_status_rank(status.window_status),
         -item.recent_score,
         not status.active,
         not status.window_active,
@@ -81,8 +82,9 @@ def format_tui_row(status: TerminalStatus, width: int) -> str:
     tab = f"#{status.window_index}" if status.window_index > 0 else "--"
     discovered = " *" if status.discovered else ""
     activity = "active" if status.activity else "inactive"
+    flag = f" [{status.window_status}]" if status.window_status else ""
     row = (
-        f"{dot} {status.window_name} {tab} {status.workspace_name}{discovered} "
+        f"{dot} {status.window_name}{flag} {tab} {status.workspace_name}{discovered} "
         f"· {status.host.name} [{activity}]"
     )
     return row[: max(0, width - 1)]

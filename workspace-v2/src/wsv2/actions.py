@@ -10,7 +10,7 @@ from typing import Iterable
 
 from .catalog import HostRecord, WorkspaceConfigError, WorkspaceRecord, load_config
 from .codex_parking import CodexParkingError, build_remote_wsv2_command, unpark_target
-from .state import LauncherState
+from .state import LauncherState, normalize_terminal_status
 
 
 @dataclass(slots=True, frozen=True)
@@ -33,6 +33,7 @@ class TerminalStatus:
     window_name: str
     tmux_window_name: str | None = None
     window_label: str = ""
+    window_status: str = ""
     window_active: bool = False
     activity: int = 0
     pane_count: int = 0
@@ -82,6 +83,7 @@ class TerminalStatus:
                 self.window_name,
                 self.tmux_window_name or "",
                 self.window_label,
+                self.window_status,
                 self.display_path,
             ]
         ).lower()
@@ -111,8 +113,18 @@ def terminal_recent_score(status: TerminalStatus, recent_scores: dict[str, float
     return max(float(status.activity or 0), terminal_selected_score(status, recent_scores))
 
 
+def terminal_status_rank(status: str) -> int:
+    normalized = normalize_terminal_status(status)
+    if normalized == "check":
+        return 0
+    if normalized == "idle":
+        return 2
+    return 1
+
+
 def terminal_sort_key(status: TerminalStatus, recent_scores: dict[str, float] | None = None):
     return (
+        terminal_status_rank(status.window_status),
         not bool(status.window_label),
         -terminal_recent_score(status, recent_scores),
         not status.active,
@@ -392,6 +404,12 @@ class WorkspaceActions:
                     window["session_id"],
                     window["window_index"],
                 )
+                window_status = _window_status_for(
+                    window_labels,
+                    host.id,
+                    window["session_id"],
+                    window["window_index"],
+                )
                 tmux_window_name = window["window_name"]
                 statuses.append(
                     TerminalStatus(
@@ -402,6 +420,7 @@ class WorkspaceActions:
                         window_name=window_label or tmux_window_name,
                         tmux_window_name=tmux_window_name,
                         window_label=window_label,
+                        window_status=window_status,
                         window_active=window["window_active"],
                         activity=window["activity"],
                         pane_count=window["pane_count"],
@@ -745,3 +764,13 @@ def _window_label_for(
 ) -> str:
     record = labels.get(f"{host_id}:{session_id}#{window_index}") or {}
     return str(record.get("label") or "").strip()
+
+
+def _window_status_for(
+    labels: dict[str, dict],
+    host_id: str,
+    session_id: str,
+    window_index: int,
+) -> str:
+    record = labels.get(f"{host_id}:{session_id}#{window_index}") or {}
+    return normalize_terminal_status(record.get("status"))

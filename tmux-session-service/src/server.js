@@ -202,6 +202,17 @@ const normalizeWindowLabel = (value) => {
   return normalized.slice(0, 80)
 }
 
+const normalizeWindowStatus = (value) => {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (['check', 'needs-check', 'needs_check', 'review'].includes(normalized)) {
+    return 'check'
+  }
+  if (['idle', 'done', 'complete', 'completed'].includes(normalized)) {
+    return 'idle'
+  }
+  return ''
+}
+
 const windowLabelKey = (hostId, sessionId, windowIndex) => `${hostId}:${sessionId}#${windowIndex}`
 
 const readLauncherState = async () => {
@@ -245,7 +256,17 @@ const resolveWindowLabel = (labels, host, sessionId, windowIndex) => {
   return ''
 }
 
-const setWindowLabel = async (hostId, sessionId, windowIndex, label) => {
+const resolveWindowStatus = (labels, host, sessionId, windowIndex) => {
+  for (const key of windowLabelCandidateKeys(host, sessionId, windowIndex)) {
+    const status = normalizeWindowStatus(labels[key]?.status)
+    if (status) {
+      return status
+    }
+  }
+  return ''
+}
+
+const setWindowMetadata = async (hostId, sessionId, windowIndex, metadata = {}) => {
   const state = await readLauncherState()
   const labels = state.windowLabels && typeof state.windowLabels === 'object'
     ? state.windowLabels
@@ -253,27 +274,42 @@ const setWindowLabel = async (hostId, sessionId, windowIndex, label) => {
   state.windowLabels = labels
 
   const key = windowLabelKey(hostId, sessionId, windowIndex)
-  const normalized = normalizeWindowLabel(label)
-  if (normalized) {
+  const existing = labels[key] && typeof labels[key] === 'object' ? labels[key] : {}
+  const hasLabelUpdate = Object.prototype.hasOwnProperty.call(metadata, 'label')
+  const hasStatusUpdate = Object.prototype.hasOwnProperty.call(metadata, 'status')
+  const normalizedLabel = hasLabelUpdate
+    ? normalizeWindowLabel(metadata.label)
+    : normalizeWindowLabel(existing.label)
+  const normalizedStatus = hasStatusUpdate
+    ? normalizeWindowStatus(metadata.status)
+    : normalizeWindowStatus(existing.status)
+  if (normalizedLabel || normalizedStatus) {
     labels[key] = {
-      label: normalized,
       updatedAt: Math.floor(Date.now() / 1000),
+    }
+    if (normalizedLabel) {
+      labels[key].label = normalizedLabel
+    }
+    if (normalizedStatus) {
+      labels[key].status = normalizedStatus
     }
   } else {
     delete labels[key]
   }
   await writeLauncherState(state)
-  return normalized
+  return { label: normalizedLabel, status: normalizedStatus }
 }
 
 const decorateWindowWithLabel = (window, host, labels, sessionId = window.sessionId) => {
   const tmuxName = window.tmuxName || window.name || `window-${window.index}`
   const label = resolveWindowLabel(labels, host, sessionId, window.index)
+  const status = resolveWindowStatus(labels, host, sessionId, window.index)
   const displayName = label || tmuxName
   return {
     ...window,
     tmuxName,
     label,
+    status,
     displayName,
     name: displayName,
   }
@@ -645,6 +681,7 @@ const groupWindowsBySession = (windows) => {
       name: window.name,
       tmuxName: window.tmuxName || window.name,
       label: window.label || '',
+      status: window.status || '',
       displayName: window.displayName || window.name,
       active: window.active,
       lastActivityAt: window.lastActivityAt,
@@ -1440,6 +1477,7 @@ const buildTerminalTabRecord = ({ host, workspace, window, selectedAt = 0 }) => 
     windowIndex: window.index,
     tmuxName: window.tmuxName || window.name,
     label: window.label || '',
+    status: window.status || '',
     displayName: window.displayName || window.name,
     windowName: window.displayName || window.name,
     windowActive: window.active,
@@ -1558,7 +1596,14 @@ const handleSetTerminalTabLabel = async (req, res, hostIdRaw, sessionIdRaw, wind
       respond(res, 404, { error: 'Window not found' })
       return
     }
-    await setWindowLabel(host.id, sanitizedSessionId, windowIndex, body.label ?? body.name ?? '')
+    const metadata = {}
+    if (Object.prototype.hasOwnProperty.call(body, 'label') || Object.prototype.hasOwnProperty.call(body, 'name')) {
+      metadata.label = body.label ?? body.name
+    }
+    if (Object.prototype.hasOwnProperty.call(body, 'status')) {
+      metadata.status = body.status
+    }
+    await setWindowMetadata(host.id, sanitizedSessionId, windowIndex, metadata)
     const updatedLabels = await readWindowLabels()
     const catalog = await loadMobileCatalog()
     const workspace = catalog.workspaces.find(
@@ -2173,7 +2218,14 @@ const handleRenameWindow = async (req, res, sessionId, windowIndexRaw) => {
       respond(res, 404, { error: 'Window not found' })
       return
     }
-    await setWindowLabel(host.id, sanitizedId, windowIndex, body.label ?? body.name ?? '')
+    const metadata = {}
+    if (Object.prototype.hasOwnProperty.call(body, 'label') || Object.prototype.hasOwnProperty.call(body, 'name')) {
+      metadata.label = body.label ?? body.name
+    }
+    if (Object.prototype.hasOwnProperty.call(body, 'status')) {
+      metadata.status = body.status
+    }
+    await setWindowMetadata(host.id, sanitizedId, windowIndex, metadata)
     const updatedLabels = await readWindowLabels()
     const windows = await tmuxListWindows(sanitizedId, { host, labels: updatedLabels })
     respond(res, 200, { sessionId: sanitizedId, windows })

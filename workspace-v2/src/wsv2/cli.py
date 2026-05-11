@@ -457,6 +457,7 @@ def main(argv: list[str] | None = None) -> int:
                     'windowName': status.window_name,
                     'tmuxName': status.tmux_window_name or status.window_name,
                     'label': status.window_label,
+                    'status': status.window_status,
                     'displayName': status.window_name,
                     'windowActive': status.window_active,
                     'activity': status.activity,

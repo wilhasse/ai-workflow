@@ -87,7 +87,11 @@ export function useWorkspaces() {
     }
   }, [])
 
-  const setWindowLabel = useCallback(async ({ hostId, sessionId, windowIndex, label }) => {
+  const setWindowLabel = useCallback(async ({ hostId, sessionId, windowIndex, label, status }) => {
+    const payload = { label }
+    if (status !== undefined) {
+      payload.status = status
+    }
     try {
       const response = await fetch(
         `/api/terminal-tabs/${encodeURIComponent(hostId)}/${encodeURIComponent(sessionId)}/${encodeURIComponent(windowIndex)}/label`,
@@ -96,7 +100,7 @@ export function useWorkspaces() {
           headers: {
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ label }),
+          body: JSON.stringify(payload),
         },
       )
       if (!response.ok) {

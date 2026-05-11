@@ -23,7 +23,28 @@ const formatRelativeTime = (timestamp) => {
   return `${diffDays}d ago`
 }
 
-const sectionLabelForEntry = (entry) => (entry.label ? 'Labeled tabs' : 'Other active tabs')
+const statusLabels = {
+  check: 'Check',
+  idle: 'Idle',
+}
+
+const sectionKeyForEntry = (entry) => {
+  if (entry.status === 'check') return 'check'
+  if (entry.status === 'idle') return 'idle'
+  return entry.label ? 'labeled' : 'other'
+}
+
+const sectionLabelForEntry = (entry) => {
+  if (entry.status === 'check') return 'Needs check'
+  if (entry.status === 'idle') return 'Idle tabs'
+  return entry.label ? 'Labeled tabs' : 'Other active tabs'
+}
+
+const nextStatusForEntry = (entry) => {
+  if (entry.status === 'check') return 'idle'
+  if (entry.status === 'idle') return ''
+  return 'check'
+}
 
 function TerminalSwitcherDialog({
   isOpen,
@@ -34,6 +55,7 @@ function TerminalSwitcherDialog({
   onQueryChange,
   onSelectEntry,
   onRenameEntry,
+  onStatusChange,
 }) {
   const inputRef = useRef(null)
   const [highlightedIndex, setHighlightedIndex] = useState(0)
@@ -139,7 +161,7 @@ function TerminalSwitcherDialog({
           ) : (
             entries.map((entry, index) => (
               <Fragment key={entry.id}>
-                {(index === 0 || Boolean(entries[index - 1]?.label) !== Boolean(entry.label)) && (
+                {(index === 0 || sectionKeyForEntry(entries[index - 1]) !== sectionKeyForEntry(entry)) && (
                   <div className="terminal-switcher-section">
                     {sectionLabelForEntry(entry)}
                   </div>
@@ -157,6 +179,11 @@ function TerminalSwitcherDialog({
                       <span className="terminal-switcher-tab-label">{entry.windowName}</span>
                       <span className="terminal-switcher-separator">·</span>
                       <span className="terminal-switcher-window-index">#{entry.windowIndex}</span>
+                      {entry.status && (
+                        <span className={`terminal-status-badge ${entry.status}`}>
+                          {statusLabels[entry.status] || entry.status}
+                        </span>
+                      )}
                       <span className="terminal-switcher-workspace-name">{entry.workspaceName}</span>
                     </div>
                     <div className="terminal-switcher-item-meta">
@@ -166,16 +193,30 @@ function TerminalSwitcherDialog({
                       {entry.windowActive ? 'active tab' : 'background tab'} · recent {formatRelativeTime(entry.recentAt)} · selected {entry.useCount}x
                     </div>
                   </button>
-                  <button
-                    type="button"
-                    className="terminal-switcher-rename"
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      onRenameEntry(entry)
-                    }}
-                  >
-                    Label
-                  </button>
+                  <div className="terminal-switcher-actions">
+                    <button
+                      type="button"
+                      className="terminal-switcher-rename"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onRenameEntry(entry)
+                      }}
+                    >
+                      Label
+                    </button>
+                    {onStatusChange && (
+                      <button
+                        type="button"
+                        className={`terminal-switcher-status ${entry.status || 'active'}`}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          onStatusChange(entry, nextStatusForEntry(entry))
+                        }}
+                      >
+                        {statusLabels[entry.status] || 'Flag'}
+                      </button>
+                    )}
+                  </div>
                 </div>
               </Fragment>
             ))

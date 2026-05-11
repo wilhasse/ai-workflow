@@ -2523,7 +2523,7 @@ button.danger:hover:not(:disabled) {
 
 .terminal-organizer-row {
   display: grid;
-  grid-template-columns: minmax(15rem, 1.2fr) minmax(12rem, 1fr);
+  grid-template-columns: minmax(15rem, 1.2fr) minmax(12rem, 1fr) auto;
   gap: 0.65rem;
   align-items: center;
   border-radius: var(--radius-sm);
@@ -2582,6 +2582,48 @@ button.danger:hover:not(:disabled) {
   box-shadow: 0 0 0 2px rgba(20, 184, 166, 0.12);
 }
 
+.terminal-status-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  border: 1px solid var(--color-border-medium);
+  border-radius: var(--radius-sm);
+  background: rgba(3, 7, 18, 0.72);
+  overflow: hidden;
+  min-width: 12.25rem;
+}
+
+.terminal-status-control button {
+  min-height: 2.35rem;
+  border: 0;
+  border-right: 1px solid var(--color-border-subtle);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  padding: 0 0.7rem;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.terminal-status-control button:last-child {
+  border-right: 0;
+}
+
+.terminal-status-control button.active {
+  background: rgba(20, 184, 166, 0.14);
+  color: #99f6e4;
+}
+
+.terminal-status-control button:not(:disabled):hover {
+  color: var(--color-text-primary);
+  background: rgba(148, 163, 184, 0.1);
+}
+
+.terminal-status-control button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 @media (max-width: 980px) {
   .terminal-organizer-header {
     align-items: flex-start;
@@ -2594,6 +2636,15 @@ button.danger:hover:not(:disabled) {
 
   .terminal-organizer-row {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .terminal-status-control {
+    justify-content: stretch;
+    min-width: 0;
+  }
+
+  .terminal-status-control button {
+    flex: 1;
   }
 }
 
@@ -3266,6 +3317,14 @@ button.danger:hover:not(:disabled) {
   cursor: pointer;
 }
 
+.terminal-switcher-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.45rem;
+  padding-right: 1rem;
+}
+
 .terminal-switcher-item-title {
   display: flex;
   flex-wrap: wrap;
@@ -3285,6 +3344,29 @@ button.danger:hover:not(:disabled) {
   font-weight: 600;
 }
 
+.terminal-status-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.35rem;
+  border-radius: var(--radius-pill);
+  padding: 0 0.5rem;
+  border: 1px solid rgba(38, 50, 68, 0.9);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.terminal-status-badge.check {
+  color: #fde68a;
+  border-color: rgba(250, 204, 21, 0.38);
+  background: rgba(250, 204, 21, 0.1);
+}
+
+.terminal-status-badge.idle {
+  color: #cbd5e1;
+  border-color: rgba(148, 163, 184, 0.3);
+  background: rgba(148, 163, 184, 0.08);
+}
+
 .terminal-switcher-workspace-name {
   color: #aeb8c6;
   font-size: 0.9rem;
@@ -3297,7 +3379,6 @@ button.danger:hover:not(:disabled) {
 }
 
 .terminal-switcher-rename {
-  margin-right: 1rem;
   border-radius: var(--radius-sm);
   border: 1px solid rgba(38, 50, 68, 0.9);
   background: transparent;
@@ -3306,9 +3387,36 @@ button.danger:hover:not(:disabled) {
   cursor: pointer;
 }
 
+.terminal-switcher-status {
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(38, 50, 68, 0.9);
+  background: transparent;
+  color: #aeb8c6;
+  padding: 0.45rem 0.75rem;
+  cursor: pointer;
+  min-width: 4rem;
+}
+
 .terminal-switcher-rename:hover {
   border-color: rgba(197, 161, 92, 0.4);
   color: #c5a15c;
+}
+
+.terminal-switcher-status.check {
+  border-color: rgba(250, 204, 21, 0.35);
+  color: #fde68a;
+  background: rgba(250, 204, 21, 0.08);
+}
+
+.terminal-switcher-status.idle {
+  border-color: rgba(148, 163, 184, 0.3);
+  color: #cbd5e1;
+  background: rgba(148, 163, 184, 0.08);
+}
+
+.terminal-switcher-status:hover {
+  border-color: rgba(20, 184, 166, 0.45);
+  color: #99f6e4;
 }
 
 .terminal-switcher-footer {

@@ -180,6 +180,7 @@ class WorkspacePopup(Gtk.Window):
                         str(item.status.window_index),
                         f"#{item.status.window_index}",
                         item.status.window_name,
+                        item.status.window_status,
                         item.status.display_path,
                     ]
                 ).lower()
@@ -223,9 +224,17 @@ class WorkspacePopup(Gtk.Window):
         status = item.status
         tab = f"#{status.window_index}" if status.window_index > 0 else "--"
         discovered = " *" if status.discovered else ""
+        flag = ""
+        if status.window_status:
+            flag_color = "#facc15" if status.window_status == "check" else "#94a3b8"
+            flag = (
+                f' <span foreground="{flag_color}">'
+                f'{GLib.markup_escape_text(f"[{status.window_status}]")}</span>'
+            )
         title.set_markup(
             f'<span foreground="#d5dde8"><b>{GLib.markup_escape_text(status.window_name)}</b></span>'
             f' <span foreground="#c5a15c">{GLib.markup_escape_text(tab)}</span>'
+            f'{flag}'
             f' <span foreground="#aeb8c6">{GLib.markup_escape_text(status.workspace_name + discovered)}</span>'
         )
         title.set_xalign(0)
@@ -242,6 +251,8 @@ class WorkspacePopup(Gtk.Window):
 
         detail = Gtk.Label()
         detail_parts = [status.host.name, status.session_id, status.display_path]
+        if status.window_status:
+            detail_parts.insert(0, status.window_status)
         if status.tmux_window_name and status.tmux_window_name != status.window_name:
             detail_parts.insert(0, f"tmux {status.tmux_window_name}")
         if item.recent_score:
@@ -275,6 +286,10 @@ class WorkspacePopup(Gtk.Window):
     def _status_dot_markup(self, status: TerminalStatus) -> str:
         if status.reachable is False:
             return '<span foreground="#c45f5f">●</span>'
+        if status.window_status == "check":
+            return '<span foreground="#facc15">●</span>'
+        if status.window_status == "idle":
+            return '<span foreground="#7e8a99">●</span>'
         if status.active:
             return '<span foreground="#6ea979">●</span>'
         if status.reachable is None:

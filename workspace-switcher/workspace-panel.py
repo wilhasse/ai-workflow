@@ -43,6 +43,15 @@ def normalize_window_label(value):
     return ' '.join(str(value or '').split())[:80]
 
 
+def normalize_terminal_status(value):
+    normalized = str(value or '').strip().lower()
+    if normalized in ('check', 'needs-check', 'needs_check', 'review'):
+        return 'check'
+    if normalized in ('idle', 'done', 'complete', 'completed'):
+        return 'idle'
+    return ''
+
+
 def load_window_labels():
     try:
         with open(LAUNCHER_STATE_FILE, 'r') as f:
@@ -55,28 +64,41 @@ def load_window_labels():
         return {}
 
 
-def window_label_for_entry(entry, labels=None):
-    labels = labels or {}
+def window_label_keys_for_entry(entry):
     host_id = entry.get('host_id', 'local')
     state_host_id = entry.get('state_host_id') or host_id
     session_name = entry.get('session_name', '')
     window_index = entry.get('window_index')
-    keys = [
+    return [
         entry.get('target'),
         f"{state_host_id}:{session_name}#{window_index}",
         f"{host_id}:{session_name}#{window_index}",
         f"local:{session_name}#{window_index}",
     ]
-    for key in keys:
+
+
+def window_metadata_for_entry(entry, labels=None):
+    labels = labels or {}
+    for key in window_label_keys_for_entry(entry):
         if not key:
             continue
-        label = normalize_window_label((labels.get(key) or {}).get('label'))
-        if label:
-            return label
-    return ''
+        record = labels.get(key) or {}
+        label = normalize_window_label(record.get('label'))
+        status = normalize_terminal_status(record.get('status'))
+        if label or status:
+            return {'label': label, 'status': status}
+    return {'label': '', 'status': ''}
 
 
-def save_window_label(host_id, session_name, window_index, label):
+def window_label_for_entry(entry, labels=None):
+    return window_metadata_for_entry(entry, labels).get('label', '')
+
+
+def window_status_for_entry(entry, labels=None):
+    return window_metadata_for_entry(entry, labels).get('status', '')
+
+
+def save_window_metadata(host_id, session_name, window_index, label=None, status=None):
     payload = {'recent': {}}
     try:
         with open(LAUNCHER_STATE_FILE, 'r') as f:
@@ -88,15 +110,25 @@ def save_window_label(host_id, session_name, window_index, label):
         labels = {}
         payload['windowLabels'] = labels
     key = f"{host_id}:{session_name}#{window_index}"
-    normalized = normalize_window_label(label)
-    if normalized:
-        labels[key] = {'label': normalized, 'updatedAt': int(time.time())}
+    existing = labels.get(key) if isinstance(labels.get(key), dict) else {}
+    normalized_label = normalize_window_label(label if label is not None else existing.get('label'))
+    normalized_status = normalize_terminal_status(status if status is not None else existing.get('status'))
+    if normalized_label or normalized_status:
+        labels[key] = {'updatedAt': int(time.time())}
+        if normalized_label:
+            labels[key]['label'] = normalized_label
+        if normalized_status:
+            labels[key]['status'] = normalized_status
     else:
         labels.pop(key, None)
     os.makedirs(os.path.dirname(LAUNCHER_STATE_FILE), exist_ok=True)
     with open(LAUNCHER_STATE_FILE, 'w') as f:
         json.dump(payload, f, indent=2, sort_keys=True)
-    return normalized
+    return {'label': normalized_label, 'status': normalized_status}
+
+
+def save_window_label(host_id, session_name, window_index, label):
+    return save_window_metadata(host_id, session_name, window_index, label=label)['label']
 
 
 def save_recent_score(target):
@@ -185,6 +217,15 @@ def terminal_recent_score(entry, recent_scores=None):
         default=0.0
     )
     return max(float(entry.get('activity') or 0), selected_at)
+
+
+def terminal_status_rank(status):
+    normalized = normalize_terminal_status(status)
+    if normalized == 'check':
+        return 0
+    if normalized == 'idle':
+        return 2
+    return 1
 
 
 class SSHHealthChecker:
@@ -1046,7 +1087,7 @@ class TerminalSwitcherDialog(Gtk.Dialog):
         self.search_entry.connect('activate', self._activate_selected)
         box.pack_start(self.search_entry, False, False, 0)
 
-        self.store = Gtk.ListStore(str, str, str, str, str, object)
+        self.store = Gtk.ListStore(str, str, str, str, str, str, object)
         self.tree = Gtk.TreeView(model=self.store)
         self.tree.set_name('terminal-switcher-tree')
         self.tree.set_headers_visible(True)
@@ -1057,7 +1098,8 @@ class TerminalSwitcherDialog(Gtk.Dialog):
             ('Brief name', 1, 230),
             ('Tab', 2, 60),
             ('Workspace', 3, 170),
-            ('Recent', 4, 110),
+            ('Flag', 4, 80),
+            ('Recent', 5, 110),
         ]
         for label, index, width in columns:
             renderer = Gtk.CellRendererText()
@@ -1079,7 +1121,7 @@ class TerminalSwitcherDialog(Gtk.Dialog):
         box.pack_start(scrolled, True, True, 0)
 
         action_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        self.rename_button = Gtk.Button(label='Label tab')
+        self.rename_button = Gtk.Button(label='Edit tab')
         self.rename_button.connect('clicked', self._rename_selected)
         action_box.pack_start(self.rename_button, False, False, 0)
 
@@ -1159,6 +1201,13 @@ class TerminalSwitcherDialog(Gtk.Dialog):
             workspace = entry.get('workspace_name') or entry['session_name']
             tab = GLib.markup_escape_text(f"#{entry['window_index']}")
             task = GLib.markup_escape_text(entry.get('display_window_name') or entry.get('window_name') or f"window-{entry['window_index']}")
+            status = normalize_terminal_status(entry.get('window_status'))
+            if status == 'check':
+                status_markup = '<span foreground="#facc15" weight="bold">Check</span>'
+            elif status == 'idle':
+                status_markup = '<span foreground="#94a3b8">Idle</span>'
+            else:
+                status_markup = '<span foreground="#566173">Active</span>'
             if entry.get('discovered'):
                 workspace = f"{workspace} *"
             workspace = GLib.markup_escape_text(workspace)
@@ -1168,6 +1217,7 @@ class TerminalSwitcherDialog(Gtk.Dialog):
                 f'<span foreground="#d5dde8" weight="bold">{task}</span>',
                 f'<span foreground="#c5a15c" weight="bold">{tab}</span>',
                 f'<span foreground="#aeb8c6">{workspace}</span>',
+                status_markup,
                 f'<span foreground="#7e8a99">{recent}</span>',
                 entry
             ])
@@ -1188,7 +1238,7 @@ class TerminalSwitcherDialog(Gtk.Dialog):
 
     def _on_selection_changed(self, selection):
         model, tree_iter = selection.get_selected()
-        self.selected_entry = model[tree_iter][5] if tree_iter else None
+        self.selected_entry = model[tree_iter][6] if tree_iter else None
 
     def _on_row_activated(self, tree, path, column):
         self._activate_selected()
@@ -1764,7 +1814,9 @@ class WorkspaceSwitcher(Gtk.Window):
                 }
                 entry['target'] = f"{state_host_id}:{session_name}#{window['window_index']}"
                 entry['tmux_window_name'] = window.get('window_name') or f"window-{window['window_index']}"
-                entry['window_label'] = window_label_for_entry(entry, labels)
+                metadata = window_metadata_for_entry(entry, labels)
+                entry['window_label'] = metadata.get('label', '')
+                entry['window_status'] = metadata.get('status', '')
                 entry['display_window_name'] = entry['window_label'] or entry['tmux_window_name']
                 entry['recent_at'] = terminal_recent_score(entry, recent_scores)
                 entry['search_text'] = ' '.join([
@@ -1777,6 +1829,7 @@ class WorkspaceSwitcher(Gtk.Window):
                     str(window['window_index']),
                     f"#{window['window_index']}",
                     entry.get('window_label', ''),
+                    entry.get('window_status', ''),
                     entry.get('tmux_window_name', ''),
                 ]).lower()
                 entries.append(entry)
@@ -1784,6 +1837,7 @@ class WorkspaceSwitcher(Gtk.Window):
         return sorted(
             entries,
             key=lambda entry: (
+                terminal_status_rank(entry.get('window_status')),
                 not bool(entry.get('window_label')),
                 -(entry.get('recent_at') or 0),
                 not entry.get('window_active'),
@@ -1977,15 +2031,37 @@ class WorkspaceSwitcher(Gtk.Window):
         name_entry.select_region(0, -1)
         name_entry.connect('activate', lambda _entry: rename_dialog.response(Gtk.ResponseType.OK))
         box.pack_start(name_entry, False, False, 0)
+
+        status_combo = Gtk.ComboBoxText()
+        status_options = [
+            ('', 'Active'),
+            ('check', 'Needs check'),
+            ('idle', 'Idle / done for now'),
+        ]
+        active_status = normalize_terminal_status(entry.get('window_status'))
+        active_status_index = 0
+        for index, (value, label_text) in enumerate(status_options):
+            status_combo.append(value, label_text)
+            if value == active_status:
+                active_status_index = index
+        status_combo.set_active(active_status_index)
+        status_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        status_label = Gtk.Label(label='Flag:')
+        status_label.set_xalign(0)
+        status_box.pack_start(status_label, False, False, 0)
+        status_box.pack_start(status_combo, True, True, 0)
+        box.pack_start(status_box, False, False, 8)
         rename_dialog.show_all()
         response = rename_dialog.run()
         new_name = name_entry.get_text()
+        active_index = status_combo.get_active()
+        new_status = status_options[active_index][0] if active_index >= 0 else ''
         rename_dialog.destroy()
         if response != Gtk.ResponseType.OK:
             return
 
         host_id = entry.get('state_host_id') or entry.get('host_id', 'local')
-        save_window_label(host_id, entry['session_name'], entry['window_index'], new_name)
+        save_window_metadata(host_id, entry['session_name'], entry['window_index'], label=new_name, status=new_status)
         self.refresh_workspaces()
 
     def _focus_existing_window(self, search_term):

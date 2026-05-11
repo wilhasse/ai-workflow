@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 
 const AUTO_REFRESH_SECONDS = 5
+const STATUS_OPTIONS = [
+  { value: '', label: 'Active' },
+  { value: 'check', label: 'Check' },
+  { value: 'idle', label: 'Idle' },
+]
 
 const formatRelativeTime = (timestamp) => {
   if (!timestamp) {
@@ -22,21 +27,41 @@ const formatRelativeTime = (timestamp) => {
   return `${Math.floor(diffHours / 24)}d ago`
 }
 
+const normalizeStatus = (value) => (value === 'check' || value === 'idle' ? value : '')
+
+const draftFromValue = (value, tab) => {
+  if (value && typeof value === 'object') {
+    return {
+      label: value.label ?? '',
+      status: normalizeStatus(value.status),
+    }
+  }
+  return {
+    label: typeof value === 'string' ? value : (tab.label || ''),
+    status: normalizeStatus(tab.status),
+  }
+}
+
+const draftMatchesTab = (tab, draft) => (
+  (draft.label ?? '').trim() === (tab.label || '') &&
+  normalizeStatus(draft.status) === normalizeStatus(tab.status)
+)
+
 const changedDraftIds = (tabs, drafts) => {
   const changed = []
   tabs.forEach((tab) => {
     if (!Object.prototype.hasOwnProperty.call(drafts, tab.id)) {
       return
     }
-    const draft = drafts[tab.id] ?? ''
-    if (draft.trim() !== (tab.label || '')) {
+    const draft = draftFromValue(drafts[tab.id], tab)
+    if (!draftMatchesTab(tab, draft)) {
       changed.push(tab.id)
     }
   })
   return changed
 }
 
-function TerminalLabelRow({ tab, value, changed, disabled, onChange, onSubmit }) {
+function TerminalLabelRow({ tab, value, status, changed, disabled, onChange, onStatusChange, onSubmit }) {
   return (
     <form
       className={`terminal-organizer-row ${changed ? 'changed' : ''}`}
@@ -68,6 +93,19 @@ function TerminalLabelRow({ tab, value, changed, disabled, onChange, onSubmit })
         disabled={disabled}
         aria-label={`Label for ${tab.workspaceName} window ${tab.windowIndex}`}
       />
+      <div className="terminal-status-control" role="group" aria-label={`Status for ${tab.workspaceName} window ${tab.windowIndex}`}>
+        {STATUS_OPTIONS.map((option) => (
+          <button
+            key={option.value || 'active'}
+            type="button"
+            className={normalizeStatus(status) === option.value ? 'active' : ''}
+            disabled={disabled}
+            onClick={() => onStatusChange(tab, option.value)}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
     </form>
   )
 }
@@ -127,8 +165,9 @@ function TerminalOrganizer({
         if (!tab) {
           return
         }
-        if ((draft ?? '').trim() !== (tab.label || '')) {
-          nextDrafts[tabId] = draft
+        const normalizedDraft = draftFromValue(draft, tab)
+        if (!draftMatchesTab(tab, normalizedDraft)) {
+          nextDrafts[tabId] = normalizedDraft
         }
       })
       return nextDrafts
@@ -156,10 +195,30 @@ function TerminalOrganizer({
   const handleDraftChange = (tab, value) => {
     setDrafts((previousDrafts) => {
       const nextDrafts = { ...previousDrafts }
-      if (value.trim() === (tab.label || '')) {
+      const draft = {
+        ...draftFromValue(nextDrafts[tab.id], tab),
+        label: value,
+      }
+      if (draftMatchesTab(tab, draft)) {
         delete nextDrafts[tab.id]
       } else {
-        nextDrafts[tab.id] = value
+        nextDrafts[tab.id] = draft
+      }
+      return nextDrafts
+    })
+  }
+
+  const handleStatusChange = (tab, status) => {
+    setDrafts((previousDrafts) => {
+      const nextDrafts = { ...previousDrafts }
+      const draft = {
+        ...draftFromValue(nextDrafts[tab.id], tab),
+        status: normalizeStatus(status),
+      }
+      if (draftMatchesTab(tab, draft)) {
+        delete nextDrafts[tab.id]
+      } else {
+        nextDrafts[tab.id] = draft
       }
       return nextDrafts
     })
@@ -171,7 +230,9 @@ function TerminalOrganizer({
       .map((tab) => ({
         ...tab,
         labelBeforeSave: tab.label || '',
-        label: drafts[tab.id] ?? '',
+        statusBeforeSave: normalizeStatus(tab.status),
+        label: draftFromValue(drafts[tab.id], tab).label,
+        status: draftFromValue(drafts[tab.id], tab).status,
       }))
     if (!updates.length) {
       return
@@ -192,7 +253,7 @@ function TerminalOrganizer({
       <header className="terminal-organizer-header">
         <div>
           <h2>Terminal Tabs</h2>
-          <p>Name tmux windows with local app labels. The real tmux names stay unchanged.</p>
+          <p>Name tmux windows and flag tabs that need checking or are idle for now.</p>
         </div>
         <div className="terminal-organizer-toolbar">
           <span className={`terminal-organizer-refresh-status ${hasChanges ? 'paused' : ''}`}>
@@ -250,10 +311,12 @@ function TerminalOrganizer({
                       <TerminalLabelRow
                         key={tab.id}
                         tab={tab}
-                        value={drafts[tab.id] ?? tab.label ?? ''}
+                        value={draftFromValue(drafts[tab.id], tab).label}
+                        status={draftFromValue(drafts[tab.id], tab).status}
                         changed={changedIds.includes(tab.id)}
                         disabled={saving}
                         onChange={handleDraftChange}
+                        onStatusChange={handleStatusChange}
                         onSubmit={handleSaveChanges}
                       />
                     ))}

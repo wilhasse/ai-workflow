@@ -308,6 +308,22 @@ class LauncherStateTests(unittest.TestCase):
 
         self.assertNotIn('vm9:dbtools#2', labels)
 
+    def test_window_status_preserves_label_and_can_clear(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'state.json'
+            state = LauncherState(path)
+            state.set_window_label('vm9', 'dbtools', 2, 'RENAC calls')
+            status = state.set_window_status('vm9', 'dbtools', 2, 'done')
+            state.set_window_label('vm9', 'dbtools', 2, '')
+            labels_after_label_clear = state.window_labels()
+            state.set_window_status('vm9', 'dbtools', 2, '')
+            labels_after_status_clear = state.window_labels()
+
+        self.assertEqual(status, 'idle')
+        self.assertEqual(labels_after_label_clear['vm9:dbtools#2']['status'], 'idle')
+        self.assertNotIn('label', labels_after_label_clear['vm9:dbtools#2'])
+        self.assertNotIn('vm9:dbtools#2', labels_after_status_clear)
+
 
 class CodexParkingTests(unittest.TestCase):
     def test_parse_agent_target_accepts_session_and_window_forms(self) -> None:
@@ -567,6 +583,45 @@ class TerminalRankingTests(unittest.TestCase):
 
         self.assertEqual(sorted([unlabeled, labeled], key=terminal_sort_key), [labeled, unlabeled])
 
+    def test_terminal_sort_places_check_first_and_idle_last(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, \
+            mock.patch.dict(os.environ, {'WSV2_SELF_HOST': 'vm10'}, clear=True):
+            config = load_config(write_v2_config(Path(tmp)))
+
+        workspace = config.resolve_workspace('vm9:dbtools')
+        active = TerminalStatus(
+            host_id=workspace.host_id,
+            host=workspace.host,
+            session_id=workspace.id,
+            window_index=2,
+            window_name='active task',
+            window_label='active task',
+            activity=100,
+            workspace=workspace,
+        )
+        check = TerminalStatus(
+            host_id=workspace.host_id,
+            host=workspace.host,
+            session_id=workspace.id,
+            window_index=3,
+            window_name='check task',
+            window_status='check',
+            activity=1,
+            workspace=workspace,
+        )
+        idle = TerminalStatus(
+            host_id=workspace.host_id,
+            host=workspace.host,
+            session_id=workspace.id,
+            window_index=4,
+            window_name='idle task',
+            window_status='idle',
+            activity=1000,
+            workspace=workspace,
+        )
+
+        self.assertEqual(sorted([idle, active, check], key=terminal_sort_key), [check, active, idle])
+
     def test_list_terminal_statuses_orders_manual_selection_before_stale_activity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, \
             mock.patch.dict(os.environ, {'WSV2_SELF_HOST': 'vm10'}, clear=True):
@@ -615,7 +670,7 @@ class TerminalRankingTests(unittest.TestCase):
             config_path = write_v2_config(Path(tmp))
             state_path = Path(tmp) / 'state.json'
             actions = WorkspaceActions(config_path=config_path, state_path=state_path)
-            actions.state.set_window_label('vm9', 'dbtools', 2, 'RENAC calls')
+            actions.state.set_window_metadata('vm9', 'dbtools', 2, label='RENAC calls', status='check')
 
             with mock.patch.object(actions, '_list_local_windows', return_value=[]), \
                 mock.patch.object(
@@ -641,6 +696,7 @@ class TerminalRankingTests(unittest.TestCase):
         self.assertEqual(status.window_name, 'RENAC calls')
         self.assertEqual(status.tmux_window_name, 'codex bash')
         self.assertEqual(status.window_label, 'RENAC calls')
+        self.assertEqual(status.window_status, 'check')
 
 
 class PopupEnvironmentTests(unittest.TestCase):
