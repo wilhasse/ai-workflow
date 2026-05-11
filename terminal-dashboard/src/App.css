@@ -3235,7 +3235,7 @@ button.danger:hover:not(:disabled) {
   font-size: 0.98rem;
 }
 
-.terminal-switcher-workspace {
+.terminal-switcher-tab-label {
   color: #d5dde8;
   font-weight: 700;
 }
@@ -3246,10 +3246,9 @@ button.danger:hover:not(:disabled) {
   font-weight: 600;
 }
 
-.terminal-switcher-window-name {
+.terminal-switcher-workspace-name {
   color: #aeb8c6;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 0.92rem;
+  font-size: 0.9rem;
 }
 
 .terminal-switcher-item-meta {

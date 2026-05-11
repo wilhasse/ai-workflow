@@ -147,10 +147,10 @@ function TerminalSwitcherDialog({
                   onClick={() => onSelectEntry(entry)}
                 >
                   <div className="terminal-switcher-item-title">
-                    <span className="terminal-switcher-workspace">{entry.workspaceName}</span>
+                    <span className="terminal-switcher-tab-label">{entry.windowName}</span>
                     <span className="terminal-switcher-separator">·</span>
                     <span className="terminal-switcher-window-index">#{entry.windowIndex}</span>
-                    <span className="terminal-switcher-window-name">{entry.windowName}</span>
+                    <span className="terminal-switcher-workspace-name">{entry.workspaceName}</span>
                   </div>
                   <div className="terminal-switcher-item-meta">
                     {entry.label ? `tmux ${entry.tmuxName} · ` : ''}

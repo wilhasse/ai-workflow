@@ -157,7 +157,7 @@ function DashboardApp() {
   const [windows, setWindows] = useState([])
   const [windowsByWorkspace, setWindowsByWorkspace] = useState({})
   const [windowsLoading, setWindowsLoading] = useState(false)
-  const [desktopView, setDesktopView] = useState('terminal')
+  const [desktopView, setDesktopView] = useState('organizer')
   const [terminalTabs, setTerminalTabs] = useState([])
   const [terminalTabsLoading, setTerminalTabsLoading] = useState(false)
   const [terminalTabErrors, setTerminalTabErrors] = useState([])

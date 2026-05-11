@@ -1054,19 +1054,19 @@ class TerminalSwitcherDialog(Gtk.Dialog):
 
         columns = [
             ('Host', 0, 110),
-            ('Workspace', 1, 170),
+            ('Brief name', 1, 230),
             ('Tab', 2, 60),
-            ('Task / tmux window', 3, 230),
+            ('Workspace', 3, 170),
             ('Recent', 4, 110),
         ]
         for label, index, width in columns:
             renderer = Gtk.CellRendererText()
-            if index == 3:
+            if index in (1, 3):
                 renderer.set_property('ellipsize', Pango.EllipsizeMode.END)
             column = Gtk.TreeViewColumn(label, renderer, markup=index)
             column.set_min_width(width)
             column.set_resizable(True)
-            if index == 3:
+            if index == 1:
                 column.set_expand(True)
             self.tree.append_column(column)
 
@@ -1165,9 +1165,9 @@ class TerminalSwitcherDialog(Gtk.Dialog):
             recent = GLib.markup_escape_text(self._relative_time(entry.get('recent_at', entry.get('activity', 0))))
             self.store.append([
                 f'<span foreground="#8fa1b6">{host}</span>',
-                f'<span foreground="#d5dde8" weight="bold">{workspace}</span>',
+                f'<span foreground="#d5dde8" weight="bold">{task}</span>',
                 f'<span foreground="#c5a15c" weight="bold">{tab}</span>',
-                f'<span foreground="#aeb8c6">{task}</span>',
+                f'<span foreground="#aeb8c6">{workspace}</span>',
                 f'<span foreground="#7e8a99">{recent}</span>',
                 entry
             ])
