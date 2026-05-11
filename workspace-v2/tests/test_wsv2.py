@@ -699,6 +699,44 @@ class TerminalRankingTests(unittest.TestCase):
         self.assertEqual(status.window_label, 'RENAC calls')
         self.assertEqual(status.window_status, 'check')
 
+    def test_set_terminal_metadata_parks_and_unparks_idle_terminal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, \
+            mock.patch.dict(os.environ, {'WSV2_SELF_HOST': 'vm10'}, clear=True):
+            config_path = write_v2_config(Path(tmp))
+            state_path = Path(tmp) / 'state.json'
+            actions = WorkspaceActions(config_path=config_path, state_path=state_path)
+            workspace = actions.config.resolve_workspace('mysql')
+            active = TerminalStatus(
+                host_id=workspace.host_id,
+                host=workspace.host,
+                session_id=workspace.id,
+                window_index=1,
+                window_name='codex bash',
+                workspace=workspace,
+            )
+            idle = TerminalStatus(
+                host_id=workspace.host_id,
+                host=workspace.host,
+                session_id=workspace.id,
+                window_index=1,
+                window_name='codex bash',
+                window_status='idle',
+                workspace=workspace,
+            )
+
+            with mock.patch('wsv2.actions.park_target') as park, \
+                mock.patch('wsv2.actions.unpark_target') as unpark:
+                actions.set_terminal_metadata(active, status='idle')
+                actions.set_terminal_metadata(idle, status='')
+
+        park.assert_called_once_with(
+            'mysql#1',
+            host_id='vm10',
+            host_name='Main Desktop',
+            reason='idle-status',
+        )
+        unpark.assert_called_once_with('mysql#1', host_id='vm10', host_name='Main Desktop')
+
 
 class PopupEnvironmentTests(unittest.TestCase):
     def test_can_launch_gui_popup_requires_display(self) -> None:

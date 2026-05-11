@@ -435,10 +435,8 @@ class WorkspacePopup(Gtk.Window):
         label: object | None = None,
         status_value: object | None = None,
     ) -> None:
-        metadata = self.actions.state.set_window_metadata(
-            terminal.host_id,
-            terminal.session_id,
-            terminal.window_index,
+        metadata = self.actions.set_terminal_metadata(
+            terminal,
             label=label,
             status=status_value,
         )

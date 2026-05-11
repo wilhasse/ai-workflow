@@ -956,6 +956,7 @@ const buildAgentCommand = ({
   windowIndex = null,
   hostId,
   hostName,
+  reason = null,
   jsonOutput = false,
   allTargets = false,
 }) => {
@@ -974,13 +975,15 @@ const buildAgentCommand = ({
     shellQuote(hostId),
     '--host-name',
     shellQuote(hostName || hostId),
+    reason ? '--reason' : null,
+    reason ? shellQuote(reason) : null,
     jsonOutput ? '--json' : null,
   ].filter(Boolean).join(' ')
 }
 
 const runHostAgentCommand = async (
   host,
-  { action, sessionId = null, windowIndex = null, jsonOutput = false, allTargets = false },
+  { action, sessionId = null, windowIndex = null, reason = null, jsonOutput = false, allTargets = false },
 ) => {
   if (!host?.id) {
     throw new Error('Host is required')
@@ -993,6 +996,7 @@ const runHostAgentCommand = async (
       windowIndex,
       hostId: host.id,
       hostName: host.name,
+      reason,
       jsonOutput,
       allTargets,
     })
@@ -1011,6 +1015,9 @@ const runHostAgentCommand = async (
     args.push('--all')
   }
   args.push('--local-only', '--host-id', host.id, '--host-name', host.name || host.id)
+  if (reason) {
+    args.push('--reason', reason)
+  }
   if (jsonOutput) {
     args.push('--json')
   }
@@ -1076,6 +1083,30 @@ const unparkLocalAgents = async (sessionId, windowIndex) => {
 
 const unparkRemoteAgents = async (host, sessionId, windowIndex) => {
   await runHostAgentCommand(host, { action: 'unpark', sessionId, windowIndex })
+}
+
+const syncWindowStatusAgents = async ({ host, sessionId, windowIndex, previousStatus, nextStatus }) => {
+  const previous = normalizeWindowStatus(previousStatus)
+  const next = normalizeWindowStatus(nextStatus)
+  if (previous === next || !Number.isFinite(windowIndex)) {
+    return null
+  }
+  if (next === 'idle') {
+    return {
+      action: 'park',
+      output: await runHostAgentCommand(
+        host,
+        { action: 'park', sessionId, windowIndex, reason: 'idle-status' },
+      ),
+    }
+  }
+  if (previous === 'idle') {
+    return {
+      action: 'unpark',
+      output: await runHostAgentCommand(host, { action: 'unpark', sessionId, windowIndex }),
+    }
+  }
+  return null
 }
 
 const tmuxSelectWindow = async (sessionId, windowIndex) => {
@@ -1603,7 +1634,24 @@ const handleSetTerminalTabLabel = async (req, res, hostIdRaw, sessionIdRaw, wind
     if (Object.prototype.hasOwnProperty.call(body, 'status')) {
       metadata.status = body.status
     }
-    await setWindowMetadata(host.id, sanitizedSessionId, windowIndex, metadata)
+    const previousStatus = resolveWindowStatus(labels, host, sanitizedSessionId, windowIndex)
+    const savedMetadata = await setWindowMetadata(host.id, sanitizedSessionId, windowIndex, metadata)
+    let agentAction = null
+    let agentActionError = null
+    if (Object.prototype.hasOwnProperty.call(metadata, 'status')) {
+      try {
+        agentAction = await syncWindowStatusAgents({
+          host,
+          sessionId: sanitizedSessionId,
+          windowIndex,
+          previousStatus,
+          nextStatus: savedMetadata.status,
+        })
+      } catch (error) {
+        agentActionError = safeErrorMessage(error)
+        console.warn('Failed to sync terminal idle agent state', agentActionError)
+      }
+    }
     const updatedLabels = await readWindowLabels()
     const catalog = await loadMobileCatalog()
     const workspace = catalog.workspaces.find(
@@ -1626,6 +1674,8 @@ const handleSetTerminalTabLabel = async (req, res, hostIdRaw, sessionIdRaw, wind
         window: { ...updatedWindow, sessionId: sanitizedSessionId },
         selectedAt: recentScoreForWindow(launcherState, host, sanitizedSessionId, windowIndex),
       }),
+      agentAction,
+      agentActionError,
     })
   } catch (error) {
     respond(res, 500, { error: safeErrorMessage(error) })
@@ -2225,10 +2275,27 @@ const handleRenameWindow = async (req, res, sessionId, windowIndexRaw) => {
     if (Object.prototype.hasOwnProperty.call(body, 'status')) {
       metadata.status = body.status
     }
-    await setWindowMetadata(host.id, sanitizedId, windowIndex, metadata)
+    const previousStatus = resolveWindowStatus(labels, host, sanitizedId, windowIndex)
+    const savedMetadata = await setWindowMetadata(host.id, sanitizedId, windowIndex, metadata)
+    let agentAction = null
+    let agentActionError = null
+    if (Object.prototype.hasOwnProperty.call(metadata, 'status')) {
+      try {
+        agentAction = await syncWindowStatusAgents({
+          host,
+          sessionId: sanitizedId,
+          windowIndex,
+          previousStatus,
+          nextStatus: savedMetadata.status,
+        })
+      } catch (error) {
+        agentActionError = safeErrorMessage(error)
+        console.warn('Failed to sync terminal idle agent state', agentActionError)
+      }
+    }
     const updatedLabels = await readWindowLabels()
     const windows = await tmuxListWindows(sanitizedId, { host, labels: updatedLabels })
-    respond(res, 200, { sessionId: sanitizedId, windows })
+    respond(res, 200, { sessionId: sanitizedId, windows, agentAction, agentActionError })
   } catch (error) {
     respond(res, 500, { error: error.message })
   }

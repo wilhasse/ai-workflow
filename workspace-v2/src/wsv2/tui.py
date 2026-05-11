@@ -237,10 +237,8 @@ class WorkspaceTui:
         if status.window_index <= 0:
             self.message = 'Open or create this workspace before editing it.'
             return
-        metadata = self.actions.state.set_window_metadata(
-            status.host_id,
-            status.session_id,
-            status.window_index,
+        metadata = self.actions.set_terminal_metadata(
+            status,
             label=label,
             status=status_value,
         )

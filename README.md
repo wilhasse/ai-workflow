@@ -128,7 +128,7 @@ Available tab flags:
 New workspaces added through the GTK panel seed the first tmux tab label from the workspace display name, so the workspace is immediately promoted in Ctrl+Enter and `/mobile` without needing a manual label for the first tab.
 
 Ctrl+Enter switchers support keyboard edits on the selected tab: `Alt+L` edits the label, `Alt+C` marks `Check`, `Alt+I` marks `Idle`, and `Alt+A` clears the flag back to `Active`.
-`Idle` is visual-only in the switcher order, so an idle terminal still keeps its label/recent position.
+`Idle` keeps its label/recent position while changing color, and it parks only the selected tmux window's Codex/Claude agents. Clearing `Idle` or changing it to `Check` resumes that same window.
 
 ### Architecture
 

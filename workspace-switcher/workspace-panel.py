@@ -146,53 +146,77 @@ def save_recent_score(target):
         json.dump(payload, f, indent=2, sort_keys=True)
 
 
-def unpark_tmux_agents(host_id, host_info, session_name, window_index=None):
-    """Resume parked Codex/Claude processes before opening a tmux target."""
+def signal_tmux_agents(host_id, host_info, session_name, window_index=None, action='unpark'):
+    """Park or resume Codex/Claude processes for a tmux session/window target."""
     target = f"{session_name}#{window_index}" if window_index is not None else session_name
     host_id = host_id or 'local'
     host_name = (host_info or {}).get('name') or host_id
     ssh_target = (host_info or {}).get('ssh')
+    action = 'park' if action == 'park' else 'unpark'
 
     try:
         if host_id == 'local' or not ssh_target:
-            subprocess.run(
-                [
-                    WSV2_SCRIPT,
-                    'codex',
-                    'unpark',
-                    target,
-                    '--local-only',
-                    '--host-id',
-                    host_id,
-                    '--host-name',
-                    host_name,
-                ],
-                capture_output=True,
-                timeout=8,
-            )
+            cmd = [
+                WSV2_SCRIPT,
+                'codex',
+                action,
+                target,
+                '--local-only',
+                '--host-id',
+                host_id,
+                '--host-name',
+                host_name,
+            ]
+            if action == 'park':
+                cmd.extend(['--reason', 'idle-status'])
+            subprocess.run(cmd, capture_output=True, timeout=20)
             return
 
-        remote_cmd = ' '.join([
+        parts = [
             'cd ~/ai-workflow',
             '&&',
             f"WSV2_SELF_HOST={shlex.quote(host_id)}",
             'workspace-v2/scripts/wsv2',
             'codex',
-            'unpark',
+            action,
             shlex.quote(target),
             '--local-only',
             '--host-id',
             shlex.quote(host_id),
             '--host-name',
             shlex.quote(host_name),
-        ])
+        ]
+        if action == 'park':
+            parts.extend(['--reason', 'idle-status'])
+        remote_cmd = ' '.join(parts)
         subprocess.run(
             ['ssh', '-o', 'ConnectTimeout=3', '-o', 'BatchMode=yes', ssh_target, remote_cmd],
             capture_output=True,
-            timeout=8
+            timeout=20
         )
     except (OSError, subprocess.TimeoutExpired):
         return
+
+
+def unpark_tmux_agents(host_id, host_info, session_name, window_index=None):
+    """Resume parked Codex/Claude processes before opening a tmux target."""
+    signal_tmux_agents(host_id, host_info, session_name, window_index, action='unpark')
+
+
+def sync_terminal_idle_agents(entry, previous_status, next_status):
+    previous_status = normalize_terminal_status(previous_status)
+    next_status = normalize_terminal_status(next_status)
+    if previous_status == next_status:
+        return
+    window_index = entry.get('window_index')
+    if not window_index:
+        return
+    host_id = entry.get('host_id', 'local')
+    host_info = entry.get('host_info')
+    if next_status == 'idle':
+        signal_tmux_agents(host_id, host_info, entry['session_name'], window_index, action='park')
+    elif previous_status == 'idle':
+        signal_tmux_agents(host_id, host_info, entry['session_name'], window_index, action='unpark')
 
 
 def default_agent_summary():
@@ -2102,12 +2126,15 @@ class WorkspaceSwitcher(Gtk.Window):
             return
 
         host_id = entry.get('state_host_id') or entry.get('host_id', 'local')
+        previous_status = normalize_terminal_status(entry.get('window_status'))
         save_window_metadata(host_id, entry['session_name'], entry['window_index'], label=new_name, status=new_status)
+        sync_terminal_idle_agents(entry, previous_status, new_status)
         self.refresh_workspaces()
 
     def set_tmux_window_status_from_entry(self, entry, status):
         """Set an app-only status flag for a tmux window from the terminal switcher."""
         host_id = entry.get('state_host_id') or entry.get('host_id', 'local')
+        previous_status = normalize_terminal_status(entry.get('window_status'))
         save_window_metadata(
             host_id,
             entry['session_name'],
@@ -2115,6 +2142,7 @@ class WorkspaceSwitcher(Gtk.Window):
             label=entry.get('window_label', ''),
             status=status,
         )
+        sync_terminal_idle_agents(entry, previous_status, status)
         self.refresh_workspaces()
 
     def _focus_existing_window(self, search_term):

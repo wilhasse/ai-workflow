@@ -9,7 +9,7 @@ import subprocess
 from typing import Iterable
 
 from .catalog import HostRecord, WorkspaceConfigError, WorkspaceRecord, load_config
-from .codex_parking import CodexParkingError, build_remote_wsv2_command, unpark_target
+from .codex_parking import CodexParkingError, build_remote_wsv2_command, park_target, unpark_target
 from .state import LauncherState, normalize_terminal_status
 
 
@@ -513,6 +513,74 @@ class WorkspaceActions:
                 capture_output=True,
                 text=True,
                 timeout=8,
+            )
+        except (CodexParkingError, OSError, subprocess.TimeoutExpired):
+            return
+
+    def set_terminal_metadata(
+        self,
+        terminal: TerminalStatus,
+        *,
+        label: object | None = None,
+        status: object | None = None,
+    ) -> dict[str, str]:
+        metadata = self.state.set_window_metadata(
+            terminal.host_id,
+            terminal.session_id,
+            terminal.window_index,
+            label=label,
+            status=status,
+        )
+        if status is not None:
+            self._sync_terminal_status_agents(terminal, metadata["status"])
+        return metadata
+
+    def _sync_terminal_status_agents(self, terminal: TerminalStatus, next_status: str) -> None:
+        previous_status = normalize_terminal_status(terminal.window_status)
+        if previous_status == next_status or terminal.window_index <= 0:
+            return
+        if next_status == "idle":
+            self._signal_tmux_target_agents(terminal.host, terminal.session_id, terminal.window_index, "park")
+        elif previous_status == "idle":
+            self._signal_tmux_target_agents(terminal.host, terminal.session_id, terminal.window_index, "unpark")
+
+    def _signal_tmux_target_agents(
+        self,
+        host: HostRecord,
+        session_id: str,
+        window_index: int,
+        action: str,
+    ) -> None:
+        tmux_target = f"{session_id}#{window_index}"
+        try:
+            if self.config.host_runs_local(host):
+                if action == "park":
+                    park_target(tmux_target, host_id=host.id, host_name=host.name, reason="idle-status")
+                else:
+                    unpark_target(tmux_target, host_id=host.id, host_name=host.name)
+                return
+            if not host.ssh:
+                return
+            remote_command = build_remote_wsv2_command(
+                action,
+                tmux_target,
+                host_id=host.id,
+                host_name=host.name,
+                reason="idle-status" if action == "park" else None,
+            )
+            subprocess.run(
+                [
+                    "ssh",
+                    "-o",
+                    "ConnectTimeout=3",
+                    "-o",
+                    "BatchMode=yes",
+                    host.ssh,
+                    remote_command,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=20,
             )
         except (CodexParkingError, OSError, subprocess.TimeoutExpired):
             return
