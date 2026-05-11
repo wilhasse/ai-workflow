@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 
 const formatRelativeTime = (timestamp) => {
   if (!timestamp) {
@@ -22,6 +22,8 @@ const formatRelativeTime = (timestamp) => {
   const diffDays = Math.floor(diffHours / 24)
   return `${diffDays}d ago`
 }
+
+const sectionLabelForEntry = (entry) => (entry.label ? 'Labeled tabs' : 'Other active tabs')
 
 function TerminalSwitcherDialog({
   isOpen,
@@ -136,40 +138,46 @@ function TerminalSwitcherDialog({
             <div className="terminal-switcher-empty">No matching tabs found.</div>
           ) : (
             entries.map((entry, index) => (
-              <div
-                key={entry.id}
-                className={`terminal-switcher-item ${index === highlightedIndex ? 'active' : ''}`}
-                onMouseEnter={() => setHighlightedIndex(index)}
-              >
-                <button
-                  type="button"
-                  className="terminal-switcher-item-main"
-                  onClick={() => onSelectEntry(entry)}
-                >
-                  <div className="terminal-switcher-item-title">
-                    <span className="terminal-switcher-tab-label">{entry.windowName}</span>
-                    <span className="terminal-switcher-separator">·</span>
-                    <span className="terminal-switcher-window-index">#{entry.windowIndex}</span>
-                    <span className="terminal-switcher-workspace-name">{entry.workspaceName}</span>
+              <Fragment key={entry.id}>
+                {(index === 0 || Boolean(entries[index - 1]?.label) !== Boolean(entry.label)) && (
+                  <div className="terminal-switcher-section">
+                    {sectionLabelForEntry(entry)}
                   </div>
-                  <div className="terminal-switcher-item-meta">
-                    {entry.hostName ? `${entry.hostName} · ` : ''}
-                    {entry.label ? `tmux ${entry.tmuxName} · ` : ''}
-                    {entry.workspaceDescription ? `${entry.workspaceDescription} · ` : ''}
-                    {entry.windowActive ? 'active tab' : 'background tab'} · recent {formatRelativeTime(entry.recentAt)} · selected {entry.useCount}x
-                  </div>
-                </button>
-                <button
-                  type="button"
-                  className="terminal-switcher-rename"
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    onRenameEntry(entry)
-                  }}
+                )}
+                <div
+                  className={`terminal-switcher-item ${index === highlightedIndex ? 'active' : ''}`}
+                  onMouseEnter={() => setHighlightedIndex(index)}
                 >
-                  Label
-                </button>
-              </div>
+                  <button
+                    type="button"
+                    className="terminal-switcher-item-main"
+                    onClick={() => onSelectEntry(entry)}
+                  >
+                    <div className="terminal-switcher-item-title">
+                      <span className="terminal-switcher-tab-label">{entry.windowName}</span>
+                      <span className="terminal-switcher-separator">·</span>
+                      <span className="terminal-switcher-window-index">#{entry.windowIndex}</span>
+                      <span className="terminal-switcher-workspace-name">{entry.workspaceName}</span>
+                    </div>
+                    <div className="terminal-switcher-item-meta">
+                      {entry.hostName ? `${entry.hostName} · ` : ''}
+                      {entry.label ? `tmux ${entry.tmuxName} · ` : ''}
+                      {entry.workspaceDescription ? `${entry.workspaceDescription} · ` : ''}
+                      {entry.windowActive ? 'active tab' : 'background tab'} · recent {formatRelativeTime(entry.recentAt)} · selected {entry.useCount}x
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    className="terminal-switcher-rename"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      onRenameEntry(entry)
+                    }}
+                  >
+                    Label
+                  </button>
+                </div>
+              </Fragment>
             ))
           )}
         </div>

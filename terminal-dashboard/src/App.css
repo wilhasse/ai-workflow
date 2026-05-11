@@ -3225,6 +3225,15 @@ button.danger:hover:not(:disabled) {
   text-align: center;
 }
 
+.terminal-switcher-section {
+  margin: 0.35rem 0 -0.15rem;
+  color: #8fa1b6;
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
 .terminal-switcher-item {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

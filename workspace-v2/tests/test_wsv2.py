@@ -14,6 +14,7 @@ from wsv2.actions import (
     build_terminal_command,
     build_workspace_command,
     terminal_recent_score,
+    terminal_sort_key,
 )
 from wsv2.catalog import WorkspaceConfigError, load_config
 from wsv2.cli import build_popup_unavailable_message, can_launch_gui_popup, detect_popup_surface
@@ -515,6 +516,35 @@ class TerminalRankingTests(unittest.TestCase):
         self.assertEqual(terminal_recent_score(status, {}), 100)
         self.assertEqual(terminal_recent_score(status, {'vm9:dbtools#2': 200}), 200)
         self.assertEqual(terminal_recent_score(status, {'vm9:dbtools': 300}), 300)
+
+    def test_terminal_sort_prioritizes_labeled_tabs_before_recent_unlabeled_tabs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, \
+            mock.patch.dict(os.environ, {'WSV2_SELF_HOST': 'vm10'}, clear=True):
+            config = load_config(write_v2_config(Path(tmp)))
+
+        workspace = config.resolve_workspace('vm9:dbtools')
+        labeled = TerminalStatus(
+            host_id=workspace.host_id,
+            host=workspace.host,
+            session_id=workspace.id,
+            window_index=2,
+            window_name='RENAC calls',
+            tmux_window_name='bash',
+            window_label='RENAC calls',
+            activity=10,
+            workspace=workspace,
+        )
+        unlabeled = TerminalStatus(
+            host_id=workspace.host_id,
+            host=workspace.host,
+            session_id=workspace.id,
+            window_index=3,
+            window_name='node',
+            activity=1000,
+            workspace=workspace,
+        )
+
+        self.assertEqual(sorted([unlabeled, labeled], key=terminal_sort_key), [labeled, unlabeled])
 
     def test_list_terminal_statuses_orders_manual_selection_before_stale_activity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, \

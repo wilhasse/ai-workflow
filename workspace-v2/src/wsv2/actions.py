@@ -113,6 +113,7 @@ def terminal_recent_score(status: TerminalStatus, recent_scores: dict[str, float
 
 def terminal_sort_key(status: TerminalStatus, recent_scores: dict[str, float] | None = None):
     return (
+        not bool(status.window_label),
         -terminal_recent_score(status, recent_scores),
         not status.active,
         not status.window_active,

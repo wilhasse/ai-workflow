@@ -661,6 +661,10 @@ function DashboardApp() {
       : entries
 
     return filteredEntries.sort((left, right) => {
+      const labelComparison = Number(Boolean(right.label)) - Number(Boolean(left.label))
+      if (labelComparison !== 0) {
+        return labelComparison
+      }
       if (right.recentAt !== left.recentAt) {
         return right.recentAt - left.recentAt
       }

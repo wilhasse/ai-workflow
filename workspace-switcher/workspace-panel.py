@@ -1784,6 +1784,7 @@ class WorkspaceSwitcher(Gtk.Window):
         return sorted(
             entries,
             key=lambda entry: (
+                not bool(entry.get('window_label')),
                 -(entry.get('recent_at') or 0),
                 not entry.get('window_active'),
                 -(entry.get('activity') or 0),
