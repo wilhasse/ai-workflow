@@ -2304,6 +2304,32 @@ class WorkspaceSwitcher(Gtk.Window):
         self.refresh_workspaces()
         return False  # Don't repeat
 
+    def _set_workspace_terminal_statuses(self, host_id, host_info, session_name, status):
+        """Set the organizer status flag for every tmux window in one workspace."""
+        state_host_id = self._state_host_id(host_id)
+        for window in self._get_windows_for_host(host_id, host_info):
+            if window.get('session_name') != session_name:
+                continue
+            save_window_metadata(
+                state_host_id,
+                session_name,
+                window['window_index'],
+                status=status,
+                window_id=window.get('window_id'),
+            )
+
+    def _set_all_terminal_statuses(self, host_id, host_info, status):
+        """Set the organizer status flag for every tmux window on one host."""
+        state_host_id = self._state_host_id(host_id)
+        for window in self._get_windows_for_host(host_id, host_info):
+            save_window_metadata(
+                state_host_id,
+                window['session_name'],
+                window['window_index'],
+                status=status,
+                window_id=window.get('window_id'),
+            )
+
     def _on_agent_all_clicked(self, button):
         """Park or resume all Codex/Claude agents on the selected host."""
         summary = getattr(self, '_current_all_agent_summary', default_agent_summary())
@@ -2329,6 +2355,12 @@ class WorkspaceSwitcher(Gtk.Window):
                 )
                 if result.returncode != 0:
                     error_message = (result.stderr or result.stdout or f'{action} all failed').strip()
+                else:
+                    self._set_all_terminal_statuses(
+                        host_id,
+                        host_info,
+                        'idle' if action == 'park' else '',
+                    )
             except (OSError, subprocess.TimeoutExpired) as error:
                 error_message = str(error)
 
@@ -2359,6 +2391,13 @@ class WorkspaceSwitcher(Gtk.Window):
                 result = self._run_codex_agent_command(host_id, host_info, action, session_name, timeout=20)
                 if result.returncode != 0:
                     error_message = (result.stderr or result.stdout or f'{action} failed').strip()
+                else:
+                    self._set_workspace_terminal_statuses(
+                        host_id,
+                        host_info,
+                        session_name,
+                        'idle' if action == 'park' else '',
+                    )
             except (OSError, subprocess.TimeoutExpired) as error:
                 error_message = str(error)
 

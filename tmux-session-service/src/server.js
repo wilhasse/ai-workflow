@@ -1157,6 +1157,20 @@ const syncWindowStatusAgents = async ({ host, sessionId, windowIndex, windowId =
   return null
 }
 
+const setSessionWindowsStatus = async (host, sessionId, status) => {
+  const labels = await readWindowLabels()
+  const windows = await listHostSessionWindows(host, sessionId, labels)
+  let updated = 0
+  for (const window of windows) {
+    if (!Number.isFinite(window.index)) {
+      continue
+    }
+    await setWindowMetadata(host, sessionId, window.index, { status }, window.id)
+    updated += 1
+  }
+  return updated
+}
+
 const tmuxSelectWindow = async (sessionId, windowIndex, windowId = '') => {
   const response = await runTmux(['select-window', '-t', buildTmuxWindowTarget(sessionId, windowIndex, windowId)])
   return response.ok
@@ -1859,6 +1873,8 @@ const handleMobileAgentAction = async (req, res, hostIdRaw, sessionIdRaw) => {
 
   try {
     let stdout = ''
+    let statusSyncError = null
+    let windowsUpdated = 0
     try {
       stdout = await runHostAgentCommand(host, { action, sessionId })
     } catch (actionError) {
@@ -1874,6 +1890,12 @@ const handleMobileAgentAction = async (req, res, hostIdRaw, sessionIdRaw) => {
       })
       return
     }
+    try {
+      windowsUpdated = await setSessionWindowsStatus(host, sessionId, action === 'park' ? 'idle' : '')
+    } catch (error) {
+      statusSyncError = safeErrorMessage(error)
+      console.warn('Failed to sync workspace terminal status flags', statusSyncError)
+    }
     const rows = await listHostAgents(host)
     respond(res, 200, {
       hostId: host.id,
@@ -1881,6 +1903,8 @@ const handleMobileAgentAction = async (req, res, hostIdRaw, sessionIdRaw) => {
       sessionId,
       action,
       output: stdout,
+      windowsUpdated,
+      statusSyncError,
       agents: summarizeWorkspaceAgents(rows, sessionId),
       rows: rows.filter((row) => row?.session === sessionId),
     })
