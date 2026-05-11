@@ -111,7 +111,19 @@ const loadWindowUsage = () => {
   }
 }
 
-const buildWindowUsageKey = (workspaceId, windowIndex) => `${workspaceId}:${windowIndex}`
+const buildWindowUsageKey = (workspaceId, windowIndex, hostId = null) =>
+  hostId ? `${hostId}:${workspaceId}:${windowIndex}` : `${workspaceId}:${windowIndex}`
+
+const tabToWindowItem = (tab) => ({
+  index: tab.windowIndex,
+  name: tab.windowName || tab.displayName || tab.tmuxName || `window-${tab.windowIndex}`,
+  tmuxName: tab.tmuxName || tab.windowName || '',
+  label: tab.label || '',
+  displayName: tab.displayName || tab.windowName || tab.tmuxName || `window-${tab.windowIndex}`,
+  active: tab.windowActive,
+  lastActivityAt: tab.lastActivityAt ?? 0,
+  paneCount: tab.paneCount ?? 0,
+})
 
 /**
  * Build WebSocket URL for workspace terminal connection
@@ -127,7 +139,11 @@ const buildWorkspaceSocketUrl = (workspaceId, windowIndex = null, options = {}) 
     params.set('monitor', '1')
   }
   const query = params.toString()
-  let url = `${protocol}//${window.location.hostname}${port}/ws/sessions/${workspaceId}`
+  const sessionId = encodeURIComponent(workspaceId)
+  const hostId = encodeURIComponent(options.hostId || '')
+  let url = options.local === false && hostId
+    ? `${protocol}//${window.location.hostname}${port}/ws/remote-sessions/${hostId}/${sessionId}`
+    : `${protocol}//${window.location.hostname}${port}/ws/sessions/${sessionId}`
   if (query) {
     url += `?${query}`
   }
@@ -146,7 +162,6 @@ function DashboardApp() {
     error: workspacesError,
     refresh: refreshWorkspaces,
     fetchWindows,
-    renameWindow,
     fetchTerminalTabs,
     setWindowLabel,
   } = useWorkspaces()
@@ -154,8 +169,8 @@ function DashboardApp() {
   // Active workspace and window state
   const [activeWorkspaceId, setActiveWorkspaceId] = useState(null)
   const [activeWindowIndex, setActiveWindowIndex] = useState(null)
+  const [activeTerminalConnection, setActiveTerminalConnection] = useState(null)
   const [windows, setWindows] = useState([])
-  const [windowsByWorkspace, setWindowsByWorkspace] = useState({})
   const [windowsLoading, setWindowsLoading] = useState(false)
   const [desktopView, setDesktopView] = useState('organizer')
   const [terminalTabs, setTerminalTabs] = useState([])
@@ -261,17 +276,29 @@ function DashboardApp() {
     (window.isSecureContext || window.location.protocol === 'https:')
 
   // Get active workspace
-  const activeWorkspace = useMemo(
-    () => workspaces.find((ws) => ws.id === activeWorkspaceId) ?? null,
-    [workspaces, activeWorkspaceId]
-  )
+  const activeWorkspace = useMemo(() => {
+    const configuredWorkspace = workspaces.find((ws) => ws.id === activeWorkspaceId)
+    if (configuredWorkspace) {
+      return configuredWorkspace
+    }
+    if (activeTerminalConnection?.sessionId !== activeWorkspaceId) {
+      return null
+    }
+    return {
+      id: activeTerminalConnection.sessionId,
+      name: activeTerminalConnection.workspaceName || activeTerminalConnection.sessionId,
+      description: activeTerminalConnection.workspaceDescription || '',
+      active: true,
+      hostId: activeTerminalConnection.hostId,
+      connection: {
+        type: activeTerminalConnection.local === false ? 'remote' : 'local',
+        hostId: activeTerminalConnection.hostId,
+        sessionId: activeTerminalConnection.sessionId,
+      },
+    }
+  }, [activeTerminalConnection, activeWorkspaceId, workspaces])
 
   const applyWorkspaceWindows = useCallback((workspaceId, windowList) => {
-    setWindowsByWorkspace((prev) => ({
-      ...prev,
-      [workspaceId]: windowList,
-    }))
-
     if (workspaceId !== activeWorkspaceId) {
       return
     }
@@ -294,21 +321,47 @@ function DashboardApp() {
       return
     }
 
-    if (activeWorkspaceId && workspaces.some((workspace) => workspace.id === activeWorkspaceId)) {
+    if (
+      activeWorkspaceId &&
+      (
+        workspaces.some((workspace) => workspace.id === activeWorkspaceId) ||
+        activeTerminalConnection?.sessionId === activeWorkspaceId
+      )
+    ) {
       return
     }
 
     const fallbackWorkspaceId = activeWorkspaces[0]?.id ?? workspaces[0]?.id ?? null
     if (fallbackWorkspaceId !== activeWorkspaceId) {
+      setActiveTerminalConnection(null)
       setActiveWorkspaceId(fallbackWorkspaceId)
     }
-  }, [activeWorkspaceId, activeWorkspaces, workspaces, workspacesLoading])
+  }, [activeTerminalConnection, activeWorkspaceId, activeWorkspaces, workspaces, workspacesLoading])
 
   // Load windows when workspace changes
   useEffect(() => {
     if (!activeWorkspaceId) {
       setWindows([])
       setActiveWindowIndex(null)
+      return
+    }
+
+    if (activeTerminalConnection?.sessionId === activeWorkspaceId && activeTerminalConnection.local === false) {
+      const remoteWindows = terminalTabs
+        .filter((tab) => tab.hostId === activeTerminalConnection.hostId && tab.sessionId === activeWorkspaceId)
+        .map(tabToWindowItem)
+      setWindows(remoteWindows)
+      setWindowsLoading(false)
+      setActiveWindowIndex((previousIndex) => {
+        if (!remoteWindows.length) {
+          return previousIndex
+        }
+        if (Number.isFinite(previousIndex) && remoteWindows.some((window) => window.index === previousIndex)) {
+          return previousIndex
+        }
+        const activeWindow = remoteWindows.find((window) => window.active)
+        return activeWindow?.index ?? remoteWindows[0].index
+      })
       return
     }
 
@@ -326,7 +379,7 @@ function DashboardApp() {
     return () => {
       cancelled = true
     }
-  }, [activeWorkspaceId, applyWorkspaceWindows, fetchWindows])
+  }, [activeTerminalConnection, activeWorkspaceId, applyWorkspaceWindows, fetchWindows, terminalTabs])
 
   useEffect(() => {
     if (!canUseOverview && overviewMode) {
@@ -395,11 +448,19 @@ function DashboardApp() {
   // Refresh windows
   const handleRefreshWindows = useCallback(async () => {
     if (!activeWorkspaceId) return
+    if (activeTerminalConnection?.sessionId === activeWorkspaceId && activeTerminalConnection.local === false) {
+      setWindowsLoading(true)
+      const result = await fetchTerminalTabs()
+      setTerminalTabs(result.tabs)
+      setTerminalTabErrors(result.errors)
+      setWindowsLoading(false)
+      return
+    }
     setWindowsLoading(true)
     const windowList = await fetchWindows(activeWorkspaceId)
     applyWorkspaceWindows(activeWorkspaceId, windowList)
     setWindowsLoading(false)
-  }, [activeWorkspaceId, applyWorkspaceWindows, fetchWindows])
+  }, [activeTerminalConnection, activeWorkspaceId, applyWorkspaceWindows, fetchTerminalTabs, fetchWindows])
 
   const loadTerminalTabs = useCallback(async () => {
     setTerminalTabsLoading(true)
@@ -430,18 +491,18 @@ function DashboardApp() {
       return
     }
     await loadTerminalTabs()
-    if (tab.sessionId === activeWorkspaceId) {
+    if (tab.local !== false && tab.sessionId === activeWorkspaceId) {
       const windowList = await fetchWindows(activeWorkspaceId)
       applyWorkspaceWindows(activeWorkspaceId, windowList)
     }
   }, [activeWorkspaceId, applyWorkspaceWindows, fetchWindows, loadTerminalTabs, setWindowLabel])
 
-  const recordWindowUsage = useCallback((workspaceId, windowIndex) => {
+  const recordWindowUsage = useCallback((workspaceId, windowIndex, hostId = null) => {
     if (!workspaceId || !Number.isFinite(windowIndex)) {
       return null
     }
 
-    const usageKey = buildWindowUsageKey(workspaceId, windowIndex)
+    const usageKey = buildWindowUsageKey(workspaceId, windowIndex, hostId)
     setWindowUsage((prev) => ({
       ...prev,
       [usageKey]: {
@@ -460,44 +521,52 @@ function DashboardApp() {
   const openTerminalSwitcher = useCallback(async () => {
     setIsTerminalSwitcherOpen(true)
     setTerminalSwitcherQuery('')
-    if (!activeWorkspaces.length) {
-      return
-    }
 
     setTerminalSwitcherLoading(true)
-    const windowEntries = await Promise.all(
-      activeWorkspaces.map(async (workspace) => ({
-        workspaceId: workspace.id,
-        windows: await fetchWindows(workspace.id),
-      })),
-    )
-
-    windowEntries.forEach(({ workspaceId, windows: workspaceWindows }) => {
-      applyWorkspaceWindows(workspaceId, workspaceWindows)
-    })
+    const result = await fetchTerminalTabs()
+    setTerminalTabs(result.tabs)
+    setTerminalTabErrors(result.errors)
     setTerminalSwitcherLoading(false)
-  }, [activeWorkspaces, applyWorkspaceWindows, fetchWindows])
+  }, [fetchTerminalTabs])
 
   const handleSelectTerminalEntry = useCallback((entry) => {
-    setActiveWorkspaceId(entry.workspaceId)
+    const sessionId = entry.sessionId || entry.workspaceId
+    setActiveWorkspaceId(sessionId)
     setActiveWindowIndex(entry.windowIndex)
+    setActiveTerminalConnection({
+      hostId: entry.hostId,
+      hostName: entry.hostName,
+      local: entry.local !== false,
+      sessionId,
+      workspaceName: entry.workspaceName,
+      workspaceDescription: entry.workspaceDescription,
+    })
     setDesktopView('terminal')
-    lastTrackedWindowKeyRef.current = recordWindowUsage(entry.workspaceId, entry.windowIndex)
+    lastTrackedWindowKeyRef.current = recordWindowUsage(
+      sessionId,
+      entry.windowIndex,
+      entry.local === false ? entry.hostId : null,
+    )
     closeTerminalSwitcher()
   }, [closeTerminalSwitcher, recordWindowUsage])
 
   const handleSelectWindow = useCallback((windowIndex) => {
     setActiveWindowIndex(windowIndex)
     if (activeWorkspaceId) {
-      lastTrackedWindowKeyRef.current = recordWindowUsage(activeWorkspaceId, windowIndex)
+      lastTrackedWindowKeyRef.current = recordWindowUsage(
+        activeWorkspaceId,
+        windowIndex,
+        activeTerminalConnection?.local === false ? activeTerminalConnection.hostId : null,
+      )
     }
-  }, [activeWorkspaceId, recordWindowUsage])
+  }, [activeTerminalConnection, activeWorkspaceId, recordWindowUsage])
 
   const handleRenameWindowEntry = useCallback(async (entry) => {
     if (typeof window === 'undefined') {
       return
     }
 
+    const sessionId = entry.sessionId || entry.workspaceId
     const nextName = window.prompt(
       'Label tmux tab #' + entry.windowIndex + ' in ' + entry.workspaceName + ' (empty clears the label)',
       entry.label || '',
@@ -511,50 +580,66 @@ function DashboardApp() {
       return
     }
 
-    const renamedWindows = await renameWindow(entry.workspaceId, entry.windowIndex, trimmedName)
-    if (!renamedWindows) {
+    const result = await setWindowLabel({
+      hostId: entry.hostId || 'local',
+      sessionId,
+      windowIndex: entry.windowIndex,
+      label: trimmedName,
+    })
+    if (!result) {
       window.alert('Unable to save the tmux tab label.')
       return
     }
 
-    applyWorkspaceWindows(entry.workspaceId, renamedWindows)
-  }, [applyWorkspaceWindows, renameWindow])
+    await loadTerminalTabs()
+    if (entry.local !== false && sessionId === activeWorkspaceId) {
+      const renamedWindows = await fetchWindows(sessionId)
+      applyWorkspaceWindows(sessionId, renamedWindows)
+    }
+  }, [activeWorkspaceId, applyWorkspaceWindows, fetchWindows, loadTerminalTabs, setWindowLabel])
 
   const terminalSwitcherEntries = useMemo(() => {
     const query = terminalSwitcherQuery.trim().toLowerCase()
-    const entries = activeWorkspaces.flatMap((workspace) => {
-      const workspaceWindows = windowsByWorkspace[workspace.id] ?? (workspace.id === activeWorkspaceId ? windows : [])
-      return workspaceWindows.map((windowItem) => {
-        const usage = windowUsage[buildWindowUsageKey(workspace.id, windowItem.index)] ?? {}
-        const lastUsedAt = usage.lastUsedAt ?? 0
-        const lastActivityAt = windowItem.lastActivityAt ?? 0
-        return {
-          id: workspace.id + ':' + windowItem.index,
-          workspaceId: workspace.id,
-          workspaceName: workspace.name,
-          workspaceDescription: workspace.description || '',
-          workspaceActive: workspace.active,
-          windowIndex: windowItem.index,
-          windowName: windowItem.displayName || windowItem.name,
-          tmuxName: windowItem.tmuxName || windowItem.name,
-          label: windowItem.label || '',
-          windowActive: windowItem.active,
-          useCount: usage.useCount ?? 0,
-          lastUsedAt,
-          lastActivityAt,
-          recentAt: Math.max(lastActivityAt, lastUsedAt),
-          paneCount: windowItem.paneCount ?? 0,
-          searchText: [
-            workspace.name,
-            workspace.description || '',
-            String(windowItem.index),
-            '#' + windowItem.index,
-            windowItem.label || '',
-            windowItem.tmuxName || '',
-            windowItem.name,
-          ].join(' ').toLowerCase(),
-        }
-      })
+    const entries = terminalTabs.map((tab) => {
+      const sessionId = tab.sessionId || tab.workspaceId
+      const usage = windowUsage[buildWindowUsageKey(sessionId, tab.windowIndex, tab.local === false ? tab.hostId : null)] ?? {}
+      const lastUsedAt = usage.lastUsedAt ?? 0
+      const lastActivityAt = tab.lastActivityAt ?? 0
+      const windowName = tab.displayName || tab.windowName || tab.tmuxName || `window-${tab.windowIndex}`
+      return {
+        id: tab.id || `${tab.hostId || 'local'}:${sessionId}:${tab.windowIndex}`,
+        hostId: tab.hostId || 'local',
+        hostName: tab.hostName || tab.hostId || 'local',
+        local: tab.local !== false,
+        sessionId,
+        workspaceId: tab.workspaceId || sessionId,
+        workspaceName: tab.workspaceName || sessionId,
+        workspaceDescription: tab.workspaceDescription || '',
+        workspaceActive: tab.active,
+        windowIndex: tab.windowIndex,
+        windowName,
+        tmuxName: tab.tmuxName || tab.windowName || '',
+        label: tab.label || '',
+        windowActive: tab.windowActive,
+        useCount: usage.useCount ?? 0,
+        lastUsedAt,
+        lastActivityAt,
+        recentAt: Math.max(tab.recentAt ?? 0, lastActivityAt, lastUsedAt),
+        paneCount: tab.paneCount ?? 0,
+        searchText: [
+          tab.hostName || '',
+          tab.hostId || '',
+          sessionId,
+          tab.workspaceName || '',
+          tab.workspaceDescription || '',
+          String(tab.windowIndex),
+          '#' + tab.windowIndex,
+          tab.label || '',
+          tab.tmuxName || '',
+          tab.windowName || '',
+          windowName,
+        ].join(' ').toLowerCase(),
+      }
     })
 
     const filteredEntries = query
@@ -575,9 +660,13 @@ function DashboardApp() {
       if (workspaceComparison !== 0) {
         return workspaceComparison
       }
+      const hostComparison = left.hostName.localeCompare(right.hostName)
+      if (hostComparison !== 0) {
+        return hostComparison
+      }
       return left.windowIndex - right.windowIndex
     })
-  }, [activeWorkspaceId, activeWorkspaces, terminalSwitcherQuery, windowUsage, windows, windowsByWorkspace])
+  }, [terminalSwitcherQuery, terminalTabs, windowUsage])
 
   // Persist font size
   useEffect(() => {
@@ -908,8 +997,14 @@ function DashboardApp() {
   // Build WebSocket URL
   const wsUrl = useMemo(() => {
     if (!activeWorkspaceId) return null
-    return buildWorkspaceSocketUrl(activeWorkspaceId, activeWindowIndex)
-  }, [activeWorkspaceId, activeWindowIndex])
+    const selectedConnection = activeTerminalConnection?.sessionId === activeWorkspaceId
+      ? activeTerminalConnection
+      : null
+    return buildWorkspaceSocketUrl(activeWorkspaceId, activeWindowIndex, {
+      hostId: selectedConnection?.hostId,
+      local: selectedConnection ? selectedConnection.local !== false : true,
+    })
+  }, [activeTerminalConnection, activeWorkspaceId, activeWindowIndex])
 
   // Render terminal view
   const renderTerminalView = () => {
@@ -1206,7 +1301,10 @@ function DashboardApp() {
           onClose={() => setActiveSheet(null)}
           workspaces={workspaces}
           activeWorkspaceId={activeWorkspaceId}
-          onSelectWorkspace={setActiveWorkspaceId}
+          onSelectWorkspace={(workspaceId) => {
+            setActiveTerminalConnection(null)
+            setActiveWorkspaceId(workspaceId)
+          }}
           loading={workspacesLoading}
           error={workspacesError}
           onRefresh={refreshWorkspaces}
@@ -1314,7 +1412,10 @@ function DashboardApp() {
                 key={workspace.id}
                 workspace={workspace}
                 isSelected={workspace.id === activeWorkspaceId}
-                onSelect={(ws) => setActiveWorkspaceId(ws.id)}
+                onSelect={(ws) => {
+                  setActiveTerminalConnection(null)
+                  setActiveWorkspaceId(ws.id)
+                }}
               />
             ))}
             {workspaces.length === 0 && !workspacesLoading && (

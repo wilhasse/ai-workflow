@@ -82,8 +82,8 @@ def format_tui_row(status: TerminalStatus, width: int) -> str:
     discovered = " *" if status.discovered else ""
     activity = "active" if status.activity else "inactive"
     row = (
-        f"{dot} {status.host.name} / {status.workspace_name}{discovered} "
-        f"· {tab} {status.window_name} [{activity}]"
+        f"{dot} {status.window_name} {tab} {status.workspace_name}{discovered} "
+        f"· {status.host.name} [{activity}]"
     )
     return row[: max(0, width - 1)]
 

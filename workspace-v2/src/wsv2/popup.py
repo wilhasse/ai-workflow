@@ -53,7 +53,7 @@ class WorkspacePopup(Gtk.Window):
         outer.pack_start(title, False, False, 0)
 
         self.search_entry = Gtk.SearchEntry()
-        self.search_entry.set_placeholder_text("Type a workspace, host, or path")
+        self.search_entry.set_placeholder_text("Type a tab label, workspace, host, or path")
         self.search_entry.connect("changed", self._on_search_changed)
         self.search_entry.connect("activate", self._on_activate_selected)
         self.search_entry.connect("key-press-event", self._on_search_key_press)
@@ -142,7 +142,7 @@ class WorkspacePopup(Gtk.Window):
         if not items:
             row = Gtk.ListBoxRow()
             label = Gtk.Label()
-            label.set_markup('<span foreground="#9ca3af">No matching workspaces</span>')
+            label.set_markup('<span foreground="#9ca3af">No matching terminals</span>')
             label.set_xalign(0)
             row.add(label)
             row.set_selectable(False)
@@ -217,10 +217,12 @@ class WorkspacePopup(Gtk.Window):
 
         title = Gtk.Label()
         status = item.status
+        tab = f"#{status.window_index}" if status.window_index > 0 else "--"
+        discovered = " *" if status.discovered else ""
         title.set_markup(
-            f'<span foreground="#d5dde8"><b>{GLib.markup_escape_text(status.workspace_name)}</b></span>'
-            f' <span foreground="#c5a15c">#{status.window_index}</span>'
-            f' <span foreground="#aeb8c6">{GLib.markup_escape_text(status.window_name)}</span>'
+            f'<span foreground="#d5dde8"><b>{GLib.markup_escape_text(status.window_name)}</b></span>'
+            f' <span foreground="#c5a15c">{GLib.markup_escape_text(tab)}</span>'
+            f' <span foreground="#aeb8c6">{GLib.markup_escape_text(status.workspace_name + discovered)}</span>'
         )
         title.set_xalign(0)
         title.set_ellipsize(Pango.EllipsizeMode.END)
@@ -235,9 +237,9 @@ class WorkspacePopup(Gtk.Window):
         wrapper.pack_start(top, False, False, 0)
 
         detail = Gtk.Label()
-        detail_parts = [status.session_id, status.display_path]
-        if status.discovered:
-            detail_parts.insert(0, "discovered")
+        detail_parts = [status.host.name, status.session_id, status.display_path]
+        if status.tmux_window_name and status.tmux_window_name != status.window_name:
+            detail_parts.insert(0, f"tmux {status.tmux_window_name}")
         if item.recent_score:
             detail_parts.insert(0, f"recent {self._relative_time(item.recent_score)}")
         detail.set_markup(
@@ -266,7 +268,7 @@ class WorkspacePopup(Gtk.Window):
             return f"{hours}h ago"
         return f"{hours // 24}d ago"
 
-    def _status_dot_markup(self, status: WorkspaceStatus) -> str:
+    def _status_dot_markup(self, status: TerminalStatus) -> str:
         if status.reachable is False:
             return '<span foreground="#c45f5f">●</span>'
         if status.active:

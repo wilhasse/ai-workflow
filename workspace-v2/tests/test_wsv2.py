@@ -34,7 +34,7 @@ from wsv2.session_archive import (
     merge_snapshots,
 )
 from wsv2.state import LauncherState
-from wsv2.tui import build_tui_items, filter_tui_items
+from wsv2.tui import build_tui_items, filter_tui_items, format_tui_row
 from wsv2.drill import build_simulated_outage_payload, select_probe_targets
 
 
@@ -647,6 +647,25 @@ class TuiFilterTests(unittest.TestCase):
         filtered = filter_tui_items(items, 'db')
         self.assertEqual(len(filtered), 1)
         self.assertEqual(filtered[0].status.session_id, 'dbtools')
+
+    def test_format_tui_row_puts_terminal_label_first(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = load_config(write_legacy_config(Path(tmp)))
+        workspace = config.resolve_workspace('vm9:dbtools')
+        row = format_tui_row(
+            TerminalStatus(
+                host_id=workspace.host_id,
+                host=workspace.host,
+                session_id=workspace.id,
+                window_index=2,
+                window_name='RENAC calls',
+                workspace=workspace,
+            ),
+            120,
+        )
+
+        self.assertLess(row.index('RENAC calls'), row.index('#2'))
+        self.assertLess(row.index('#2'), row.index('smart-sql'))
 
 
 class OutageDrillTests(unittest.TestCase):

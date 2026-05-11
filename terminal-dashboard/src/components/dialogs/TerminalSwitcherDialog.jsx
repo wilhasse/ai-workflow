@@ -153,6 +153,7 @@ function TerminalSwitcherDialog({
                     <span className="terminal-switcher-workspace-name">{entry.workspaceName}</span>
                   </div>
                   <div className="terminal-switcher-item-meta">
+                    {entry.hostName ? `${entry.hostName} · ` : ''}
                     {entry.label ? `tmux ${entry.tmuxName} · ` : ''}
                     {entry.workspaceDescription ? `${entry.workspaceDescription} · ` : ''}
                     {entry.windowActive ? 'active tab' : 'background tab'} · recent {formatRelativeTime(entry.recentAt)} · selected {entry.useCount}x
