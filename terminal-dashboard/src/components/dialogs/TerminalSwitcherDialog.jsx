@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 const formatRelativeTime = (timestamp) => {
   if (!timestamp) {
@@ -46,6 +46,8 @@ const nextStatusForEntry = (entry) => {
   return 'check'
 }
 
+const SHORTCUT_HELP = '↑↓ Navigate · Enter Open · Alt+L Label · Alt+C Check · Alt+I Idle · Alt+A Active'
+
 function TerminalSwitcherDialog({
   isOpen,
   onClose,
@@ -58,16 +60,22 @@ function TerminalSwitcherDialog({
   onStatusChange,
 }) {
   const inputRef = useRef(null)
+  const selectedEntryIdRef = useRef(null)
   const [highlightedIndex, setHighlightedIndex] = useState(0)
 
   const selectedEntry = entries[highlightedIndex] ?? null
   const hasEntries = entries.length > 0
+
+  const rememberSelection = useCallback((entry) => {
+    selectedEntryIdRef.current = entry?.id ?? null
+  }, [])
 
   useEffect(() => {
     if (!isOpen) {
       return
     }
     setHighlightedIndex(0)
+    selectedEntryIdRef.current = null
     const timer = window.setTimeout(() => {
       inputRef.current?.focus()
       inputRef.current?.select()
@@ -76,11 +84,27 @@ function TerminalSwitcherDialog({
   }, [isOpen])
 
   useEffect(() => {
-    if (highlightedIndex < entries.length) {
+    if (!entries.length) {
+      selectedEntryIdRef.current = null
+      setHighlightedIndex(0)
       return
     }
-    setHighlightedIndex(Math.max(entries.length - 1, 0))
-  }, [entries.length, highlightedIndex])
+
+    const selectedEntryId = selectedEntryIdRef.current
+    if (selectedEntryId) {
+      const nextIndex = entries.findIndex((entry) => entry.id === selectedEntryId)
+      if (nextIndex >= 0) {
+        setHighlightedIndex(nextIndex)
+        return
+      }
+    }
+
+    setHighlightedIndex((previousIndex) => {
+      const nextIndex = Math.min(previousIndex, entries.length - 1)
+      selectedEntryIdRef.current = entries[nextIndex]?.id ?? null
+      return nextIndex
+    })
+  }, [entries])
 
   useEffect(() => {
     if (!isOpen) {
@@ -98,15 +122,51 @@ function TerminalSwitcherDialog({
         return
       }
 
+      if (event.altKey && !event.ctrlKey && !event.metaKey && selectedEntry) {
+        const key = event.key.toLowerCase()
+        if (key === 'l') {
+          event.preventDefault()
+          rememberSelection(selectedEntry)
+          onRenameEntry(selectedEntry)
+          return
+        }
+        if (onStatusChange && key === 'c') {
+          event.preventDefault()
+          rememberSelection(selectedEntry)
+          onStatusChange(selectedEntry, 'check')
+          return
+        }
+        if (onStatusChange && key === 'i') {
+          event.preventDefault()
+          rememberSelection(selectedEntry)
+          onStatusChange(selectedEntry, 'idle')
+          return
+        }
+        if (onStatusChange && key === 'a') {
+          event.preventDefault()
+          rememberSelection(selectedEntry)
+          onStatusChange(selectedEntry, '')
+          return
+        }
+      }
+
       if (event.key === 'ArrowDown') {
         event.preventDefault()
-        setHighlightedIndex((prev) => (prev + 1) % entries.length)
+        setHighlightedIndex((prev) => {
+          const nextIndex = (prev + 1) % entries.length
+          selectedEntryIdRef.current = entries[nextIndex]?.id ?? null
+          return nextIndex
+        })
         return
       }
 
       if (event.key === 'ArrowUp') {
         event.preventDefault()
-        setHighlightedIndex((prev) => (prev - 1 + entries.length) % entries.length)
+        setHighlightedIndex((prev) => {
+          const nextIndex = (prev - 1 + entries.length) % entries.length
+          selectedEntryIdRef.current = entries[nextIndex]?.id ?? null
+          return nextIndex
+        })
         return
       }
 
@@ -120,13 +180,13 @@ function TerminalSwitcherDialog({
 
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [entries, hasEntries, isOpen, onClose, onSelectEntry, selectedEntry])
+  }, [entries, hasEntries, isOpen, onClose, onRenameEntry, onSelectEntry, onStatusChange, rememberSelection, selectedEntry])
 
   const footerText = useMemo(() => {
     if (!hasEntries) {
       return 'Type to filter by workspace name, task, or tmux tab number.'
     }
-    return `${entries.length} tabs shown. Ctrl+Enter opens this switcher. Use ↑↓ to navigate and Enter to jump.`
+    return `${entries.length} tabs shown. Ctrl+Enter opens this switcher.`
   }, [entries.length, hasEntries])
 
   if (!isOpen) {
@@ -143,6 +203,8 @@ function TerminalSwitcherDialog({
           </div>
           <span className="terminal-switcher-shortcut">Ctrl+Enter</span>
         </div>
+
+        <div className="terminal-switcher-help">{SHORTCUT_HELP}</div>
 
         <input
           ref={inputRef}
@@ -168,7 +230,10 @@ function TerminalSwitcherDialog({
                 )}
                 <div
                   className={`terminal-switcher-item ${index === highlightedIndex ? 'active' : ''}`}
-                  onMouseEnter={() => setHighlightedIndex(index)}
+                  onMouseEnter={() => {
+                    selectedEntryIdRef.current = entry.id
+                    setHighlightedIndex(index)
+                  }}
                 >
                   <button
                     type="button"
@@ -199,6 +264,7 @@ function TerminalSwitcherDialog({
                       className="terminal-switcher-rename"
                       onClick={(event) => {
                         event.stopPropagation()
+                        rememberSelection(entry)
                         onRenameEntry(entry)
                       }}
                     >
@@ -210,6 +276,7 @@ function TerminalSwitcherDialog({
                         className={`terminal-switcher-status ${entry.status || 'active'}`}
                         onClick={(event) => {
                           event.stopPropagation()
+                          rememberSelection(entry)
                           onStatusChange(entry, nextStatusForEntry(entry))
                         }}
                       >

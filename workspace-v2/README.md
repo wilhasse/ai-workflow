@@ -37,6 +37,8 @@ Surface selection order:
 2. tmux popup when running inside tmux without a GUI display
 3. inline TUI when running on a normal TTY without tmux
 
+All popup surfaces show the edit shortcuts before the search field. `Alt+L` labels the selected terminal, `Alt+C` marks it for checking, `Alt+I` marks it idle, and `Alt+A` clears the flag.
+
 ## Canonical host model
 
 Phase `16.1` introduces an explicit-host v2 catalog.

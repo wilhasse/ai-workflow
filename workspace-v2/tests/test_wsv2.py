@@ -774,6 +774,35 @@ class TuiFilterTests(unittest.TestCase):
         self.assertLess(row.index('RENAC calls'), row.index('#2'))
         self.assertLess(row.index('#2'), row.index('smart-sql'))
 
+    def test_filter_tui_items_prioritizes_labeled_tabs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = load_config(write_legacy_config(Path(tmp)))
+        workspace = config.resolve_workspace('vm9:dbtools')
+        labeled = TerminalStatus(
+            host_id=workspace.host_id,
+            host=workspace.host,
+            session_id=workspace.id,
+            window_index=2,
+            window_name='RENAC calls',
+            window_label='RENAC calls',
+            activity=1,
+            workspace=workspace,
+        )
+        unlabeled = TerminalStatus(
+            host_id=workspace.host_id,
+            host=workspace.host,
+            session_id=workspace.id,
+            window_index=3,
+            window_name='codex bash',
+            activity=1000,
+            workspace=workspace,
+        )
+        items = build_tui_items([unlabeled, labeled])
+
+        filtered = filter_tui_items(items, '')
+
+        self.assertEqual([item.status.window_index for item in filtered], [2, 3])
+
 
 class OutageDrillTests(unittest.TestCase):
     def test_build_simulated_outage_payload_rewrites_down_host_ssh(self) -> None:

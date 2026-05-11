@@ -17,6 +17,7 @@ from .actions import TerminalStatus, WorkspaceActions, terminal_recent_score, te
 PROGRAM_CLASS = "workspace-v2-popup"
 WINDOW_ROLE = "workspace-v2-popup"
 WINDOW_TITLE = "Workspace Launcher"
+SHORTCUT_HELP = "↑↓ Navigate · Enter Open · Alt+L Label · Alt+C Check · Alt+I Idle · Alt+A Active"
 
 
 @dataclass(slots=True)
@@ -51,6 +52,13 @@ class WorkspacePopup(Gtk.Window):
         title.set_markup(f"<b>{GLib.markup_escape_text(WINDOW_TITLE)}</b>")
         title.set_xalign(0)
         outer.pack_start(title, False, False, 0)
+
+        shortcut_help = Gtk.Label()
+        shortcut_help.set_markup(
+            f'<span foreground="#8fa1b6" size="small">{GLib.markup_escape_text(SHORTCUT_HELP)}</span>'
+        )
+        shortcut_help.set_xalign(0)
+        outer.pack_start(shortcut_help, False, False, 0)
 
         self.search_entry = Gtk.SearchEntry()
         self.search_entry.set_placeholder_text("Type a tab label, workspace, host, or path")
@@ -131,7 +139,8 @@ class WorkspacePopup(Gtk.Window):
         self._refresh_rows()
         return False
 
-    def _refresh_rows(self) -> None:
+    def _refresh_rows(self, preferred_target: str | None = None) -> None:
+        selected_target = preferred_target or self._selected_target()
         query = self.search_entry.get_text().strip().lower()
         items = self._sorted_items(query)
         self.filtered_items = items
@@ -154,13 +163,15 @@ class WorkspacePopup(Gtk.Window):
             self.listbox.show_all()
             return
 
+        selected_row = None
         for item in items:
-            self.listbox.add(self._build_row(item))
+            row = self._build_row(item)
+            if selected_target and item.status.target == selected_target:
+                selected_row = row
+            self.listbox.add(row)
 
         self.listbox.show_all()
-        first_row = self.listbox.get_row_at_index(0)
-        if first_row:
-            self.listbox.select_row(first_row)
+        self.listbox.select_row(selected_row or self.listbox.get_row_at_index(0))
 
     def _sorted_items(self, query: str) -> list[PopupItem]:
         items = [
@@ -212,6 +223,7 @@ class WorkspacePopup(Gtk.Window):
     def _build_row(self, item: PopupItem) -> Gtk.ListBoxRow:
         row = Gtk.ListBoxRow()
         row.workspace_target = item.status.target
+        row.terminal_status = item.status
 
         wrapper = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
 
@@ -300,6 +312,8 @@ class WorkspacePopup(Gtk.Window):
         self._refresh_rows()
 
     def _on_search_key_press(self, _entry: Gtk.SearchEntry, event: Gdk.EventKey) -> bool:
+        if self._handle_edit_shortcut(event):
+            return True
         key_name = Gdk.keyval_name(event.keyval)
         if key_name == "Down":
             self._move_selection(1)
@@ -313,6 +327,8 @@ class WorkspacePopup(Gtk.Window):
         return False
 
     def _on_window_key_press(self, _window: Gtk.Window, event: Gdk.EventKey) -> bool:
+        if self._handle_edit_shortcut(event):
+            return True
         if Gdk.keyval_name(event.keyval) == "Escape":
             self.destroy()
             return True
@@ -331,6 +347,115 @@ class WorkspacePopup(Gtk.Window):
         if not row or not getattr(row, "workspace_target", None):
             return None
         return row.workspace_target
+
+    def _selected_status(self) -> TerminalStatus | None:
+        row = self.listbox.get_selected_row()
+        if not row:
+            return None
+        status = getattr(row, "terminal_status", None)
+        return status if isinstance(status, TerminalStatus) else None
+
+    def _handle_edit_shortcut(self, event: Gdk.EventKey) -> bool:
+        if not event.state & Gdk.ModifierType.MOD1_MASK:
+            return False
+        key_name = (Gdk.keyval_name(event.keyval) or "").lower()
+        if key_name == "l":
+            self._rename_selected()
+            return True
+        if key_name == "c":
+            self._set_selected_status("check")
+            return True
+        if key_name == "i":
+            self._set_selected_status("idle")
+            return True
+        if key_name == "a":
+            self._set_selected_status("")
+            return True
+        return False
+
+    def _rename_selected(self) -> None:
+        status = self._selected_status()
+        if not status:
+            return
+        if status.window_index <= 0:
+            self._set_message("Open or create this workspace before labeling its terminal.", error=True)
+            return
+
+        dialog = Gtk.Dialog(title="Label terminal", transient_for=self, flags=Gtk.DialogFlags.MODAL)
+        dialog.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL, Gtk.STOCK_SAVE, Gtk.ResponseType.OK)
+        dialog.set_default_response(Gtk.ResponseType.OK)
+
+        content = dialog.get_content_area()
+        content.set_margin_start(12)
+        content.set_margin_end(12)
+        content.set_margin_top(12)
+        content.set_margin_bottom(12)
+        content.set_spacing(8)
+
+        label = Gtk.Label()
+        label.set_xalign(0)
+        label.set_markup(
+            "<b>Brief terminal name</b>\n"
+            f'<span foreground="#8fa1b6" size="small">'
+            f'{GLib.markup_escape_text(status.workspace_name)} #{status.window_index}'
+            "</span>"
+        )
+        content.pack_start(label, False, False, 0)
+
+        entry = Gtk.Entry()
+        entry.set_placeholder_text(status.tmux_window_name or status.window_name)
+        entry.set_text(status.window_label)
+        entry.set_activates_default(True)
+        content.pack_start(entry, False, False, 0)
+
+        dialog.show_all()
+        entry.grab_focus()
+        entry.select_region(0, -1)
+        response = dialog.run()
+        value = entry.get_text()
+        dialog.destroy()
+
+        if response != Gtk.ResponseType.OK:
+            return
+        self._set_selected_metadata(status, label=value)
+
+    def _set_selected_status(self, status_value: str) -> None:
+        status = self._selected_status()
+        if not status:
+            return
+        if status.window_index <= 0:
+            self._set_message("Open or create this workspace before flagging its terminal.", error=True)
+            return
+        self._set_selected_metadata(status, status_value=status_value)
+
+    def _set_selected_metadata(
+        self,
+        terminal: TerminalStatus,
+        *,
+        label: object | None = None,
+        status_value: object | None = None,
+    ) -> None:
+        metadata = self.actions.state.set_window_metadata(
+            terminal.host_id,
+            terminal.session_id,
+            terminal.window_index,
+            label=label,
+            status=status_value,
+        )
+        self.recent_scores = self.actions.state.recent_scores()
+        self.statuses = self.actions.list_terminal_statuses()
+        self._refresh_rows(preferred_target=terminal.target)
+        label_text = metadata.get("label") or "unlabeled"
+        status_text = metadata.get("status") or "active"
+        self._set_message(
+            f"Updated {terminal.workspace_name} #{terminal.window_index}: {label_text}, {status_text}."
+        )
+
+    def _set_message(self, text: str, *, error: bool = False) -> None:
+        color = "#fca5a5" if error else "#7f8c8d"
+        self.message_label.set_markup(
+            f'<span foreground="{color}">{GLib.markup_escape_text(text)}</span>'
+        )
 
     def _on_activate_selected(self, _entry: Gtk.SearchEntry) -> None:
         target = self._selected_target()

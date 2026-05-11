@@ -1081,11 +1081,21 @@ class TerminalSwitcherDialog(Gtk.Dialog):
         title.set_xalign(0)
         box.pack_start(title, False, False, 0)
 
+        shortcut_help = Gtk.Label()
+        shortcut_help.set_markup(
+            '<span size="small" foreground="#8fa1b6">'
+            '↑↓ Navigate · Enter Open · Alt+L Label · Alt+C Check · Alt+I Idle · Alt+A Active'
+            '</span>'
+        )
+        shortcut_help.set_xalign(0)
+        box.pack_start(shortcut_help, False, False, 0)
+
         self.search_entry = Gtk.Entry()
         self.search_entry.set_name('terminal-switcher-search')
         self.search_entry.set_placeholder_text('Search host, workspace, task name, or #window')
         self.search_entry.connect('changed', self._on_search_changed)
         self.search_entry.connect('activate', self._activate_selected)
+        self.search_entry.connect('key-press-event', self._on_key_press)
         box.pack_start(self.search_entry, False, False, 0)
 
         self.store = Gtk.ListStore(str, str, str, str, str, str, object)
@@ -1093,6 +1103,7 @@ class TerminalSwitcherDialog(Gtk.Dialog):
         self.tree.set_name('terminal-switcher-tree')
         self.tree.set_headers_visible(True)
         self.tree.connect('row-activated', self._on_row_activated)
+        self.tree.connect('key-press-event', self._on_key_press)
 
         columns = [
             ('Host', 0, 110),
@@ -1133,7 +1144,7 @@ class TerminalSwitcherDialog(Gtk.Dialog):
         box.pack_start(action_box, False, False, 0)
 
         hint = Gtk.Label()
-        hint.set_markup('<span size="small" foreground="#7f8c8d">Sorted by recent terminal use. Use ↑↓ and Enter to jump.</span>')
+        hint.set_markup('<span size="small" foreground="#7f8c8d">Sorted by recent terminal use. Alt shortcuts update the selected row without closing this dialog.</span>')
         hint.set_xalign(0)
         box.pack_start(hint, False, False, 0)
 
@@ -1195,8 +1206,14 @@ class TerminalSwitcherDialog(Gtk.Dialog):
             return f'{hours}h ago'
         return f'{hours // 24}d ago'
 
-    def _populate(self):
+    def _entry_identity(self, entry):
+        if not entry:
+            return ''
+        return entry.get('target') or f"{entry.get('state_host_id') or entry.get('host_id', 'local')}:{entry.get('session_name')}#{entry.get('window_index')}"
+
+    def _populate(self, selected_target=None):
         self.store.clear()
+        selected_iter = None
         for entry in self.filtered_entries:
             host = GLib.markup_escape_text(entry.get('host_name', entry.get('host_id', 'local')))
             workspace = entry.get('workspace_name') or entry['session_name']
@@ -1213,7 +1230,7 @@ class TerminalSwitcherDialog(Gtk.Dialog):
                 workspace = f"{workspace} *"
             workspace = GLib.markup_escape_text(workspace)
             recent = GLib.markup_escape_text(self._relative_time(entry.get('recent_at', entry.get('activity', 0))))
-            self.store.append([
+            row_iter = self.store.append([
                 f'<span foreground="#8fa1b6">{host}</span>',
                 f'<span foreground="#d5dde8" weight="bold">{task}</span>',
                 f'<span foreground="#c5a15c" weight="bold">{tab}</span>',
@@ -1222,12 +1239,14 @@ class TerminalSwitcherDialog(Gtk.Dialog):
                 f'<span foreground="#7e8a99">{recent}</span>',
                 entry
             ])
+            if selected_target and self._entry_identity(entry) == selected_target:
+                selected_iter = row_iter
         if len(self.store) > 0:
-            first = self.store.get_iter_first()
-            self.tree.get_selection().select_iter(first)
+            self.tree.get_selection().select_iter(selected_iter or self.store.get_iter_first())
 
-    def _on_search_changed(self, entry):
+    def _on_search_changed(self, entry, selected_target=None):
         query = entry.get_text().strip().lower()
+        selected_target = selected_target or self._entry_identity(self.selected_entry)
         if query:
             self.filtered_entries = [
                 item for item in self.all_entries
@@ -1235,7 +1254,7 @@ class TerminalSwitcherDialog(Gtk.Dialog):
             ]
         else:
             self.filtered_entries = list(self.all_entries)
-        self._populate()
+        self._populate(selected_target)
 
     def _on_selection_changed(self, selection):
         model, tree_iter = selection.get_selected()
@@ -1251,13 +1270,36 @@ class TerminalSwitcherDialog(Gtk.Dialog):
     def _rename_selected(self, button):
         if not self.selected_entry:
             return
+        selected_target = self._entry_identity(self.selected_entry)
         self.parent.rename_tmux_window_from_entry(self.selected_entry, self)
         # Refresh entries after label edits while keeping dialog open.
         self.all_entries = self.parent.build_terminal_switcher_entries()
-        self._on_search_changed(self.search_entry)
+        self._on_search_changed(self.search_entry, selected_target)
+
+    def _set_selected_status(self, status):
+        if not self.selected_entry:
+            return
+        selected_target = self._entry_identity(self.selected_entry)
+        self.parent.set_tmux_window_status_from_entry(self.selected_entry, status)
+        self.all_entries = self.parent.build_terminal_switcher_entries()
+        self._on_search_changed(self.search_entry, selected_target)
 
     def _on_key_press(self, widget, event):
         keyval = event.keyval
+        state = event.state & Gtk.accelerator_get_default_mod_mask()
+        if state & Gdk.ModifierType.MOD1_MASK:
+            if keyval in (Gdk.KEY_l, Gdk.KEY_L):
+                self._rename_selected(widget)
+                return True
+            if keyval in (Gdk.KEY_c, Gdk.KEY_C):
+                self._set_selected_status('check')
+                return True
+            if keyval in (Gdk.KEY_i, Gdk.KEY_I):
+                self._set_selected_status('idle')
+                return True
+            if keyval in (Gdk.KEY_a, Gdk.KEY_A):
+                self._set_selected_status('')
+                return True
         if keyval == Gdk.KEY_Escape:
             self.response(Gtk.ResponseType.CANCEL)
             return True
@@ -2063,6 +2105,18 @@ class WorkspaceSwitcher(Gtk.Window):
 
         host_id = entry.get('state_host_id') or entry.get('host_id', 'local')
         save_window_metadata(host_id, entry['session_name'], entry['window_index'], label=new_name, status=new_status)
+        self.refresh_workspaces()
+
+    def set_tmux_window_status_from_entry(self, entry, status):
+        """Set an app-only status flag for a tmux window from the terminal switcher."""
+        host_id = entry.get('state_host_id') or entry.get('host_id', 'local')
+        save_window_metadata(
+            host_id,
+            entry['session_name'],
+            entry['window_index'],
+            label=entry.get('window_label', ''),
+            status=status,
+        )
         self.refresh_workspaces()
 
     def _focus_existing_window(self, search_term):

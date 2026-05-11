@@ -201,6 +201,15 @@
       "icon": "folder",
       "description": "",
       "host": "local"
+    },
+    {
+      "id": "mysql",
+      "name": "mysql 9.4",
+      "path": "/home/cslog/mysql",
+      "color": "#3498db",
+      "icon": "folder",
+      "description": "",
+      "host": "local"
     }
   ],
   "settings": {
