@@ -102,8 +102,8 @@ function TerminalSwitcherDialog({
     if (!hasEntries) {
       return 'Type to filter by workspace name, task, or tmux tab number.'
     }
-    return 'Ctrl+Enter opens this switcher. Use ↑↓ to navigate and Enter to jump.'
-  }, [hasEntries])
+    return `${entries.length} tabs shown. Ctrl+Enter opens this switcher. Use ↑↓ to navigate and Enter to jump.`
+  }, [entries.length, hasEntries])
 
   if (!isOpen) {
     return null

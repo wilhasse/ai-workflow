@@ -39,7 +39,7 @@ class WorkspacePopup(Gtk.Window):
         self.set_modal(True)
         self.set_skip_taskbar_hint(True)
         self.set_keep_above(True)
-        self.set_default_size(760, 460)
+        self.set_default_size(860, 680)
         self.set_border_width(12)
         self.connect("destroy", Gtk.main_quit)
         self.connect("key-press-event", self._on_window_key_press)
@@ -135,6 +135,10 @@ class WorkspacePopup(Gtk.Window):
         query = self.search_entry.get_text().strip().lower()
         items = self._sorted_items(query)
         self.filtered_items = items
+        label = "terminal" if len(items) == 1 else "terminals"
+        self.message_label.set_markup(
+            f'<span foreground="#7f8c8d">Showing {len(items)} {label}. Enter: open   Esc: close   Recent items are shown first.</span>'
+        )
 
         for child in self.listbox.get_children():
             child.destroy()
