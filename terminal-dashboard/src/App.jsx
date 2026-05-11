@@ -477,24 +477,38 @@ function DashboardApp() {
     loadTerminalTabs()
   }, [desktopView, isMobile, loadTerminalTabs])
 
-  const handleSaveTerminalLabel = useCallback(async (tab, label) => {
-    setTerminalLabelSavingId(tab.id)
-    const result = await setWindowLabel({
-      hostId: tab.hostId,
-      sessionId: tab.sessionId,
-      windowIndex: tab.windowIndex,
-      label,
-    })
-    setTerminalLabelSavingId(null)
-    if (!result) {
-      setTerminalTabErrors([{ error: 'Unable to save terminal label.' }])
-      return
+  const handleSaveTerminalLabels = useCallback(async (updates) => {
+    const changedUpdates = updates.filter((tab) => tab.label.trim() !== (tab.labelBeforeSave ?? (tab.label || '')))
+    if (!changedUpdates.length) {
+      return true
     }
+
+    setTerminalLabelSavingId('bulk')
+    const failures = []
+    for (const tab of changedUpdates) {
+      const result = await setWindowLabel({
+        hostId: tab.hostId,
+        sessionId: tab.sessionId,
+        windowIndex: tab.windowIndex,
+        label: tab.label,
+      })
+      if (!result) {
+        failures.push(tab)
+      }
+    }
+    setTerminalLabelSavingId(null)
+
     await loadTerminalTabs()
-    if (tab.local !== false && tab.sessionId === activeWorkspaceId) {
+    if (changedUpdates.some((tab) => tab.local !== false && tab.sessionId === activeWorkspaceId)) {
       const windowList = await fetchWindows(activeWorkspaceId)
       applyWorkspaceWindows(activeWorkspaceId, windowList)
     }
+
+    if (failures.length > 0) {
+      setTerminalTabErrors([{ error: `Unable to save ${failures.length} terminal label${failures.length === 1 ? '' : 's'}.` }])
+      return false
+    }
+    return true
   }, [activeWorkspaceId, applyWorkspaceWindows, fetchWindows, loadTerminalTabs, setWindowLabel])
 
   const recordWindowUsage = useCallback((workspaceId, windowIndex, hostId = null) => {
@@ -1488,9 +1502,9 @@ function DashboardApp() {
             tabs={terminalTabs}
             loading={terminalTabsLoading}
             errors={terminalTabErrors}
-            savingId={terminalLabelSavingId}
+            saving={Boolean(terminalLabelSavingId)}
             onRefresh={loadTerminalTabs}
-            onSaveLabel={handleSaveTerminalLabel}
+            onSaveLabels={handleSaveTerminalLabels}
           />
         ) : renderTerminalView()}
       </main>

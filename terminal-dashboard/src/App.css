@@ -2423,6 +2423,33 @@ button.danger:hover:not(:disabled) {
   font-size: 0.86rem;
 }
 
+.terminal-organizer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.terminal-organizer-refresh-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2rem;
+  border: 1px solid rgba(38, 50, 68, 0.9);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-tertiary);
+  background: rgba(3, 7, 18, 0.42);
+  padding: 0 0.65rem;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.terminal-organizer-refresh-status.paused {
+  color: #facc15;
+  border-color: rgba(250, 204, 21, 0.35);
+  background: rgba(250, 204, 21, 0.08);
+}
+
 .terminal-organizer-errors {
   display: flex;
   flex-wrap: wrap;
@@ -2496,9 +2523,16 @@ button.danger:hover:not(:disabled) {
 
 .terminal-organizer-row {
   display: grid;
-  grid-template-columns: minmax(15rem, 1.2fr) minmax(12rem, 1fr) auto;
+  grid-template-columns: minmax(15rem, 1.2fr) minmax(12rem, 1fr);
   gap: 0.65rem;
   align-items: center;
+  border-radius: var(--radius-sm);
+  padding: 0.2rem;
+  margin: -0.2rem;
+}
+
+.terminal-organizer-row.changed {
+  background: rgba(250, 204, 21, 0.06);
 }
 
 .terminal-organizer-tab {
@@ -2548,22 +2582,18 @@ button.danger:hover:not(:disabled) {
   box-shadow: 0 0 0 2px rgba(20, 184, 166, 0.12);
 }
 
-.terminal-organizer-actions {
-  display: flex;
-  gap: 0.45rem;
-}
-
-.terminal-organizer-actions button {
-  min-width: 4.4rem;
-}
-
 @media (max-width: 980px) {
-  .terminal-organizer-row {
-    grid-template-columns: minmax(0, 1fr);
+  .terminal-organizer-header {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
-  .terminal-organizer-actions {
+  .terminal-organizer-toolbar {
     justify-content: flex-start;
+  }
+
+  .terminal-organizer-row {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

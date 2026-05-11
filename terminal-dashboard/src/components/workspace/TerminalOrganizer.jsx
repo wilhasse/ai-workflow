@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 
+const AUTO_REFRESH_SECONDS = 5
+
 const formatRelativeTime = (timestamp) => {
   if (!timestamp) {
     return 'never'
@@ -20,22 +22,28 @@ const formatRelativeTime = (timestamp) => {
   return `${Math.floor(diffHours / 24)}d ago`
 }
 
-function TerminalLabelRow({ tab, saving, onSaveLabel }) {
-  const [draft, setDraft] = useState(tab.label || '')
-  const currentLabel = tab.label || ''
-  const changed = draft.trim() !== currentLabel
+const changedDraftIds = (tabs, drafts) => {
+  const changed = []
+  tabs.forEach((tab) => {
+    if (!Object.prototype.hasOwnProperty.call(drafts, tab.id)) {
+      return
+    }
+    const draft = drafts[tab.id] ?? ''
+    if (draft.trim() !== (tab.label || '')) {
+      changed.push(tab.id)
+    }
+  })
+  return changed
+}
 
-  useEffect(() => {
-    setDraft(tab.label || '')
-  }, [tab.label])
-
+function TerminalLabelRow({ tab, value, changed, disabled, onChange, onSubmit }) {
   return (
     <form
-      className="terminal-organizer-row"
+      className={`terminal-organizer-row ${changed ? 'changed' : ''}`}
       onSubmit={(event) => {
         event.preventDefault()
-        if (changed && !saving) {
-          onSaveLabel(tab, draft)
+        if (changed && !disabled) {
+          onSubmit()
         }
       }}
     >
@@ -53,28 +61,13 @@ function TerminalLabelRow({ tab, saving, onSaveLabel }) {
       </div>
       <input
         type="text"
-        value={draft}
-        onChange={(event) => setDraft(event.target.value)}
+        value={value}
+        onChange={(event) => onChange(tab, event.target.value)}
         placeholder="Short label"
         maxLength={80}
+        disabled={disabled}
         aria-label={`Label for ${tab.workspaceName} window ${tab.windowIndex}`}
       />
-      <div className="terminal-organizer-actions">
-        <button type="submit" className="secondary" disabled={!changed || saving}>
-          {saving ? 'Saving' : 'Save'}
-        </button>
-        <button
-          type="button"
-          className="secondary"
-          disabled={!currentLabel || saving}
-          onClick={() => {
-            setDraft('')
-            onSaveLabel(tab, '')
-          }}
-        >
-          Clear
-        </button>
-      </div>
     </form>
   )
 }
@@ -83,10 +76,13 @@ function TerminalOrganizer({
   tabs = [],
   loading,
   errors = [],
-  savingId,
+  saving,
   onRefresh,
-  onSaveLabel,
+  onSaveLabels,
 }) {
+  const [drafts, setDrafts] = useState({})
+  const [secondsUntilRefresh, setSecondsUntilRefresh] = useState(AUTO_REFRESH_SECONDS)
+
   const groups = useMemo(() => {
     const hosts = new Map()
     tabs.forEach((tab) => {
@@ -119,6 +115,78 @@ function TerminalOrganizer({
     }))
   }, [tabs])
 
+  const changedIds = useMemo(() => changedDraftIds(tabs, drafts), [drafts, tabs])
+  const hasChanges = changedIds.length > 0
+
+  useEffect(() => {
+    setDrafts((previousDrafts) => {
+      const tabMap = new Map(tabs.map((tab) => [tab.id, tab]))
+      const nextDrafts = {}
+      Object.entries(previousDrafts).forEach(([tabId, draft]) => {
+        const tab = tabMap.get(tabId)
+        if (!tab) {
+          return
+        }
+        if ((draft ?? '').trim() !== (tab.label || '')) {
+          nextDrafts[tabId] = draft
+        }
+      })
+      return nextDrafts
+    })
+  }, [tabs])
+
+  useEffect(() => {
+    if (hasChanges || loading || saving) {
+      setSecondsUntilRefresh(AUTO_REFRESH_SECONDS)
+      return undefined
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      if (secondsUntilRefresh <= 1) {
+        setSecondsUntilRefresh(AUTO_REFRESH_SECONDS)
+        onRefresh()
+        return
+      }
+      setSecondsUntilRefresh(secondsUntilRefresh - 1)
+    }, 1000)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [hasChanges, loading, onRefresh, saving, secondsUntilRefresh])
+
+  const handleDraftChange = (tab, value) => {
+    setDrafts((previousDrafts) => {
+      const nextDrafts = { ...previousDrafts }
+      if (value.trim() === (tab.label || '')) {
+        delete nextDrafts[tab.id]
+      } else {
+        nextDrafts[tab.id] = value
+      }
+      return nextDrafts
+    })
+  }
+
+  const handleSaveChanges = async () => {
+    const updates = tabs
+      .filter((tab) => changedIds.includes(tab.id))
+      .map((tab) => ({
+        ...tab,
+        labelBeforeSave: tab.label || '',
+        label: drafts[tab.id] ?? '',
+      }))
+    if (!updates.length) {
+      return
+    }
+
+    const saved = await onSaveLabels(updates)
+    if (saved) {
+      setDrafts({})
+    }
+  }
+
+  const handleDiscardChanges = () => {
+    setDrafts({})
+  }
+
   return (
     <section className="terminal-organizer">
       <header className="terminal-organizer-header">
@@ -126,9 +194,30 @@ function TerminalOrganizer({
           <h2>Terminal Tabs</h2>
           <p>Name tmux windows with local app labels. The real tmux names stay unchanged.</p>
         </div>
-        <button type="button" className="secondary" onClick={onRefresh} disabled={loading}>
-          {loading ? 'Refreshing' : 'Refresh'}
-        </button>
+        <div className="terminal-organizer-toolbar">
+          <span className={`terminal-organizer-refresh-status ${hasChanges ? 'paused' : ''}`}>
+            {hasChanges ? `${changedIds.length} unsaved` : `Auto ${secondsUntilRefresh}s`}
+          </span>
+          <button
+            type="button"
+            className="secondary"
+            onClick={handleSaveChanges}
+            disabled={!hasChanges || saving}
+          >
+            {saving ? 'Saving' : 'Save changes'}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={handleDiscardChanges}
+            disabled={!hasChanges || saving}
+          >
+            Revert
+          </button>
+          <button type="button" className="secondary" onClick={onRefresh} disabled={loading || saving}>
+            {loading ? 'Refreshing' : 'Refresh'}
+          </button>
+        </div>
       </header>
 
       {errors.length > 0 && (
@@ -161,8 +250,11 @@ function TerminalOrganizer({
                       <TerminalLabelRow
                         key={tab.id}
                         tab={tab}
-                        saving={savingId === tab.id}
-                        onSaveLabel={onSaveLabel}
+                        value={drafts[tab.id] ?? tab.label ?? ''}
+                        changed={changedIds.includes(tab.id)}
+                        disabled={saving}
+                        onChange={handleDraftChange}
+                        onSubmit={handleSaveChanges}
                       />
                     ))}
                   </div>
