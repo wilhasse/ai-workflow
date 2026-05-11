@@ -126,6 +126,12 @@ const buildWindowUsageKey = (workspaceId, windowIndex, hostId = null, windowId =
   return hostId ? `${hostId}:${workspaceId}:${windowIndex}` : `${workspaceId}:${windowIndex}`
 }
 
+const findWindowById = (windowList, windowId) => {
+  const normalizedWindowId = normalizeWindowId(windowId)
+  if (!normalizedWindowId) return null
+  return windowList.find((window) => normalizeWindowId(window.windowId || window.id) === normalizedWindowId) ?? null
+}
+
 const terminalStatusRank = (status) => {
   if (status === 'check') return 0
   return 1
@@ -192,6 +198,7 @@ function DashboardApp() {
   // Active workspace and window state
   const [activeWorkspaceId, setActiveWorkspaceId] = useState(null)
   const [activeWindowIndex, setActiveWindowIndex] = useState(null)
+  const [activeWindowId, setActiveWindowId] = useState('')
   const [activeTerminalConnection, setActiveTerminalConnection] = useState(null)
   const [windows, setWindows] = useState([])
   const [windowsLoading, setWindowsLoading] = useState(false)
@@ -300,6 +307,20 @@ function DashboardApp() {
 
   // Get active workspace
   const activeWorkspace = useMemo(() => {
+    if (activeTerminalConnection?.sessionId === activeWorkspaceId && activeTerminalConnection.local === false) {
+      return {
+        id: activeTerminalConnection.sessionId,
+        name: activeTerminalConnection.workspaceName || activeTerminalConnection.sessionId,
+        description: activeTerminalConnection.workspaceDescription || '',
+        active: true,
+        hostId: activeTerminalConnection.hostId,
+        connection: {
+          type: 'remote',
+          hostId: activeTerminalConnection.hostId,
+          sessionId: activeTerminalConnection.sessionId,
+        },
+      }
+    }
     const configuredWorkspace = workspaces.find((ws) => ws.id === activeWorkspaceId)
     if (configuredWorkspace) {
       return configuredWorkspace
@@ -322,8 +343,14 @@ function DashboardApp() {
   }, [activeTerminalConnection, activeWorkspaceId, workspaces])
 
   const activeWindow = useMemo(
-    () => windows.find((window) => window.index === activeWindowIndex) ?? null,
-    [activeWindowIndex, windows],
+    () => {
+      const stableWindowId = normalizeWindowId(activeWindowId || activeTerminalConnection?.windowId)
+      if (stableWindowId) {
+        return findWindowById(windows, stableWindowId)
+      }
+      return windows.find((window) => window.index === activeWindowIndex) ?? null
+    },
+    [activeTerminalConnection, activeWindowId, activeWindowIndex, windows],
   )
 
   const applyWorkspaceWindows = useCallback((workspaceId, windowList) => {
@@ -336,13 +363,17 @@ function DashboardApp() {
       if (!windowList.length) {
         return null
       }
+      const stableWindowId = normalizeWindowId(activeWindowId || activeTerminalConnection?.windowId)
+      if (stableWindowId) {
+        return findWindowById(windowList, stableWindowId)?.index ?? null
+      }
       if (Number.isFinite(previousIndex) && windowList.some((window) => window.index === previousIndex)) {
         return previousIndex
       }
       const activeWindow = windowList.find((window) => window.active)
       return activeWindow?.index ?? windowList[0].index
     })
-  }, [activeWorkspaceId])
+  }, [activeTerminalConnection, activeWindowId, activeWorkspaceId])
 
   useEffect(() => {
     if (workspacesLoading) {
@@ -362,6 +393,7 @@ function DashboardApp() {
     const fallbackWorkspaceId = activeWorkspaces[0]?.id ?? workspaces[0]?.id ?? null
     if (fallbackWorkspaceId !== activeWorkspaceId) {
       setActiveTerminalConnection(null)
+      setActiveWindowId('')
       setActiveWorkspaceId(fallbackWorkspaceId)
     }
   }, [activeTerminalConnection, activeWorkspaceId, activeWorkspaces, workspaces, workspacesLoading])
@@ -371,6 +403,7 @@ function DashboardApp() {
     if (!activeWorkspaceId) {
       setWindows([])
       setActiveWindowIndex(null)
+      setActiveWindowId('')
       return
     }
 
@@ -382,7 +415,11 @@ function DashboardApp() {
       setWindowsLoading(false)
       setActiveWindowIndex((previousIndex) => {
         if (!remoteWindows.length) {
-          return previousIndex
+          return null
+        }
+        const stableWindowId = normalizeWindowId(activeWindowId || activeTerminalConnection.windowId)
+        if (stableWindowId) {
+          return findWindowById(remoteWindows, stableWindowId)?.index ?? null
         }
         if (Number.isFinite(previousIndex) && remoteWindows.some((window) => window.index === previousIndex)) {
           return previousIndex
@@ -407,7 +444,7 @@ function DashboardApp() {
     return () => {
       cancelled = true
     }
-  }, [activeTerminalConnection, activeWorkspaceId, applyWorkspaceWindows, fetchWindows, terminalTabs])
+  }, [activeTerminalConnection, activeWindowId, activeWorkspaceId, applyWorkspaceWindows, fetchWindows, terminalTabs])
 
   useEffect(() => {
     if (!canUseOverview && overviewMode) {
@@ -580,6 +617,7 @@ function DashboardApp() {
     const sessionId = entry.sessionId || entry.workspaceId
     setActiveWorkspaceId(sessionId)
     setActiveWindowIndex(entry.windowIndex)
+    setActiveWindowId(entry.windowId || '')
     setActiveTerminalConnection({
       hostId: entry.hostId,
       hostName: entry.hostName,
@@ -602,6 +640,7 @@ function DashboardApp() {
   const handleSelectWindow = useCallback((windowIndex) => {
     const selectedWindow = windows.find((window) => window.index === windowIndex) ?? null
     setActiveWindowIndex(windowIndex)
+    setActiveWindowId(selectedWindow?.windowId || '')
     setActiveTerminalConnection((current) => (
       current?.sessionId === activeWorkspaceId
         ? { ...current, windowId: selectedWindow?.windowId || '' }
@@ -1097,9 +1136,9 @@ function DashboardApp() {
     return buildWorkspaceSocketUrl(activeWorkspaceId, activeWindowIndex, {
       hostId: selectedConnection?.hostId,
       local: selectedConnection ? selectedConnection.local !== false : true,
-      windowId: activeWindow?.windowId || selectedConnection?.windowId,
+      windowId: selectedConnection?.windowId || activeWindow?.windowId || activeWindowId,
     })
-  }, [activeTerminalConnection, activeWindow, activeWorkspaceId, activeWindowIndex])
+  }, [activeTerminalConnection, activeWindow, activeWindowId, activeWorkspaceId, activeWindowIndex])
 
   // Render terminal view
   const renderTerminalView = () => {
@@ -1369,7 +1408,7 @@ function DashboardApp() {
         )}
 
         <TerminalViewer
-          key={`${activeWorkspaceId}-${activeWindowIndex}-${activeWindow?.windowId || ''}`}
+          key={`${activeWorkspaceId}-${activeWindowIndex}-${activeWindow?.windowId || activeWindowId || ''}`}
           wsUrl={wsUrl}
           fontSize={terminalFontSize}
           onBridgeReady={handleTerminalBridgeReady}
@@ -1400,6 +1439,7 @@ function DashboardApp() {
           activeWorkspaceId={activeWorkspaceId}
           onSelectWorkspace={(workspaceId) => {
             setActiveTerminalConnection(null)
+            setActiveWindowId('')
             setActiveWorkspaceId(workspaceId)
           }}
           loading={workspacesLoading}
@@ -1512,6 +1552,7 @@ function DashboardApp() {
                 isSelected={workspace.id === activeWorkspaceId}
                 onSelect={(ws) => {
                   setActiveTerminalConnection(null)
+                  setActiveWindowId('')
                   setActiveWorkspaceId(ws.id)
                 }}
               />

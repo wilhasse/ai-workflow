@@ -1676,6 +1676,7 @@ const handleSetTerminalTabLabel = async (req, res, hostIdRaw, sessionIdRaw, wind
       respond(res, 404, { error: 'Window not found' })
       return
     }
+    const resolvedWindowIndex = existingWindow.index
     const metadata = {}
     if (Object.prototype.hasOwnProperty.call(body, 'label') || Object.prototype.hasOwnProperty.call(body, 'name')) {
       metadata.label = body.label ?? body.name
@@ -1683,8 +1684,8 @@ const handleSetTerminalTabLabel = async (req, res, hostIdRaw, sessionIdRaw, wind
     if (Object.prototype.hasOwnProperty.call(body, 'status')) {
       metadata.status = body.status
     }
-    const previousStatus = resolveWindowStatus(labels, host, sanitizedSessionId, windowIndex, existingWindow.id)
-    const savedMetadata = await setWindowMetadata(host, sanitizedSessionId, windowIndex, metadata, existingWindow.id)
+    const previousStatus = resolveWindowStatus(labels, host, sanitizedSessionId, resolvedWindowIndex, existingWindow.id)
+    const savedMetadata = await setWindowMetadata(host, sanitizedSessionId, resolvedWindowIndex, metadata, existingWindow.id)
     let agentAction = null
     let agentActionError = null
     if (Object.prototype.hasOwnProperty.call(metadata, 'status')) {
@@ -1692,7 +1693,7 @@ const handleSetTerminalTabLabel = async (req, res, hostIdRaw, sessionIdRaw, wind
         agentAction = await syncWindowStatusAgents({
           host,
           sessionId: sanitizedSessionId,
-          windowIndex,
+          windowIndex: resolvedWindowIndex,
           windowId: existingWindow.id,
           previousStatus,
           nextStatus: savedMetadata.status,
@@ -1722,7 +1723,7 @@ const handleSetTerminalTabLabel = async (req, res, hostIdRaw, sessionIdRaw, wind
         host,
         workspace,
         window: { ...updatedWindow, sessionId: sanitizedSessionId },
-        selectedAt: recentScoreForWindow(launcherState, host, sanitizedSessionId, windowIndex, existingWindow.id),
+        selectedAt: recentScoreForWindow(launcherState, host, sanitizedSessionId, resolvedWindowIndex, existingWindow.id),
       }),
       agentAction,
       agentActionError,
@@ -2326,6 +2327,7 @@ const handleRenameWindow = async (req, res, sessionId, windowIndexRaw) => {
       respond(res, 404, { error: 'Window not found' })
       return
     }
+    const resolvedWindowIndex = existingWindow.index
     const metadata = {}
     if (Object.prototype.hasOwnProperty.call(body, 'label') || Object.prototype.hasOwnProperty.call(body, 'name')) {
       metadata.label = body.label ?? body.name
@@ -2333,8 +2335,8 @@ const handleRenameWindow = async (req, res, sessionId, windowIndexRaw) => {
     if (Object.prototype.hasOwnProperty.call(body, 'status')) {
       metadata.status = body.status
     }
-    const previousStatus = resolveWindowStatus(labels, host, sanitizedId, windowIndex, existingWindow.id)
-    const savedMetadata = await setWindowMetadata(host, sanitizedId, windowIndex, metadata, existingWindow.id)
+    const previousStatus = resolveWindowStatus(labels, host, sanitizedId, resolvedWindowIndex, existingWindow.id)
+    const savedMetadata = await setWindowMetadata(host, sanitizedId, resolvedWindowIndex, metadata, existingWindow.id)
     let agentAction = null
     let agentActionError = null
     if (Object.prototype.hasOwnProperty.call(metadata, 'status')) {
@@ -2342,7 +2344,7 @@ const handleRenameWindow = async (req, res, sessionId, windowIndexRaw) => {
         agentAction = await syncWindowStatusAgents({
           host,
           sessionId: sanitizedId,
-          windowIndex,
+          windowIndex: resolvedWindowIndex,
           windowId: existingWindow.id,
           previousStatus,
           nextStatus: savedMetadata.status,
@@ -2540,10 +2542,17 @@ const handleTerminalSocket = async (ws, sessionIdRaw, searchParams) => {
   // Select specific window if requested
   if (windowId || (windowIndex !== null && Number.isFinite(windowIndex))) {
     try {
-      await tmuxSelectWindow(sanitizedSessionId, windowIndex, windowId)
+      const selectedWindow = await tmuxSelectWindow(sanitizedSessionId, windowIndex, windowId)
+      if (!selectedWindow) {
+        sendWsMessage(ws, { type: 'error', message: 'Requested tmux window is no longer available' })
+        ws.close(1008, 'Window unavailable')
+        return
+      }
     } catch (error) {
       console.warn('Failed to select window', error.message)
-      // Continue anyway - will attach to current window
+      sendWsMessage(ws, { type: 'error', message: 'Unable to select requested tmux window' })
+      ws.close(1011, 'Window unavailable')
+      return
     }
   }
 
@@ -2706,13 +2715,13 @@ const buildRemoteAttachCommand = ({ sessionId, windowIndex, windowId = '' }) => 
   const sessionTarget = shellQuote(sessionId)
   const windowTarget = buildTmuxWindowTarget(sessionId, windowIndex, windowId)
   const commands = [
-    `${config.tmuxBin} has-session -t ${sessionTarget} 2>/dev/null || ${config.tmuxBin} new-session -d -s ${sessionTarget}`,
+    `(${config.tmuxBin} has-session -t ${sessionTarget} 2>/dev/null || ${config.tmuxBin} new-session -d -s ${sessionTarget})`,
   ]
   if (windowTarget !== sessionId) {
-    commands.push(`${config.tmuxBin} select-window -t ${shellQuote(windowTarget)} 2>/dev/null || true`)
+    commands.push(`${config.tmuxBin} select-window -t ${shellQuote(windowTarget)}`)
   }
   commands.push(`exec ${config.tmuxBin} attach-session -t ${sessionTarget}`)
-  return commands.join('; ')
+  return commands.join(' && ')
 }
 
 const handleRemoteTerminalSocket = async (ws, hostIdRaw, sessionIdRaw, searchParams) => {

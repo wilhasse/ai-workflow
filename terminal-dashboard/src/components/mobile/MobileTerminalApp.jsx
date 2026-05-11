@@ -206,6 +206,12 @@ const normalizeWindowId = (value) => {
   return /^\d+$/.test(normalized) ? `@${normalized}` : ''
 }
 
+const findWindowById = (windowList, windowId) => {
+  const normalizedWindowId = normalizeWindowId(windowId)
+  if (!normalizedWindowId) return null
+  return windowList.find((window) => normalizeWindowId(window.id || window.windowId) === normalizedWindowId) ?? null
+}
+
 const buildMobileSocketUrl = (workspace, selectedWindow) => {
   if (!workspace) {
     return null
@@ -554,6 +560,7 @@ function MobileTerminalApp() {
   const [view, setView] = useState('workspaces')
   const [selectedWorkspaceKey, setSelectedWorkspaceKey] = useState(null)
   const [selectedWindowIndex, setSelectedWindowIndex] = useState(null)
+  const [selectedWindowId, setSelectedWindowId] = useState('')
   const [terminalFontSize, setTerminalFontSize] = useState(resolveStoredFontSize)
   const [voiceService, setVoiceService] = useState(() => {
     if (typeof window === 'undefined') return VOICE_SERVICES.DEEPGRAM
@@ -595,8 +602,18 @@ function MobileTerminalApp() {
     [selectedWorkspaceKey, workspaces],
   )
   const selectedWindow = useMemo(
-    () => selectedWorkspace?.windows?.find((window) => window.index === selectedWindowIndex) ?? null,
-    [selectedWindowIndex, selectedWorkspace],
+    () => {
+      const workspaceWindows = selectedWorkspace?.windows || []
+      const stableWindowId = normalizeWindowId(selectedWindowId)
+      if (stableWindowId) {
+        return findWindowById(workspaceWindows, stableWindowId)
+      }
+      return (
+        workspaceWindows.find((window) => window.index === selectedWindowIndex) ??
+        null
+      )
+    },
+    [selectedWindowId, selectedWindowIndex, selectedWorkspace],
   )
   const wsUrl = useMemo(
     () => buildMobileSocketUrl(selectedWorkspace, selectedWindow),
@@ -608,6 +625,12 @@ function MobileTerminalApp() {
   const selectedVoiceProviderUnavailable = voiceService === VOICE_SERVICES.DEEPGRAM &&
     voiceProviderStatus.checked &&
     !voiceProviderStatus.deepgramConfigured
+
+  useEffect(() => {
+    if (selectedWindow && selectedWindow.index !== selectedWindowIndex) {
+      setSelectedWindowIndex(selectedWindow.index)
+    }
+  }, [selectedWindow, selectedWindowIndex])
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined
@@ -739,6 +762,7 @@ function MobileTerminalApp() {
   const handleSelectWorkspace = useCallback((workspace) => {
     setSelectedWorkspaceKey(workspace.key)
     setSelectedWindowIndex(null)
+    setSelectedWindowId('')
     if (!isTablet) {
       setView('windows')
     }
@@ -746,6 +770,7 @@ function MobileTerminalApp() {
 
   const handleSelectWindow = useCallback((window) => {
     setSelectedWindowIndex(window.index)
+    setSelectedWindowId(window.id || '')
     if (!isTablet) {
       setView('terminal')
     }
@@ -903,8 +928,8 @@ function MobileTerminalApp() {
         lines: '48',
         includeVisible: 'true',
       })
-      if (Number.isFinite(selectedWindowIndex)) {
-        params.set('windowIndex', String(selectedWindowIndex))
+      if (Number.isFinite(selectedWindow?.index)) {
+        params.set('windowIndex', String(selectedWindow.index))
       }
       if (selectedWindow?.id) {
         params.set('windowId', selectedWindow.id)
@@ -959,7 +984,6 @@ function MobileTerminalApp() {
     canShowTerminal,
     releaseSpeechAudio,
     selectedWindow,
-    selectedWindowIndex,
     selectedWorkspace,
     speechPlaybackPending,
   ])
@@ -1132,7 +1156,7 @@ function MobileTerminalApp() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             payload,
-            windowIndex: Number.isFinite(selectedWindowIndex) ? selectedWindowIndex : null,
+            windowIndex: Number.isFinite(selectedWindow?.index) ? selectedWindow.index : null,
             windowId: selectedWindow?.id || '',
           }),
         },
@@ -1147,7 +1171,7 @@ function MobileTerminalApp() {
       setTerminalInputError(inputError.message || 'Terminal connection is not ready.')
       return false
     }
-  }, [selectedWindow, selectedWindowIndex, selectedWorkspace])
+  }, [selectedWindow, selectedWorkspace])
 
   const sendTerminalDraft = useCallback(async () => {
     const text = terminalDraft
@@ -1310,7 +1334,7 @@ function MobileTerminalApp() {
 
       {canShowTerminal ? (
         <TerminalViewer
-          key={`${selectedWorkspace.key}-${selectedWindowIndex}-${selectedWindow?.id || ''}`}
+          key={`${selectedWorkspace.key}-${selectedWindow?.index ?? ''}-${selectedWindow?.id || ''}`}
           wsUrl={wsUrl}
           fontSize={terminalFontSize}
           showShortcutBar={false}
@@ -1379,7 +1403,7 @@ function MobileTerminalApp() {
           />
           <WindowList
             workspace={selectedWorkspace}
-            selectedIndex={selectedWindowIndex}
+            selectedIndex={selectedWindow?.index ?? (selectedWindowId ? null : selectedWindowIndex)}
             onSelectWindow={handleSelectWindow}
             onRefresh={refreshInventory}
             loading={loading}
@@ -1421,7 +1445,7 @@ function MobileTerminalApp() {
       {view === 'windows' && (
         <WindowList
           workspace={selectedWorkspace}
-          selectedIndex={selectedWindowIndex}
+          selectedIndex={selectedWindow?.index ?? (selectedWindowId ? null : selectedWindowIndex)}
           onSelectWindow={handleSelectWindow}
           onBack={() => setView('workspaces')}
           onRefresh={refreshInventory}
