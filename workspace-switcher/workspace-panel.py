@@ -13,6 +13,7 @@ import subprocess
 import json
 import os
 import hashlib
+import re
 import shlex
 import signal
 import sys
@@ -284,6 +285,15 @@ def terminal_recent_score(entry, recent_scores=None):
         default=0.0
     )
     return max(float(entry.get('activity') or 0), selected_at)
+
+
+def terminal_entry_identity(entry):
+    if not entry:
+        return ''
+    return entry.get('target') or (
+        f"{entry.get('state_host_id') or entry.get('host_id', 'local')}:"
+        f"{entry.get('session_name')}#{entry.get('window_index')}"
+    )
 
 
 def terminal_status_rank(status):
@@ -1123,13 +1133,14 @@ class HostTabBar(Gtk.Box):
 class TerminalSwitcherDialog(Gtk.Dialog):
     """Keyboard switcher for tmux windows across all configured hosts."""
 
-    def __init__(self, parent, entries):
+    def __init__(self, parent, entries, selected_target=None):
         super().__init__(title="Terminal Switcher", transient_for=parent, flags=0)
         self.set_name('terminal-switcher-dialog')
         self.parent = parent
         self.all_entries = entries
         self.filtered_entries = list(entries)
         self.selected_entry = None
+        self.initial_selected_target = selected_target
         self.set_default_size(760, 560)
         self.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL)
 
@@ -1214,7 +1225,7 @@ class TerminalSwitcherDialog(Gtk.Dialog):
 
         self.connect('key-press-event', self._on_key_press)
         self._apply_css()
-        self._populate()
+        self._populate(self.initial_selected_target)
         self.show_all()
         self.search_entry.grab_focus()
 
@@ -1271,9 +1282,7 @@ class TerminalSwitcherDialog(Gtk.Dialog):
         return f'{hours // 24}d ago'
 
     def _entry_identity(self, entry):
-        if not entry:
-            return ''
-        return entry.get('target') or f"{entry.get('state_host_id') or entry.get('host_id', 'local')}:{entry.get('session_name')}#{entry.get('window_index')}"
+        return terminal_entry_identity(entry)
 
     def _populate(self, selected_target=None):
         self.store.clear()
@@ -1306,7 +1315,9 @@ class TerminalSwitcherDialog(Gtk.Dialog):
             if selected_target and self._entry_identity(entry) == selected_target:
                 selected_iter = row_iter
         if len(self.store) > 0:
-            self.tree.get_selection().select_iter(selected_iter or self.store.get_iter_first())
+            selected_iter = selected_iter or self.store.get_iter_first()
+            self.tree.get_selection().select_iter(selected_iter)
+            self.tree.scroll_to_cell(self.store.get_path(selected_iter), None, False, 0, 0)
 
     def _on_search_changed(self, entry, selected_target=None):
         query = entry.get_text().strip().lower()
@@ -1503,6 +1514,7 @@ class WorkspaceSwitcher(Gtk.Window):
         self._activity_check_lock = threading.Lock()
         self.active_sessions = []  # list of (host_id, session_name) with recent activity
         self._footer_pulse_timeout = None
+        self._last_terminal_window_title = ''
         self.refresh_workspaces()
 
         # Update workspace counts in tab bar
@@ -1513,6 +1525,10 @@ class WorkspaceSwitcher(Gtk.Window):
 
         # Activity monitor for all hosts (check every 2 seconds)
         GLib.timeout_add(2000, self._check_all_hosts_activity)
+
+        # Track the last focused tmux terminal, so Ctrl+Enter can still preselect
+        # it after this panel takes focus.
+        GLib.timeout_add(500, self._remember_active_terminal_window_title)
 
         # Start health checker and run immediate check
         self.health_checker.start()
@@ -1885,12 +1901,121 @@ class WorkspaceSwitcher(Gtk.Window):
 
     def open_terminal_switcher(self):
         entries = self.build_terminal_switcher_entries()
-        dialog = TerminalSwitcherDialog(self, entries)
+        selected_target = self._focused_terminal_entry_identity(entries)
+        dialog = TerminalSwitcherDialog(self, entries, selected_target=selected_target)
         response = dialog.run()
         selected = dialog.selected_entry
         dialog.destroy()
         if response == Gtk.ResponseType.OK and selected:
             self.open_tmux_window_entry(selected)
+
+    def _focused_terminal_entry_identity(self, entries):
+        titles = []
+        active_title = self._active_window_title()
+        if active_title:
+            titles.append(active_title)
+        if self._last_terminal_window_title and self._last_terminal_window_title not in titles:
+            titles.append(self._last_terminal_window_title)
+        for title in titles:
+            selected = self._entry_identity_from_window_title(title, entries)
+            if selected:
+                return selected
+        return ''
+
+    def _remember_active_terminal_window_title(self):
+        title = self._active_window_title()
+        if self._looks_like_tmux_terminal_title(title):
+            self._last_terminal_window_title = title
+        return True
+
+    def _looks_like_tmux_terminal_title(self, title):
+        normalized_title = ' '.join(str(title or '').split())
+        if not normalized_title or normalized_title in {'Workspaces', 'Terminal Switcher'}:
+            return False
+        return bool(
+            re.search(r'\b[A-Za-z0-9_.-]+@\d+\b', normalized_title)
+            or re.search(r'\bTerminal\s*-\s*[A-Za-z0-9_.-]+\s*:\s*[^—|]+', normalized_title)
+        )
+
+    def _entry_identity_from_window_title(self, title, entries):
+        exact_match = self._entry_identity_from_stable_title(title, entries)
+        if exact_match:
+            return exact_match
+        return self._entry_identity_from_session_title(title, entries)
+
+    def _active_window_title(self):
+        try:
+            active = subprocess.run(
+                ['xprop', '-root', '_NET_ACTIVE_WINDOW'],
+                capture_output=True,
+                text=True,
+                timeout=1,
+            )
+            if active.returncode != 0:
+                return ''
+            match = re.search(r'window id # (0x[0-9a-fA-F]+)', active.stdout)
+            if not match:
+                return ''
+            title = subprocess.run(
+                ['xprop', '-id', match.group(1), '_NET_WM_NAME', 'WM_NAME'],
+                capture_output=True,
+                text=True,
+                timeout=1,
+            )
+            if title.returncode != 0:
+                return ''
+            for line in title.stdout.splitlines():
+                if '_NET_WM_NAME' in line or line.startswith('WM_NAME'):
+                    value = line.split('=', 1)[-1].strip()
+                    if value.startswith('"') and value.endswith('"'):
+                        value = value[1:-1]
+                    if value:
+                        return value
+        except (OSError, subprocess.TimeoutExpired):
+            return ''
+        return ''
+
+    def _entry_identity_from_stable_title(self, title, entries):
+        for session_name, window_id in re.findall(r'([A-Za-z0-9_.-]+)@(\d+)', title):
+            normalized_window_id = normalize_window_id(window_id)
+            for entry in entries:
+                if (
+                    entry.get('session_name') == session_name
+                    and normalize_window_id(entry.get('window_id')) == normalized_window_id
+                ):
+                    return terminal_entry_identity(entry)
+        return ''
+
+    def _entry_identity_from_session_title(self, title, entries):
+        normalized_title = ' '.join(str(title or '').split())
+        title_match = re.search(r'(?:Terminal\s*-\s*)?([A-Za-z0-9_.-]+)\s*:\s*([^—|]+)', normalized_title)
+        if not title_match:
+            return ''
+        session_name = title_match.group(1)
+        window_text = title_match.group(2).strip().lower()
+        candidates = [entry for entry in entries if entry.get('session_name') == session_name]
+        if not candidates:
+            return ''
+        named_candidates = []
+        for entry in candidates:
+            names = [
+                entry.get('tmux_window_name', ''),
+                entry.get('window_name', ''),
+                entry.get('display_window_name', ''),
+                entry.get('window_label', ''),
+            ]
+            if any(window_text == str(name or '').strip().lower() for name in names):
+                named_candidates.append(entry)
+        candidates = named_candidates or candidates
+        candidates = sorted(
+            candidates,
+            key=lambda entry: (
+                not entry.get('window_active'),
+                -(entry.get('recent_at') or 0),
+                entry.get('window_index') or 0,
+            ),
+        )
+        return terminal_entry_identity(candidates[0])
 
     def build_terminal_switcher_entries(self):
         """Build all-host tmux window entries using the web UI row format."""

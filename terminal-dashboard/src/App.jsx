@@ -801,6 +801,49 @@ function DashboardApp() {
     })
   }, [terminalSwitcherQuery, terminalTabs, windowUsage])
 
+  const currentTerminalSwitcherEntryId = useMemo(() => {
+    if (!activeWorkspaceId || !terminalSwitcherEntries.length) {
+      return ''
+    }
+
+    const selectedConnection = activeTerminalConnection?.sessionId === activeWorkspaceId
+      ? activeTerminalConnection
+      : null
+    const currentWindowId = normalizeWindowId(
+      selectedConnection?.windowId || activeWindow?.windowId || activeWindowId,
+    )
+    const currentWindowIndex = Number.isFinite(activeWindow?.index)
+      ? activeWindow.index
+      : activeWindowIndex
+
+    const matchesCurrentHost = (entry) => {
+      if (selectedConnection?.local === false) {
+        return entry.local === false && entry.hostId === selectedConnection.hostId
+      }
+      return entry.local !== false
+    }
+
+    const matchesCurrentWindow = (entry) => {
+      if (currentWindowId) {
+        return normalizeWindowId(entry.windowId) === currentWindowId
+      }
+      return Number.isFinite(currentWindowIndex) && entry.windowIndex === currentWindowIndex
+    }
+
+    return terminalSwitcherEntries.find((entry) => (
+      entry.sessionId === activeWorkspaceId &&
+      matchesCurrentHost(entry) &&
+      matchesCurrentWindow(entry)
+    ))?.id || ''
+  }, [
+    activeTerminalConnection,
+    activeWindow,
+    activeWindowId,
+    activeWindowIndex,
+    activeWorkspaceId,
+    terminalSwitcherEntries,
+  ])
+
   // Persist font size
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -1514,6 +1557,7 @@ function DashboardApp() {
             entries={terminalSwitcherEntries}
             loading={terminalSwitcherLoading}
             query={terminalSwitcherQuery}
+            preferredEntryId={currentTerminalSwitcherEntryId}
             onQueryChange={setTerminalSwitcherQuery}
             onSelectEntry={handleSelectTerminalEntry}
             onRenameEntry={handleRenameWindowEntry}
@@ -1658,6 +1702,7 @@ function DashboardApp() {
         entries={terminalSwitcherEntries}
         loading={terminalSwitcherLoading}
         query={terminalSwitcherQuery}
+        preferredEntryId={currentTerminalSwitcherEntryId}
         onQueryChange={setTerminalSwitcherQuery}
         onSelectEntry={handleSelectTerminalEntry}
         onRenameEntry={handleRenameWindowEntry}

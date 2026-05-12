@@ -17,7 +17,7 @@ from wsv2.actions import (
     terminal_recent_score,
     terminal_sort_key,
 )
-from wsv2.catalog import WorkspaceConfigError, load_config
+from wsv2.catalog import HostRecord, WorkspaceConfigError, load_config
 from wsv2.cli import build_popup_unavailable_message, can_launch_gui_popup, detect_popup_surface
 from wsv2.codex_parking import (
     _agent_kind,
@@ -38,6 +38,7 @@ from wsv2.session_archive import (
 from wsv2.state import LauncherState
 from wsv2.tui import build_tui_items, filter_tui_items, format_tui_row
 from wsv2.drill import build_simulated_outage_payload, select_probe_targets
+from wsv2.window_focus import terminal_target_from_window_title
 
 
 def write_legacy_config(tmpdir: Path) -> Path:
@@ -281,6 +282,73 @@ class CommandBuilderTests(unittest.TestCase):
 
         self.assertEqual(xfce[:4], ['xfce4-terminal', '--disable-server', '--window', '--title'])
         self.assertEqual(gnome[:3], ['gnome-terminal', '--title', 'mysql'])
+
+
+class WindowFocusTests(unittest.TestCase):
+    def test_stable_terminal_title_selects_matching_window_id(self) -> None:
+        host = HostRecord(id='vm10', name='Main Desktop')
+        statuses = [
+            TerminalStatus(
+                host_id='vm10',
+                host=host,
+                session_id='fattor-servers',
+                window_index=3,
+                window_id='@200',
+                window_name='dbtools',
+                window_active=True,
+                activity=500,
+            ),
+            TerminalStatus(
+                host_id='vm10',
+                host=host,
+                session_id='ai-workflow',
+                window_index=1,
+                window_id='@168',
+                window_name='node',
+                window_active=False,
+                activity=100,
+            ),
+        ]
+
+        self.assertEqual(
+            terminal_target_from_window_title('ai-workflow@168', statuses),
+            'vm10:ai-workflow@168',
+        )
+
+    def test_legacy_terminal_title_selects_window_name_or_index(self) -> None:
+        host = HostRecord(id='vm10', name='Main Desktop')
+        statuses = [
+            TerminalStatus(
+                host_id='vm10',
+                host=host,
+                session_id='docker',
+                window_index=1,
+                window_id='@10',
+                window_name='api',
+                tmux_window_name='api',
+                activity=100,
+            ),
+            TerminalStatus(
+                host_id='vm10',
+                host=host,
+                session_id='docker',
+                window_index=2,
+                window_id='@11',
+                window_name='node',
+                tmux_window_name='node',
+                window_active=True,
+                activity=50,
+            ),
+        ]
+
+        self.assertEqual(
+            terminal_target_from_window_title('Terminal - docker : node', statuses),
+            'vm10:docker@11',
+        )
+        self.assertEqual(
+            terminal_target_from_window_title('Terminal - docker : #1', statuses),
+            'vm10:docker@10',
+        )
 
 
 class LauncherStateTests(unittest.TestCase):

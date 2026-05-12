@@ -12,6 +12,7 @@ gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, GLib, Gtk, Pango
 
 from .actions import TerminalStatus, WorkspaceActions, terminal_recent_score, terminal_sort_key
+from .window_focus import active_window_title, terminal_target_from_window_title
 
 
 PROGRAM_CLASS = "workspace-v2-popup"
@@ -28,10 +29,13 @@ class PopupItem:
 
 class WorkspacePopup(Gtk.Window):
     def __init__(self, actions: WorkspaceActions) -> None:
+        focused_window_title = active_window_title()
         super().__init__(title=WINDOW_TITLE)
         self.actions = actions
         self.recent_scores = self.actions.state.recent_scores()
         self.statuses = self.actions.list_terminal_statuses()
+        self.initial_selected_target = terminal_target_from_window_title(focused_window_title, self.statuses)
+        self.selected_target = self.initial_selected_target or None
         self.filtered_items: list[PopupItem] = []
 
         self.set_role(WINDOW_ROLE)
@@ -69,12 +73,13 @@ class WorkspacePopup(Gtk.Window):
 
         self.listbox = Gtk.ListBox()
         self.listbox.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        self.listbox.connect("row-selected", self._on_row_selected)
         self.listbox.connect("row-activated", self._on_row_activated)
 
-        scroll = Gtk.ScrolledWindow()
-        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        scroll.add(self.listbox)
-        outer.pack_start(scroll, True, True, 0)
+        self.scroll = Gtk.ScrolledWindow()
+        self.scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self.scroll.add(self.listbox)
+        outer.pack_start(self.scroll, True, True, 0)
 
         self.message_label = Gtk.Label()
         self.message_label.set_xalign(0)
@@ -84,7 +89,7 @@ class WorkspacePopup(Gtk.Window):
         outer.pack_start(self.message_label, False, False, 0)
 
         self._apply_css()
-        self._refresh_rows()
+        self._refresh_rows(self.initial_selected_target)
         self._load_statuses_async()
         self.show_all()
         self.present()
@@ -140,7 +145,7 @@ class WorkspacePopup(Gtk.Window):
         return False
 
     def _refresh_rows(self, preferred_target: str | None = None) -> None:
-        selected_target = preferred_target or self._selected_target()
+        selected_target = preferred_target or self._selected_target() or self.selected_target
         query = self.search_entry.get_text().strip().lower()
         items = self._sorted_items(query)
         self.filtered_items = items
@@ -171,7 +176,32 @@ class WorkspacePopup(Gtk.Window):
             self.listbox.add(row)
 
         self.listbox.show_all()
-        self.listbox.select_row(selected_row or self.listbox.get_row_at_index(0))
+        selected_row = selected_row or self.listbox.get_row_at_index(0)
+        self._select_row(selected_row)
+
+    def _select_row(self, row: Gtk.ListBoxRow | None) -> None:
+        if not row:
+            return
+        target = getattr(row, "workspace_target", None)
+        if target:
+            self.selected_target = target
+        self.listbox.select_row(row)
+        GLib.idle_add(self._scroll_row_visible, row)
+
+    def _scroll_row_visible(self, row: Gtk.ListBoxRow) -> bool:
+        if not row.get_parent():
+            return False
+        adjustment = self.scroll.get_vadjustment()
+        allocation = row.get_allocation()
+        page_size = adjustment.get_page_size()
+        current = adjustment.get_value()
+        row_top = allocation.y
+        row_bottom = row_top + allocation.height
+        if row_top < current:
+            adjustment.set_value(row_top)
+        elif row_bottom > current + page_size:
+            adjustment.set_value(max(0, row_bottom - page_size))
+        return False
 
     def _sorted_items(self, query: str) -> list[PopupItem]:
         items = [
@@ -335,18 +365,36 @@ class WorkspacePopup(Gtk.Window):
         return False
 
     def _move_selection(self, delta: int) -> None:
+        if not self.filtered_items:
+            return
         selected = self.listbox.get_selected_row()
-        current_index = selected.get_index() if selected else -1
+        current_index = selected.get_index() if selected else self._selected_item_index()
+        if current_index < 0:
+            current_index = -1 if delta > 0 else len(self.filtered_items)
         next_index = max(0, min(current_index + delta, len(self.filtered_items) - 1))
         next_row = self.listbox.get_row_at_index(next_index)
-        if next_row:
-            self.listbox.select_row(next_row)
+        self._select_row(next_row)
+
+    def _selected_item_index(self) -> int:
+        if not self.selected_target:
+            return -1
+        for index, item in enumerate(self.filtered_items):
+            if item.status.target == self.selected_target:
+                return index
+        return -1
 
     def _selected_target(self) -> str | None:
         row = self.listbox.get_selected_row()
         if not row or not getattr(row, "workspace_target", None):
             return None
         return row.workspace_target
+
+    def _on_row_selected(self, _listbox: Gtk.ListBox, row: Gtk.ListBoxRow | None) -> None:
+        if not row:
+            return
+        target = getattr(row, "workspace_target", None)
+        if target:
+            self.selected_target = target
 
     def _selected_status(self) -> TerminalStatus | None:
         row = self.listbox.get_selected_row()

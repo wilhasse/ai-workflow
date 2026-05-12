@@ -52,19 +52,24 @@ function TerminalSwitcherDialog({
   entries,
   loading,
   query,
+  preferredEntryId,
   onQueryChange,
   onSelectEntry,
   onRenameEntry,
   onStatusChange,
 }) {
   const inputRef = useRef(null)
+  const highlightedItemRef = useRef(null)
   const selectedEntryIdRef = useRef(null)
+  const manualSelectionRef = useRef(false)
+  const preferredSelectionAppliedRef = useRef(false)
   const [highlightedIndex, setHighlightedIndex] = useState(0)
 
   const selectedEntry = entries[highlightedIndex] ?? null
   const hasEntries = entries.length > 0
 
   const rememberSelection = useCallback((entry) => {
+    manualSelectionRef.current = true
     selectedEntryIdRef.current = entry?.id ?? null
   }, [])
 
@@ -73,6 +78,8 @@ function TerminalSwitcherDialog({
       return
     }
     setHighlightedIndex(0)
+    manualSelectionRef.current = false
+    preferredSelectionAppliedRef.current = false
     selectedEntryIdRef.current = null
     const timer = window.setTimeout(() => {
       inputRef.current?.focus()
@@ -82,16 +89,30 @@ function TerminalSwitcherDialog({
   }, [isOpen])
 
   useEffect(() => {
+    if (!isOpen) {
+      return
+    }
+
     if (!entries.length) {
       selectedEntryIdRef.current = null
       setHighlightedIndex(0)
       return
     }
 
-    const selectedEntryId = selectedEntryIdRef.current
+    const shouldApplyPreferred = !manualSelectionRef.current &&
+      !preferredSelectionAppliedRef.current &&
+      !query.trim() &&
+      preferredEntryId
+    const selectedEntryId = shouldApplyPreferred
+      ? preferredEntryId
+      : selectedEntryIdRef.current
     if (selectedEntryId) {
       const nextIndex = entries.findIndex((entry) => entry.id === selectedEntryId)
       if (nextIndex >= 0) {
+        if (shouldApplyPreferred) {
+          preferredSelectionAppliedRef.current = true
+        }
+        selectedEntryIdRef.current = selectedEntryId
         setHighlightedIndex(nextIndex)
         return
       }
@@ -102,7 +123,14 @@ function TerminalSwitcherDialog({
       selectedEntryIdRef.current = entries[nextIndex]?.id ?? null
       return nextIndex
     })
-  }, [entries])
+  }, [entries, isOpen, preferredEntryId, query])
+
+  useEffect(() => {
+    if (!isOpen) {
+      return
+    }
+    highlightedItemRef.current?.scrollIntoView({ block: 'nearest' })
+  }, [highlightedIndex, isOpen])
 
   useEffect(() => {
     if (!isOpen) {
@@ -152,6 +180,7 @@ function TerminalSwitcherDialog({
         event.preventDefault()
         setHighlightedIndex((prev) => {
           const nextIndex = (prev + 1) % entries.length
+          manualSelectionRef.current = true
           selectedEntryIdRef.current = entries[nextIndex]?.id ?? null
           return nextIndex
         })
@@ -162,6 +191,7 @@ function TerminalSwitcherDialog({
         event.preventDefault()
         setHighlightedIndex((prev) => {
           const nextIndex = (prev - 1 + entries.length) % entries.length
+          manualSelectionRef.current = true
           selectedEntryIdRef.current = entries[nextIndex]?.id ?? null
           return nextIndex
         })
@@ -227,8 +257,10 @@ function TerminalSwitcherDialog({
                   </div>
                 )}
                 <div
+                  ref={index === highlightedIndex ? highlightedItemRef : null}
                   className={`terminal-switcher-item ${index === highlightedIndex ? 'active' : ''}`}
                   onMouseEnter={() => {
+                    manualSelectionRef.current = true
                     selectedEntryIdRef.current = entry.id
                     setHighlightedIndex(index)
                   }}
