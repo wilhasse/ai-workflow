@@ -121,6 +121,8 @@ Archive Codex/Claude resume targets from tmux:
 ./workspace-v2/scripts/wsv2 archive-list
 ./workspace-v2/scripts/wsv2 archive-command <archive-id>
 ./workspace-v2/scripts/wsv2 archive-command --tmux <archive-id>
+./workspace-v2/scripts/wsv2 archive-restore --dry-run
+./workspace-v2/scripts/restore-after-reboot.sh --dry-run
 ```
 
 `archive-scan` stores recoverable Codex and Claude session IDs in:
@@ -129,7 +131,7 @@ Archive Codex/Claude resume targets from tmux:
 ~/.local/state/ai-workflow/workspace-session-archive.json
 ```
 
-The archive records tmux host/session/window metadata, cwd, title, and the resume command. It does not preserve process memory; it preserves enough state to recreate a tmux window and run `codex resume ...` or `claude --resume ...` after you kill old panes or reboot a VM.
+The archive records tmux host/session/window metadata, cwd, title, and the resume command. It does not preserve process memory; it preserves enough state to recreate a tmux window and run `codex resume ...` or `claude --resume ...` after you kill old panes or reboot a VM. `archive-restore` and `restore-after-reboot.sh` restore recent sessions for the current host into detached tmux windows; pass `--dry-run` first to inspect the commands.
 
 Install a periodic local snapshot timer on each VM:
 

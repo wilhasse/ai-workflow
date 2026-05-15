@@ -34,6 +34,8 @@ from wsv2.session_archive import (
     build_records_for_pane,
     format_archive_records,
     merge_snapshots,
+    scan_local_host,
+    select_restore_records,
 )
 from wsv2.state import LauncherState
 from wsv2.tui import build_tui_items, filter_tui_items, format_tui_row
@@ -1009,6 +1011,58 @@ class SessionArchiveTests(unittest.TestCase):
         resume_commands = [record['resumeCommand'] for record in records]
         self.assertTrue(any('codex resume codex-1' in command for command in resume_commands))
 
+    def test_scan_local_host_prefers_exact_agent_rows_over_cwd_matches(self) -> None:
+        pane = {
+            'session': 'harness',
+            'windowIndex': 1,
+            'windowName': 'node',
+            'windowActive': True,
+            'windowActivity': 100,
+            'paneId': '%5',
+            'paneIndex': 0,
+            'paneActive': True,
+            'panePid': 111,
+            'paneCommand': 'node',
+            'cwd': '/home/cslog/ai-workflow',
+            'paneTitle': 'ai-workflow',
+        }
+        row = {
+            'session': 'harness',
+            'windowIndex': 1,
+            'windowId': '@8',
+            'windowName': 'node',
+            'paneIndex': 0,
+            'paneId': '%5',
+            'panePid': 111,
+            'cwd': '/home/cslog/ai-workflow',
+            'kinds': ['codex'],
+            'parked': False,
+            'commands': [
+                'node /usr/bin/codex --dangerously-bypass-approvals-and-sandbox '
+                'resume --dangerously-bypass-approvals-and-sandbox codex-exact'
+            ],
+            'target': 'harness@8',
+        }
+
+        with mock.patch('wsv2.session_archive._list_tmux_panes', return_value=[pane]), \
+            mock.patch('wsv2.session_archive._load_claude_sessions', return_value=[]), \
+            mock.patch(
+                'wsv2.session_archive._load_codex_threads',
+                return_value=[
+                    {'resumeId': 'codex-old-1', 'cwd': '/home/cslog/ai-workflow', 'title': 'Old 1', 'updatedAt': 100},
+                    {'resumeId': 'codex-exact', 'cwd': '/home/cslog/ai-workflow', 'title': 'Exact', 'updatedAt': 300},
+                    {'resumeId': 'codex-old-2', 'cwd': '/home/cslog/ai-workflow', 'title': 'Old 2', 'updatedAt': 200},
+                ],
+            ), \
+            mock.patch('wsv2.session_archive._list_agent_rows', return_value=[row]):
+            snapshot = scan_local_host(host_id='vm10', host_name='Main Desktop', now_ms=1000)
+
+        active_records = [record for record in snapshot['records'] if record['active']]
+        self.assertEqual(len(active_records), 1)
+        self.assertEqual(active_records[0]['resumeId'], 'codex-exact')
+        self.assertEqual(active_records[0]['matchSource'], 'process-command')
+        self.assertIn('--dangerously-bypass-approvals-and-sandbox codex-exact', active_records[0]['resumeCommand'])
+
     def test_merge_snapshots_keeps_records_after_pane_disappears(self) -> None:
         first = {
             'hostId': 'vm9',
@@ -1043,6 +1097,7 @@ class SessionArchiveTests(unittest.TestCase):
         self.assertEqual(len(archive['records']), 1)
         self.assertFalse(archive['records'][0]['active'])
         self.assertEqual(archive['records'][0]['resumeId'], 'thread-1')
+        self.assertEqual(archive['records'][0]['lastActiveAt'], 1000)
 
     def test_unreachable_scan_does_not_mark_existing_records_inactive(self) -> None:
         archive = {
@@ -1099,6 +1154,56 @@ class SessionArchiveTests(unittest.TestCase):
 
         self.assertEqual(records, [])
 
+    def test_merge_preserves_tmux_metadata_when_reboot_scan_sees_only_history(self) -> None:
+        archive = {
+            'records': [
+                {
+                    'id': 'cx-live',
+                    'kind': 'codex',
+                    'resumeId': 'thread-1',
+                    'hostId': 'vm10',
+                    'hostName': 'Main Desktop',
+                    'cwd': '/repo',
+                    'title': 'Live work',
+                    'updatedAt': 100,
+                    'firstSeenAt': 1000,
+                    'lastSeenAt': 1000,
+                    'lastActiveAt': 1000,
+                    'active': True,
+                    'tmux': {'session': 'repo', 'windowIndex': 1},
+                    'resumeCommand': 'cd /repo && codex resume thread-1',
+                }
+            ],
+        }
+        snapshot = {
+            'hostId': 'vm10',
+            'hostName': 'Main Desktop',
+            'reachable': True,
+            'records': [
+                {
+                    'id': 'cx-live',
+                    'kind': 'codex',
+                    'resumeId': 'thread-1',
+                    'hostId': 'vm10',
+                    'hostName': 'Main Desktop',
+                    'cwd': '/repo',
+                    'title': 'Live work',
+                    'updatedAt': 200,
+                    'firstSeenAt': 2000,
+                    'lastSeenAt': 2000,
+                    'active': False,
+                    'tmux': None,
+                    'resumeCommand': 'cd /repo && codex resume thread-1',
+                }
+            ],
+        }
+
+        merged = merge_snapshots(archive, [snapshot], now_ms=2000)
+
+        self.assertFalse(merged['records'][0]['active'])
+        self.assertEqual(merged['records'][0]['tmux'], {'session': 'repo', 'windowIndex': 1})
+        self.assertEqual(merged['records'][0]['lastActiveAt'], 1000)
+
     def test_build_record_command_can_restore_remote_tmux_window(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, \
             mock.patch.dict(os.environ, {'WSV2_SELF_HOST': 'vm10'}, clear=True):
@@ -1118,6 +1223,119 @@ class SessionArchiveTests(unittest.TestCase):
         self.assertIn('cslog@10.1.0.9', command)
         self.assertIn('tmux new-window', command)
         self.assertIn('codex resume thread-1', command)
+
+    def test_build_record_command_can_launch_detached_without_attach(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, \
+            mock.patch.dict(os.environ, {'WSV2_SELF_HOST': 'vm10'}, clear=True):
+            config = load_config(write_v2_config(Path(tmp)))
+        record = {
+            'kind': 'codex',
+            'resumeId': 'thread-1',
+            'hostId': 'vm10',
+            'cwd': '/home/cslog/ai-workflow',
+            'title': 'Harness task',
+            'resumeCommand': 'cd /home/cslog/ai-workflow && codex resume --full-auto thread-1',
+            'tmux': {'session': 'harness', 'windowName': 'node', 'windowIndex': 2},
+        }
+
+        command = build_record_command(record, config, tmux_restore=True, attach=False)
+
+        self.assertIn('tmux new-session -d -s harness', command)
+        self.assertIn('tmux new-window -d -t harness', command)
+        self.assertNotIn('attach-session', command)
+        self.assertIn('codex resume --full-auto thread-1', command)
+
+    def test_select_restore_records_keeps_recent_last_active_records(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, \
+            mock.patch.dict(os.environ, {'WSV2_SELF_HOST': 'vm10'}, clear=True):
+            tmpdir = Path(tmp)
+            config = load_config(write_v2_config(tmpdir))
+            archive_path = tmpdir / 'archive.json'
+            archive_path.write_text(
+                json.dumps(
+                    {
+                        'records': [
+                            {
+                                'id': 'cx-recent',
+                                'kind': 'codex',
+                                'resumeId': 'thread-1',
+                                'hostId': 'vm10',
+                                'cwd': '/repo',
+                                'active': False,
+                                'lastActiveAt': 7_000,
+                                'tmux': {'session': 'repo', 'windowIndex': 1},
+                            },
+                            {
+                                'id': 'cx-old',
+                                'kind': 'codex',
+                                'resumeId': 'thread-2',
+                                'hostId': 'vm10',
+                                'cwd': '/repo',
+                                'active': False,
+                                'lastActiveAt': 1_000,
+                                'tmux': {'session': 'repo', 'windowIndex': 2},
+                            },
+                        ]
+                    }
+                ),
+                encoding='utf-8',
+            )
+
+            records = select_restore_records(
+                config,
+                archive_path=archive_path,
+                host='self',
+                since_hours=1 / 1000,
+                now_ms=10_000,
+            )
+
+        self.assertEqual([record['id'] for record in records], ['cx-recent'])
+
+    def test_select_restore_records_prefers_active_records_before_recent_inactive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, \
+            mock.patch.dict(os.environ, {'WSV2_SELF_HOST': 'vm10'}, clear=True):
+            tmpdir = Path(tmp)
+            config = load_config(write_v2_config(tmpdir))
+            archive_path = tmpdir / 'archive.json'
+            archive_path.write_text(
+                json.dumps(
+                    {
+                        'records': [
+                            {
+                                'id': 'cx-active',
+                                'kind': 'codex',
+                                'resumeId': 'thread-1',
+                                'hostId': 'vm10',
+                                'cwd': '/repo',
+                                'active': True,
+                                'lastActiveAt': 7_000,
+                                'tmux': {'session': 'repo', 'windowIndex': 1},
+                            },
+                            {
+                                'id': 'cx-recent-inactive',
+                                'kind': 'codex',
+                                'resumeId': 'thread-2',
+                                'hostId': 'vm10',
+                                'cwd': '/repo',
+                                'active': False,
+                                'lastActiveAt': 9_000,
+                                'tmux': {'session': 'repo', 'windowIndex': 2},
+                            },
+                        ]
+                    }
+                ),
+                encoding='utf-8',
+            )
+
+            records = select_restore_records(
+                config,
+                archive_path=archive_path,
+                host='self',
+                since_hours=1,
+                now_ms=10_000,
+            )
+
+        self.assertEqual([record['id'] for record in records], ['cx-active'])
 
     def test_archive_list_output_includes_raw_resume_id(self) -> None:
         output = format_archive_records(

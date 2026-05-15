@@ -17,6 +17,16 @@ PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 ARCHIVE_VERSION = 1
 DEFAULT_SCAN_LIMIT = 200
 DEFAULT_PANE_MATCH_LIMIT = 3
+DEFAULT_RESTORE_SINCE_HOURS = 72
+KNOWN_RESUME_FLAGS = {
+    "codex": (
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--full-auto",
+    ),
+    "claude": (
+        "--dangerously-skip-permissions",
+    ),
+}
 
 
 _PANE_FIELDS = (
@@ -57,22 +67,21 @@ def scan_local_host(
     panes = _list_tmux_panes()
     claude_sessions = _load_claude_sessions()
     codex_threads = _load_codex_threads()
-    process_rows = _load_process_rows()
     records: list[dict[str, Any]] = []
     seen_resume_ids: set[tuple[str, str]] = set()
+    panes_by_id = {str(pane.get("paneId") or ""): pane for pane in panes}
 
-    for pane in panes:
-        pane_pids = _descendant_pids(process_rows, pane.get("panePid"))
-        pane_records = build_records_for_pane(
-            pane,
+    for row in _list_agent_rows(host_id=host_id, host_name=host_name or host_id):
+        row_records = build_records_for_agent_row(
+            row,
             claude_sessions=claude_sessions,
             codex_threads=codex_threads,
+            pane=panes_by_id.get(str(row.get("paneId") or "")),
             host_id=host_id,
             host_name=host_name or host_id,
             now_ms=now_ms,
-            pane_pids=pane_pids,
         )
-        for record in pane_records:
+        for record in row_records:
             records.append(record)
             seen_resume_ids.add((record["kind"], record["resumeId"]))
 
@@ -118,6 +127,74 @@ def scan_local_host(
         "codexThreadCount": len(codex_threads),
         "records": sorted(records, key=_record_sort_key),
     }
+
+
+def build_records_for_agent_row(
+    row: dict[str, Any],
+    *,
+    claude_sessions: list[dict[str, Any]],
+    codex_threads: list[dict[str, Any]],
+    host_id: str,
+    host_name: str,
+    now_ms: int,
+    pane: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Build archive records from exact tmux pane/process rows.
+
+    This is intentionally preferred over cwd matching. Cwd matching is still
+    used as a last resort for live agents whose process command does not expose
+    a resume id, but only one candidate is selected for that exact agent row.
+    """
+    records: list[dict[str, Any]] = []
+    resume_ids = _resume_ids_from_agent_row(row)
+    pane = pane or _pane_from_agent_row(row)
+
+    for kind in _agent_row_kinds(row):
+        sessions = claude_sessions if kind == "claude" else codex_threads
+        resume_id = str(row.get("resumeId") or "").strip() if kind in set(row.get("kinds") or []) else ""
+        match_source = "park-state" if resume_id else ""
+        if not resume_id:
+            resume_id = resume_ids.get(kind, "")
+            match_source = "process-command" if resume_id else ""
+
+        session = _session_by_resume_id(sessions, resume_id) if resume_id else None
+        if session is None and not resume_id:
+            matches = _match_candidates_by_cwd(sessions, row.get("cwd"))[:1]
+            if not matches:
+                continue
+            session = matches[0]
+            resume_id = str(session["resumeId"])
+            match_source = "cwd-fallback"
+        elif session is None and resume_id:
+            session = {
+                "resumeId": resume_id,
+                "cwd": str(row.get("cwd") or Path.home()),
+                "title": _agent_row_title(kind, row),
+                "updatedAt": now_ms,
+            }
+
+        if not resume_id or session is None:
+            continue
+
+        active = bool(not row.get("parked"))
+        record = build_archive_record(
+            kind=kind,
+            session=session,
+            pane=pane,
+            host_id=host_id,
+            host_name=host_name,
+            now_ms=now_ms,
+            active=active,
+        )
+        record["matchSource"] = match_source or "unknown"
+        record["parked"] = bool(row.get("parked"))
+        record["agentTarget"] = row.get("target")
+        record["agentProcessGroupId"] = row.get("processGroupId")
+        record["agentPids"] = row.get("agentPids") or []
+        record["resumeCommand"] = _resume_command_from_agent_row(kind, str(record.get("cwd") or Path.home()), resume_id, row)
+        records.append(record)
+
+    return _dedupe_records(records)
 
 
 def build_records_for_pane(
@@ -202,6 +279,8 @@ def build_archive_record(
         "active": active,
         "resumeCommand": build_local_resume_command(kind, cwd, resume_id),
     }
+    if active:
+        record["lastActiveAt"] = now_ms
     if pane:
         record["tmux"] = {
             "session": pane.get("session"),
@@ -322,6 +401,12 @@ def merge_snapshots(
 
     for record in existing_records.values():
         if record.get("hostId") in scanned_hosts:
+            if record.get("active"):
+                record["lastActiveAt"] = max(
+                    int(record.get("lastActiveAt") or 0),
+                    int(record.get("lastSeenAt") or 0),
+                    int(record.get("updatedAt") or 0),
+                )
             record["active"] = False
 
     for snapshot in snapshots:
@@ -335,6 +420,15 @@ def merge_snapshots(
                 record["lastSeenAt"] = max(int(previous.get("lastSeenAt") or 0), int(record.get("lastSeenAt") or now_ms))
                 if not record.get("title") and previous.get("title"):
                     record["title"] = previous["title"]
+                if not record.get("tmux") and previous.get("tmux"):
+                    record["tmux"] = previous["tmux"]
+                if not record.get("resumeCommand") and previous.get("resumeCommand"):
+                    record["resumeCommand"] = previous["resumeCommand"]
+                previous_last_active = int(previous.get("lastActiveAt") or 0)
+                if record.get("active"):
+                    record["lastActiveAt"] = max(previous_last_active, int(record.get("lastSeenAt") or now_ms))
+                elif previous_last_active:
+                    record["lastActiveAt"] = previous_last_active
             existing_records[record["id"]] = record
 
     records = sorted(existing_records.values(), key=_record_sort_key)
@@ -408,6 +502,7 @@ def build_record_command(
     config: WorkspaceConfig,
     *,
     tmux_restore: bool = False,
+    attach: bool = True,
 ) -> str:
     host_id = str(record.get("hostId") or "")
     try:
@@ -415,13 +510,13 @@ def build_record_command(
     except WorkspaceConfigError:
         host = None
 
-    local_command = build_local_resume_command(
+    local_command = str(record.get("resumeCommand") or "").strip() or build_local_resume_command(
         str(record.get("kind")),
         str(record.get("cwd") or Path.home()),
         str(record.get("resumeId")),
     )
     if tmux_restore:
-        local_command = build_tmux_restore_command(record, local_command)
+        local_command = build_tmux_restore_command(record, local_command, attach=attach)
 
     if host and config.host_runs_local(host):
         return local_command
@@ -434,7 +529,7 @@ def build_record_command(
     )
 
 
-def build_tmux_restore_command(record: dict[str, Any], local_resume_command: str) -> str:
+def build_tmux_restore_command(record: dict[str, Any], local_resume_command: str, *, attach: bool = True) -> str:
     cwd = str(record.get("cwd") or Path.home())
     tmux_data = record.get("tmux") or {}
     session = str(tmux_data.get("session") or _fallback_session_name(cwd))
@@ -442,13 +537,97 @@ def build_tmux_restore_command(record: dict[str, Any], local_resume_command: str
         str(tmux_data.get("windowName") or record.get("title") or record.get("kind") or "resume")
     )
     quoted_session = shlex.quote(session)
+    quoted_window_name = shlex.quote(window_name)
+    quoted_cwd = shlex.quote(cwd)
+    quoted_command = shlex.quote(local_resume_command)
+    if not attach:
+        return (
+            f"if tmux has-session -t {quoted_session} 2>/dev/null; then "
+            f"tmux new-window -d -t {quoted_session} -n {quoted_window_name} "
+            f"-c {quoted_cwd} {quoted_command}; "
+            f"else tmux new-session -d -s {quoted_session} -n {quoted_window_name} "
+            f"-c {quoted_cwd} {quoted_command}; fi"
+        )
     return (
         f"tmux has-session -t {quoted_session} 2>/dev/null || "
-        f"tmux new-session -d -s {quoted_session} -c {shlex.quote(cwd)}; "
-        f"tmux new-window -t {quoted_session} -n {shlex.quote(window_name)} "
-        f"-c {shlex.quote(cwd)} {shlex.quote(local_resume_command)}; "
+        f"tmux new-session -d -s {quoted_session} -c {quoted_cwd}; "
+        f"tmux new-window -t {quoted_session} -n {quoted_window_name} "
+        f"-c {quoted_cwd} {quoted_command}; "
         f"tmux attach-session -t {quoted_session}"
     )
+
+
+def select_restore_records(
+    config: WorkspaceConfig,
+    *,
+    host: str | None = "self",
+    archive_path: str | Path | None = None,
+    include_inactive: bool = False,
+    since_hours: float = DEFAULT_RESTORE_SINCE_HOURS,
+    limit: int | None = None,
+    now_ms: int | None = None,
+) -> list[dict[str, Any]]:
+    now_ms = now_ms or _now_ms()
+    host_id = _restore_host_id(config, host)
+    cutoff_ms = now_ms - int(float(since_hours) * 60 * 60 * 1000)
+    candidates = []
+    for record in list_archive_records(archive_path=archive_path):
+        if host_id and str(record.get("hostId") or "") != host_id:
+            continue
+        if not record.get("resumeId") or not record.get("tmux"):
+            continue
+        candidates.append(record)
+    if include_inactive:
+        selected = candidates
+    else:
+        active_records = [record for record in candidates if record.get("active")]
+        selected = active_records or [
+            record
+            for record in candidates
+            if int(record.get("lastActiveAt") or 0) >= cutoff_ms
+        ]
+    selected.sort(key=_restore_sort_key)
+    return selected[:limit] if limit is not None else selected
+
+
+def restore_archive_records(
+    records: Iterable[dict[str, Any]],
+    config: WorkspaceConfig,
+    *,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    rows = []
+    errors = []
+    for record in records:
+        try:
+            command = build_record_command(record, config, tmux_restore=True, attach=False)
+        except SessionArchiveError as error:
+            errors.append(f"{record.get('id')}: {error}")
+            continue
+        row = {
+            "id": record.get("id"),
+            "kind": record.get("kind"),
+            "hostId": record.get("hostId"),
+            "resumeId": record.get("resumeId"),
+            "tmux": record.get("tmux"),
+            "title": record.get("title"),
+            "command": command,
+            "restored": False,
+        }
+        if not dry_run:
+            result = subprocess.run(["bash", "-lc", command], capture_output=True, text=True, timeout=20)
+            if result.returncode != 0:
+                errors.append(f"{record.get('id')}: {result.stderr.strip() or result.stdout.strip() or result.returncode}")
+            else:
+                row["restored"] = True
+        rows.append(row)
+    return {
+        "matched": len(rows),
+        "restored": sum(1 for row in rows if row.get("restored")),
+        "dryRun": dry_run,
+        "errors": errors,
+        "rows": rows,
+    }
 
 
 def format_archive_records(records: Iterable[dict[str, Any]], *, limit: int | None = None) -> str:
@@ -480,6 +659,150 @@ def _stamp_host_metadata(snapshot: dict[str, Any], host: HostRecord) -> None:
         record["hostName"] = host.name
         if host.ssh:
             record["hostSsh"] = host.ssh
+
+
+def _list_agent_rows(*, host_id: str, host_name: str) -> list[dict[str, Any]]:
+    try:
+        from .codex_parking import list_agent_processes
+
+        return list_agent_processes(host_id=host_id, host_name=host_name)
+    except Exception:
+        return []
+
+
+def _agent_row_kinds(row: dict[str, Any]) -> list[str]:
+    return [
+        kind
+        for kind in dict.fromkeys(str(kind) for kind in row.get("kinds") or [])
+        if kind in {"codex", "claude"}
+    ]
+
+
+def _pane_from_agent_row(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "session": row.get("session"),
+        "windowIndex": _int_or_none(row.get("windowIndex")) or 0,
+        "windowName": row.get("windowName") or f"window-{row.get('windowIndex') or 0}",
+        "windowActive": bool(row.get("windowActive")),
+        "windowActivity": _int_or_none(row.get("windowActivity")) or 0,
+        "paneId": row.get("paneId"),
+        "paneIndex": _int_or_none(row.get("paneIndex")) or 0,
+        "paneActive": bool(row.get("paneActive")),
+        "panePid": _int_or_none(row.get("panePid")),
+        "paneCommand": row.get("paneCommand"),
+        "cwd": row.get("cwd"),
+        "paneTitle": row.get("windowName") or row.get("target"),
+    }
+
+
+def _session_by_resume_id(sessions: list[dict[str, Any]], resume_id: str) -> dict[str, Any] | None:
+    if not resume_id:
+        return None
+    for session in sessions:
+        if str(session.get("resumeId") or "") == resume_id:
+            return session
+    return None
+
+
+def _resume_ids_from_agent_row(row: dict[str, Any]) -> dict[str, str]:
+    selected: dict[str, str] = {}
+    commands = [str(command or "") for command in row.get("commands") or []]
+    for command in commands:
+        for kind, resume_id in _extract_resume_ids_from_command(command):
+            selected.setdefault(kind, resume_id)
+    return selected
+
+
+def _extract_resume_ids_from_command(command: str) -> list[tuple[str, str]]:
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = command.split()
+    matches = []
+    for index, token in enumerate(tokens):
+        name = Path(token).name.lower()
+        if name == "codex":
+            resume_id = _resume_id_after_codex(tokens[index + 1 :])
+            if resume_id:
+                matches.append(("codex", resume_id))
+        elif name == "claude":
+            resume_id = _resume_id_after_claude(tokens[index + 1 :])
+            if resume_id:
+                matches.append(("claude", resume_id))
+    return matches
+
+
+def _resume_id_after_codex(tokens: list[str]) -> str:
+    try:
+        resume_index = tokens.index("resume")
+    except ValueError:
+        return ""
+    return _first_resume_id_token(tokens[resume_index + 1 :])
+
+
+def _resume_id_after_claude(tokens: list[str]) -> str:
+    for index, token in enumerate(tokens):
+        if token == "resume":
+            return _first_resume_id_token(tokens[index + 1 :])
+        if token == "--resume":
+            return _first_resume_id_token(tokens[index + 1 :])
+        if token.startswith("--resume="):
+            return token.split("=", 1)[1].strip()
+    return ""
+
+
+def _first_resume_id_token(tokens: list[str]) -> str:
+    for token in tokens:
+        token = token.strip().rstrip(".,;:")
+        if not token or token.startswith("-"):
+            continue
+        return token
+    return ""
+
+
+def _resume_command_from_agent_row(kind: str, cwd: str, resume_id: str, row: dict[str, Any]) -> str:
+    command = str(row.get("resumeCommand") or "").strip()
+    if command and resume_id in command:
+        return command
+    flags = _resume_flags_from_agent_row(kind, row)
+    if not flags:
+        return build_local_resume_command(kind, cwd, resume_id)
+    quoted_id = shlex.quote(resume_id)
+    if kind == "codex":
+        resume = " ".join(["codex", "resume", *flags, quoted_id])
+    elif kind == "claude":
+        resume = " ".join(["claude", *flags, "--resume", quoted_id])
+    else:
+        return build_local_resume_command(kind, cwd, resume_id)
+    return f"cd {shlex.quote(cwd)} && {resume}"
+
+
+def _resume_flags_from_agent_row(kind: str, row: dict[str, Any]) -> list[str]:
+    command_blob = " ".join(str(command) for command in row.get("commands") or [])
+    return [flag for flag in KNOWN_RESUME_FLAGS.get(kind, ()) if flag in command_blob]
+
+
+def _agent_row_title(kind: str, row: dict[str, Any]) -> str:
+    return str(row.get("windowName") or row.get("target") or f"{kind.title()} session")
+
+
+def _restore_host_id(config: WorkspaceConfig, host: str | None) -> str | None:
+    if host in (None, "", "all", "*"):
+        return None
+    if str(host).lower() == "self":
+        return config.self_host_id or "local"
+    return config.normalize_host_id(str(host))
+
+
+def _restore_sort_key(record: dict[str, Any]):
+    tmux_data = record.get("tmux") or {}
+    return (
+        str(record.get("hostName") or record.get("hostId") or "").lower(),
+        str(tmux_data.get("session") or "").lower(),
+        int(tmux_data.get("windowIndex") or 0),
+        str(record.get("kind") or ""),
+        -int(record.get("updatedAt") or 0),
+    )
 
 
 def _unreachable_snapshot(host: HostRecord, now_ms: int, error: str) -> dict[str, Any]:
@@ -637,58 +960,6 @@ def _load_codex_threads() -> list[dict[str, Any]]:
             }
         )
     return threads
-
-
-def _load_process_rows() -> list[dict[str, Any]]:
-    try:
-        result = subprocess.run(
-            ["ps", "-eo", "pid=,ppid=,comm=,args="],
-            capture_output=True,
-            text=True,
-            timeout=4,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return []
-    if result.returncode != 0:
-        return []
-
-    rows = []
-    for line in result.stdout.splitlines():
-        parts = line.strip().split(maxsplit=3)
-        if len(parts) < 3:
-            continue
-        rows.append(
-            {
-                "pid": _int_or_none(parts[0]),
-                "ppid": _int_or_none(parts[1]),
-                "comm": parts[2],
-                "args": parts[3] if len(parts) > 3 else parts[2],
-            }
-        )
-    return rows
-
-
-def _descendant_pids(rows: list[dict[str, Any]], root_pid: int | None) -> set[int]:
-    if not root_pid:
-        return set()
-    children: dict[int, list[int]] = {}
-    for row in rows:
-        pid = row.get("pid")
-        ppid = row.get("ppid")
-        if pid is None or ppid is None:
-            continue
-        children.setdefault(int(ppid), []).append(int(pid))
-
-    descendants = {int(root_pid)}
-    queue = [int(root_pid)]
-    while queue:
-        current = queue.pop(0)
-        for child in children.get(current, []):
-            if child in descendants:
-                continue
-            descendants.add(child)
-            queue.append(child)
-    return descendants
 
 
 def _match_candidates_by_cwd(

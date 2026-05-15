@@ -25,9 +25,11 @@ from .session_archive import (
     list_archive_records,
     load_archive,
     merge_snapshots,
+    restore_archive_records,
     save_archive,
     scan_configured_hosts,
     scan_local_host,
+    select_restore_records,
 )
 from .tui import select_workspace_tui, write_selected_target
 
@@ -98,6 +100,22 @@ def build_parser() -> argparse.ArgumentParser:
         action='store_true',
         help='Print a command that recreates a tmux window and resumes there',
     )
+
+    archive_restore_parser = subparsers.add_parser(
+        'archive-restore',
+        help='Restore recent archived Codex/Claude sessions into tmux windows',
+    )
+    archive_restore_parser.add_argument('--host', default='self', help='Host id to restore; default is this machine')
+    archive_restore_parser.add_argument(
+        '--since-hours',
+        type=float,
+        default=72,
+        help='Restore records active within this many hours; default 72',
+    )
+    archive_restore_parser.add_argument('--all', action='store_true', help='Include all inactive records with tmux metadata')
+    archive_restore_parser.add_argument('--limit', type=int, help='Maximum records to restore')
+    archive_restore_parser.add_argument('--dry-run', action='store_true', help='Print commands without executing them')
+    archive_restore_parser.add_argument('--json', action='store_true', help='Emit JSON instead of text')
 
     codex_parser = subparsers.add_parser(
         'codex',
@@ -571,6 +589,25 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         return 0
 
+    if command == 'archive-restore':
+        try:
+            records = select_restore_records(
+                actions.config,
+                host=args.host,
+                include_inactive=args.all,
+                since_hours=args.since_hours,
+                limit=args.limit,
+            )
+            result = restore_archive_records(records, actions.config, dry_run=args.dry_run)
+        except SessionArchiveError as error:
+            print(str(error), file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps(result, indent=2))
+        else:
+            _print_archive_restore_result(result)
+        return 1 if result.get('errors') else 0
+
     if command == 'codex':
         try:
             return run_codex_command(actions, args)
@@ -580,6 +617,23 @@ def main(argv: list[str] | None = None) -> int:
 
     parser.print_help()
     return 1
+
+
+def _print_archive_restore_result(result: dict) -> None:
+    action = 'would restore' if result.get('dryRun') else 'restored'
+    matched = int(result.get('matched') or 0)
+    count = matched if result.get('dryRun') else int(result.get('restored') or 0)
+    print(f"{action}: {count}/{matched} archived sessions")
+    rows = result.get('rows') or []
+    for row in rows:
+        tmux_data = row.get('tmux') or {}
+        tmux_label = f"{tmux_data.get('session')}#{tmux_data.get('windowIndex')}" if tmux_data else '--'
+        marker = 'DRY' if result.get('dryRun') else ('OK' if row.get('restored') else 'ERR')
+        print(f"{marker:<3} {row.get('hostId'):<8} {tmux_label:<18} {row.get('kind'):<6} {row.get('resumeId')}")
+        if result.get('dryRun'):
+            print(f"    {row.get('command')}")
+    for error in result.get('errors') or []:
+        print(f"error: {error}", file=sys.stderr)
 
 
 if __name__ == '__main__':  # pragma: no cover
