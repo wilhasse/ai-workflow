@@ -8,7 +8,7 @@ from typing import Iterable
 from .actions import TerminalStatus, WorkspaceActions, terminal_recent_score, terminal_status_rank
 
 
-SHORTCUT_HELP = 'Enter: switch  Alt+L: label  Alt+C: check  Alt+I: idle  Alt+A: active'
+SHORTCUT_HELP = 'Enter: switch  Ctrl+G: active only  Alt+L: label  Alt+C: check  Alt+I: idle  Alt+A: active'
 
 
 @dataclass(slots=True)
@@ -16,6 +16,10 @@ class TuiItem:
     status: TerminalStatus
     searchable_text: str
     recent_score: float = 0.0
+
+
+def is_green_active_terminal(status: TerminalStatus) -> bool:
+    return status.active and not status.window_status
 
 
 def build_tui_items(
@@ -35,7 +39,9 @@ def build_tui_items(
     return items
 
 
-def filter_tui_items(items: list[TuiItem], query: str) -> list[TuiItem]:
+def filter_tui_items(items: list[TuiItem], query: str, *, active_only: bool = False) -> list[TuiItem]:
+    if active_only:
+        items = [item for item in items if is_green_active_terminal(item.status)]
     if not query:
         return sorted(items, key=_sort_key)
     normalized = query.lower()
@@ -103,6 +109,7 @@ class WorkspaceTui:
         self.index = 0
         self.scroll = 0
         self.message = ''
+        self.active_only = False
 
     def run(self) -> str | None:
         return curses.wrapper(self._main)
@@ -112,7 +119,7 @@ class WorkspaceTui:
         stdscr.keypad(True)
 
         while True:
-            filtered = filter_tui_items(self.items, self.query)
+            filtered = filter_tui_items(self.items, self.query, active_only=self.active_only)
             if self.index >= len(filtered):
                 self.index = max(0, len(filtered) - 1)
             self._draw(stdscr, filtered)
@@ -127,6 +134,16 @@ class WorkspaceTui:
             if key in (curses.KEY_ENTER, 10, 13):
                 if filtered:
                     return filtered[self.index].status.target
+                continue
+            if key == 7:
+                self.active_only = not self.active_only
+                self.index = 0
+                self.scroll = 0
+                self.message = (
+                    'Green active terminal filter on.'
+                    if self.active_only
+                    else 'Green active terminal filter off.'
+                )
                 continue
             if key == curses.KEY_UP:
                 self.index = max(0, self.index - 1)
@@ -163,7 +180,8 @@ class WorkspaceTui:
 
         stdscr.addnstr(0, 0, 'Workspace Launcher', width - 1, curses.A_BOLD)
         stdscr.addnstr(1, 0, SHORTCUT_HELP, width - 1)
-        stdscr.addnstr(2, 0, f'Search: {self.query}', width - 1)
+        mode = 'active only' if self.active_only else 'all terminals'
+        stdscr.addnstr(2, 0, f'Search: {self.query}  Mode: {mode}', width - 1)
         if self.message:
             stdscr.addnstr(3, 0, self.message, width - 1)
 
@@ -175,7 +193,7 @@ class WorkspaceTui:
                 attr = curses.A_REVERSE if self.scroll + row_offset == self.index else curses.A_NORMAL
                 stdscr.addnstr(row, 0, format_tui_row(item.status, width), width - 1, attr)
 
-        stdscr.addnstr(height - 1, 0, 'Esc: close  Ctrl+U: clear  Type to filter terminals', width - 1)
+        stdscr.addnstr(height - 1, 0, 'Esc: close  Ctrl+U: clear  Ctrl+G: active only  Type to filter terminals', width - 1)
         stdscr.refresh()
 
     def _read_alt_key(self, stdscr) -> int | None:

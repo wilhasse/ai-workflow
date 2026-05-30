@@ -627,6 +627,8 @@ class WorkspaceButton(Gtk.Button):
         # First, try to find and focus an existing terminal window for this workspace
         # Search by session name (tmux sets window title to "session : window — Konsole")
         if self._focus_existing_window(session_name):
+            if self.on_activate_callback:
+                self.on_activate_callback(ws.get('host', 'local'))
             return  # Window found and focused, done!
 
         # Get terminal from config
@@ -885,6 +887,15 @@ class SettingsDialog(Gtk.Dialog):
         shell_row.pack_start(self.shell_entry, True, True, 0)
         terminal_box.pack_start(shell_row, False, False, 0)
 
+        self.keep_minimized_check = Gtk.CheckButton(label="Escondido after terminal switches")
+        self.keep_minimized_check.set_tooltip_text(
+            "Keep the Workspaces panel minimized after opening or switching terminals"
+        )
+        self.keep_minimized_check.set_active(
+            bool(settings.get('keepMinimizedOnSwitch') or settings.get('escondido'))
+        )
+        terminal_box.pack_start(self.keep_minimized_check, False, False, 0)
+
         terminal_frame.add(terminal_box)
         box.pack_start(terminal_frame, False, False, 0)
 
@@ -968,6 +979,7 @@ class SettingsDialog(Gtk.Dialog):
         settings = self.config.get('settings', {}).copy()
         settings['terminal'] = self.terminal_combo.get_active_text() or 'xfce4-terminal'
         settings['shell'] = self.shell_entry.get_text().strip() or '/bin/bash'
+        settings['keepMinimizedOnSwitch'] = self.keep_minimized_check.get_active()
         return settings
 
     def get_hosts(self):
@@ -1133,15 +1145,19 @@ class HostTabBar(Gtk.Box):
 class TerminalSwitcherDialog(Gtk.Dialog):
     """Keyboard switcher for tmux windows across all configured hosts."""
 
-    def __init__(self, parent, entries, selected_target=None):
-        super().__init__(title="Terminal Switcher", transient_for=parent, flags=0)
+    def __init__(self, parent, entries, selected_target=None, transient_parent=None):
+        super().__init__(title="Terminal Switcher", transient_for=transient_parent, flags=0)
         self.set_name('terminal-switcher-dialog')
         self.parent = parent
         self.all_entries = entries
         self.filtered_entries = list(entries)
         self.selected_entry = None
         self.initial_selected_target = selected_target
+        self.active_only = False
         self.set_default_size(760, 560)
+        if transient_parent is None:
+            self.set_position(Gtk.WindowPosition.CENTER)
+            self.set_keep_above(True)
         self.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL)
 
         box = self.get_content_area()
@@ -1159,7 +1175,7 @@ class TerminalSwitcherDialog(Gtk.Dialog):
         shortcut_help = Gtk.Label()
         shortcut_help.set_markup(
             '<span size="small" foreground="#8fa1b6">'
-            '↑↓ Navigate · Enter Open · Alt+L Label · Alt+C Check · Alt+I Idle · Alt+A Active'
+            '↑↓ Navigate · Enter Open · Ctrl+G Active only · Alt+L Label · Alt+C Check · Alt+I Idle · Alt+A Active'
             '</span>'
         )
         shortcut_help.set_xalign(0)
@@ -1218,10 +1234,9 @@ class TerminalSwitcherDialog(Gtk.Dialog):
         action_box.pack_end(self.open_button, False, False, 0)
         box.pack_start(action_box, False, False, 0)
 
-        hint = Gtk.Label()
-        hint.set_markup('<span size="small" foreground="#7f8c8d">Sorted by recent terminal use. Alt shortcuts update the selected row without closing this dialog.</span>')
-        hint.set_xalign(0)
-        box.pack_start(hint, False, False, 0)
+        self.hint_label = Gtk.Label()
+        self.hint_label.set_xalign(0)
+        box.pack_start(self.hint_label, False, False, 0)
 
         self.connect('key-press-event', self._on_key_press)
         self._apply_css()
@@ -1318,17 +1333,26 @@ class TerminalSwitcherDialog(Gtk.Dialog):
             selected_iter = selected_iter or self.store.get_iter_first()
             self.tree.get_selection().select_iter(selected_iter)
             self.tree.scroll_to_cell(self.store.get_path(selected_iter), None, False, 0, 0)
+        else:
+            self.selected_entry = None
+        self._update_hint()
 
     def _on_search_changed(self, entry, selected_target=None):
         query = entry.get_text().strip().lower()
         selected_target = selected_target or self._entry_identity(self.selected_entry)
+        entries = self.all_entries
+        if self.active_only:
+            entries = [
+                item for item in entries
+                if normalize_terminal_status(item.get('window_status')) == ''
+            ]
         if query:
             self.filtered_entries = [
-                item for item in self.all_entries
+                item for item in entries
                 if query in item.get('search_text', '')
             ]
         else:
-            self.filtered_entries = list(self.all_entries)
+            self.filtered_entries = list(entries)
         self._populate(selected_target)
 
     def _on_selection_changed(self, selection):
@@ -1359,9 +1383,28 @@ class TerminalSwitcherDialog(Gtk.Dialog):
         self.all_entries = self.parent.build_terminal_switcher_entries()
         self._on_search_changed(self.search_entry, selected_target)
 
+    def _update_hint(self):
+        if not hasattr(self, 'hint_label'):
+            return
+        mode = 'Active-flagged terminals only' if self.active_only else 'All active tmux windows'
+        self.hint_label.set_markup(
+            '<span size="small" foreground="#7f8c8d">'
+            f'{GLib.markup_escape_text(mode)} · {len(self.filtered_entries)} shown · '
+            'Ctrl+G toggles Active only. Alt shortcuts update the selected row without closing this dialog.'
+            '</span>'
+        )
+
+    def _toggle_active_filter(self):
+        selected_target = self._entry_identity(self.selected_entry)
+        self.active_only = not self.active_only
+        self._on_search_changed(self.search_entry, selected_target)
+
     def _on_key_press(self, widget, event):
         keyval = event.keyval
         state = event.state & Gtk.accelerator_get_default_mod_mask()
+        if state & Gdk.ModifierType.CONTROL_MASK and keyval in (Gdk.KEY_g, Gdk.KEY_G):
+            self._toggle_active_filter()
+            return True
         if state & Gdk.ModifierType.MOD1_MASK:
             if keyval in (Gdk.KEY_l, Gdk.KEY_L):
                 self._rename_selected(widget)
@@ -1902,12 +1945,24 @@ class WorkspaceSwitcher(Gtk.Window):
     def open_terminal_switcher(self):
         entries = self.build_terminal_switcher_entries()
         selected_target = self._focused_terminal_entry_identity(entries)
-        dialog = TerminalSwitcherDialog(self, entries, selected_target=selected_target)
+        keep_hidden = self._keep_minimized_on_switch()
+        if keep_hidden:
+            self.iconify()
+        dialog = TerminalSwitcherDialog(
+            self,
+            entries,
+            selected_target=selected_target,
+            transient_parent=None if keep_hidden else self,
+        )
+        if keep_hidden:
+            self._hide_after_switch_if_needed()
         response = dialog.run()
         selected = dialog.selected_entry
         dialog.destroy()
         if response == Gtk.ResponseType.OK and selected:
             self.open_tmux_window_entry(selected)
+        elif keep_hidden:
+            self._hide_after_switch_if_needed()
 
     def _focused_terminal_entry_identity(self, entries):
         titles = []
@@ -2226,6 +2281,7 @@ class WorkspaceSwitcher(Gtk.Window):
         if host_id == 'local' or not host_info or not host_info.get('ssh'):
             self._switch_local_tmux_clients_to_window(session_name, session_target)
             if self._focus_existing_window(session_name):
+                self._on_workspace_activated(host_id)
                 return
             cmd = (
                 f"tmux select-window -t {shlex.quote(session_target)} 2>/dev/null || true; "
@@ -2235,6 +2291,7 @@ class WorkspaceSwitcher(Gtk.Window):
             ssh_target = host_info['ssh']
             self._switch_remote_tmux_clients_to_window(host_info, session_name, session_target)
             if self._focus_existing_window(session_name):
+                self._on_workspace_activated(host_id)
                 return
             remote_attach = (
                 f"tmux select-window -t {shlex.quote(session_target)} 2>/dev/null || true; "
@@ -2247,8 +2304,7 @@ class WorkspaceSwitcher(Gtk.Window):
             terminal,
             '-e', f"bash -c {shlex.quote(cmd + '; exec bash')}"
         ])
-        self.remote_session_cache.invalidate(host_id)
-        GLib.timeout_add(1000, self._delayed_refresh)
+        self._on_workspace_activated(host_id)
 
     def rename_tmux_window_from_entry(self, entry, dialog_parent=None):
         """Set an app-only label for a tmux window from the terminal switcher."""
@@ -2423,6 +2479,21 @@ class WorkspaceSwitcher(Gtk.Window):
         self.remote_session_cache.invalidate(host_id)
         # Schedule a refresh after 1 second to give tmux time to create the session
         GLib.timeout_add(1000, self._delayed_refresh)
+        self._hide_after_switch_if_needed()
+
+    def _keep_minimized_on_switch(self):
+        settings = self.config.get('settings', {})
+        return bool(settings.get('keepMinimizedOnSwitch') or settings.get('escondido'))
+
+    def _hide_after_switch_if_needed(self):
+        if not self._keep_minimized_on_switch():
+            return
+
+        def hide_panel():
+            self.iconify()
+            return False
+
+        GLib.idle_add(hide_panel)
 
     def _delayed_refresh(self):
         """Single delayed refresh after workspace activation"""

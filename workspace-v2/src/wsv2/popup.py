@@ -18,13 +18,17 @@ from .window_focus import active_window_title, terminal_target_from_window_title
 PROGRAM_CLASS = "workspace-v2-popup"
 WINDOW_ROLE = "workspace-v2-popup"
 WINDOW_TITLE = "Workspace Launcher"
-SHORTCUT_HELP = "↑↓ Navigate · Enter Open · Alt+L Label · Alt+C Check · Alt+I Idle · Alt+A Active"
+SHORTCUT_HELP = "↑↓ Navigate · Enter Open · Ctrl+G Active only · Alt+L Label · Alt+C Check · Alt+I Idle · Alt+A Active"
 
 
 @dataclass(slots=True)
 class PopupItem:
     status: TerminalStatus
     recent_score: float
+
+
+def is_green_active_terminal(status: TerminalStatus) -> bool:
+    return status.active and not status.window_status
 
 
 class WorkspacePopup(Gtk.Window):
@@ -37,6 +41,7 @@ class WorkspacePopup(Gtk.Window):
         self.initial_selected_target = terminal_target_from_window_title(focused_window_title, self.statuses)
         self.selected_target = self.initial_selected_target or None
         self.filtered_items: list[PopupItem] = []
+        self.active_only = False
 
         self.set_role(WINDOW_ROLE)
         self.set_type_hint(Gdk.WindowTypeHint.DIALOG)
@@ -150,8 +155,9 @@ class WorkspacePopup(Gtk.Window):
         items = self._sorted_items(query)
         self.filtered_items = items
         label = "terminal" if len(items) == 1 else "terminals"
+        mode = " active" if self.active_only else ""
         self.message_label.set_markup(
-            f'<span foreground="#7f8c8d">Showing {len(items)} {label}. Enter: open   Esc: close   Recent items are shown first.</span>'
+            f'<span foreground="#7f8c8d">Showing {len(items)}{mode} {label}. Enter: open   Esc: close   Ctrl+G: green active only.</span>'
         )
 
         for child in self.listbox.get_children():
@@ -208,6 +214,8 @@ class WorkspacePopup(Gtk.Window):
             PopupItem(status=status, recent_score=terminal_recent_score(status, self.recent_scores))
             for status in self.statuses
         ]
+        if self.active_only:
+            items = [item for item in items if is_green_active_terminal(item.status)]
 
         if query:
             scored = []
@@ -342,6 +350,8 @@ class WorkspacePopup(Gtk.Window):
         self._refresh_rows()
 
     def _on_search_key_press(self, _entry: Gtk.SearchEntry, event: Gdk.EventKey) -> bool:
+        if self._handle_filter_shortcut(event):
+            return True
         if self._handle_edit_shortcut(event):
             return True
         key_name = Gdk.keyval_name(event.keyval)
@@ -357,6 +367,8 @@ class WorkspacePopup(Gtk.Window):
         return False
 
     def _on_window_key_press(self, _window: Gtk.Window, event: Gdk.EventKey) -> bool:
+        if self._handle_filter_shortcut(event):
+            return True
         if self._handle_edit_shortcut(event):
             return True
         if Gdk.keyval_name(event.keyval) == "Escape":
@@ -402,6 +414,20 @@ class WorkspacePopup(Gtk.Window):
             return None
         status = getattr(row, "terminal_status", None)
         return status if isinstance(status, TerminalStatus) else None
+
+    def _handle_filter_shortcut(self, event: Gdk.EventKey) -> bool:
+        state = event.state & Gtk.accelerator_get_default_mod_mask()
+        if not state & Gdk.ModifierType.CONTROL_MASK:
+            return False
+        key_name = (Gdk.keyval_name(event.keyval) or "").lower()
+        if key_name != "g":
+            return False
+        self.active_only = not self.active_only
+        self._refresh_rows()
+        self._set_message(
+            "Green active terminal filter on." if self.active_only else "Green active terminal filter off."
+        )
+        return True
 
     def _handle_edit_shortcut(self, event: Gdk.EventKey) -> bool:
         if not event.state & Gdk.ModifierType.MOD1_MASK:

@@ -220,6 +220,7 @@
       "gnome-terminal"
     ],
     "shell": "/bin/bash",
+    "keepMinimizedOnSwitch": true,
     "defaultEditor": "code"
   }
 }

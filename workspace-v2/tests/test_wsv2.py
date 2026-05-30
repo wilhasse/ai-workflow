@@ -898,6 +898,42 @@ class TuiFilterTests(unittest.TestCase):
         self.assertEqual(len(filtered), 1)
         self.assertEqual(filtered[0].status.session_id, 'dbtools')
 
+    def test_filter_tui_items_can_show_only_active_terminals(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = load_config(write_legacy_config(Path(tmp)))
+        workspace = config.resolve_workspace('mysql')
+        inactive = TerminalStatus(
+            host_id=workspace.host_id,
+            host=workspace.host,
+            session_id=workspace.id,
+            window_index=0,
+            window_name=workspace.name,
+            workspace=workspace,
+        )
+        active = TerminalStatus(
+            host_id=workspace.host_id,
+            host=workspace.host,
+            session_id=workspace.id,
+            window_index=1,
+            window_name='bash',
+            workspace=workspace,
+        )
+        flagged = TerminalStatus(
+            host_id=workspace.host_id,
+            host=workspace.host,
+            session_id=workspace.id,
+            window_index=2,
+            window_name='needs-review',
+            window_status='check',
+            workspace=workspace,
+        )
+        items = build_tui_items([inactive, flagged, active])
+
+        filtered = filter_tui_items(items, '', active_only=True)
+
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(filtered[0].status.window_index, 1)
+
     def test_format_tui_row_puts_terminal_label_first(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config = load_config(write_legacy_config(Path(tmp)))
