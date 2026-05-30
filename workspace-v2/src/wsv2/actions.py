@@ -121,7 +121,7 @@ def terminal_selected_score(status: TerminalStatus, recent_scores: dict[str, flo
 
 
 def terminal_recent_score(status: TerminalStatus, recent_scores: dict[str, float] | None = None) -> float:
-    return max(float(status.activity or 0), terminal_selected_score(status, recent_scores))
+    return float(status.activity or 0)
 
 
 def terminal_status_rank(status: str) -> int:
@@ -139,6 +139,7 @@ def terminal_sort_key(status: TerminalStatus, recent_scores: dict[str, float] | 
         not status.active,
         not status.window_active,
         -(status.activity or 0),
+        -terminal_selected_score(status, recent_scores),
         status.host.name.lower(),
         status.workspace_name.lower(),
         status.window_index,

@@ -41,7 +41,7 @@ class WorkspacePopup(Gtk.Window):
         self.initial_selected_target = terminal_target_from_window_title(focused_window_title, self.statuses)
         self.selected_target = self.initial_selected_target or None
         self.filtered_items: list[PopupItem] = []
-        self.active_only = False
+        self.active_only = self.actions.state.preference_bool("activeOnly")
 
         self.set_role(WINDOW_ROLE)
         self.set_type_hint(Gdk.WindowTypeHint.DIALOG)
@@ -423,6 +423,7 @@ class WorkspacePopup(Gtk.Window):
         if key_name != "g":
             return False
         self.active_only = not self.active_only
+        self.actions.state.set_preference_bool("activeOnly", self.active_only)
         self._refresh_rows()
         self._set_message(
             "Green active terminal filter on." if self.active_only else "Green active terminal filter off."

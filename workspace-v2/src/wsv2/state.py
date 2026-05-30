@@ -85,6 +85,24 @@ class LauncherState:
         recent = payload.get("recent") or {}
         return {str(key): float(value) for key, value in recent.items()}
 
+    def preference_bool(self, key: str, default: bool = False) -> bool:
+        payload = self._load_payload()
+        preferences = payload.get("preferences") or {}
+        if not isinstance(preferences, dict):
+            return default
+        value = preferences.get(key, default)
+        return bool(value)
+
+    def set_preference_bool(self, key: str, value: bool) -> None:
+        payload = self._load_payload()
+        preferences = payload.setdefault("preferences", {})
+        if not isinstance(preferences, dict):
+            preferences = {}
+            payload["preferences"] = preferences
+        preferences[str(key)] = bool(value)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
     def window_labels(self) -> dict[str, dict]:
         payload = self._load_payload()
         labels = payload.get("windowLabels") or {}

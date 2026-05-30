@@ -75,6 +75,35 @@ def load_window_labels():
         return {}
 
 
+def load_launcher_preference_bool(key, default=False):
+    try:
+        with open(LAUNCHER_STATE_FILE, 'r') as f:
+            payload = json.load(f)
+        preferences = payload.get('preferences') or {}
+        if not isinstance(preferences, dict):
+            return default
+        return bool(preferences.get(key, default))
+    except (FileNotFoundError, json.JSONDecodeError, TypeError, ValueError):
+        return default
+
+
+def save_launcher_preference_bool(key, value):
+    payload = {'recent': {}}
+    try:
+        with open(LAUNCHER_STATE_FILE, 'r') as f:
+            payload = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    preferences = payload.setdefault('preferences', {})
+    if not isinstance(preferences, dict):
+        preferences = {}
+        payload['preferences'] = preferences
+    preferences[str(key)] = bool(value)
+    os.makedirs(os.path.dirname(LAUNCHER_STATE_FILE), exist_ok=True)
+    with open(LAUNCHER_STATE_FILE, 'w') as f:
+        json.dump(payload, f, indent=2, sort_keys=True)
+
+
 def window_label_keys_for_entry(entry):
     host_id = entry.get('host_id', 'local')
     state_host_id = entry.get('state_host_id') or host_id
@@ -262,7 +291,7 @@ def default_agent_summary():
     return {'count': 0, 'active': 0, 'parked': 0, 'status': 'none'}
 
 
-def terminal_recent_score(entry, recent_scores=None):
+def terminal_selected_score(entry, recent_scores=None):
     recent_scores = recent_scores or {}
     host_id = entry.get('host_id', 'local')
     state_host_id = entry.get('state_host_id') or host_id
@@ -284,7 +313,11 @@ def terminal_recent_score(entry, recent_scores=None):
         (float(recent_scores.get(key, 0.0)) for key in keys if key),
         default=0.0
     )
-    return max(float(entry.get('activity') or 0), selected_at)
+    return selected_at
+
+
+def terminal_recent_score(entry, recent_scores=None):
+    return float(entry.get('activity') or 0)
 
 
 def terminal_entry_identity(entry):
@@ -1145,7 +1178,7 @@ class HostTabBar(Gtk.Box):
 class TerminalSwitcherDialog(Gtk.Dialog):
     """Keyboard switcher for tmux windows across all configured hosts."""
 
-    def __init__(self, parent, entries, selected_target=None, transient_parent=None):
+    def __init__(self, parent, entries, selected_target=None, transient_parent=None, active_only=False):
         super().__init__(title="Terminal Switcher", transient_for=transient_parent, flags=0)
         self.set_name('terminal-switcher-dialog')
         self.parent = parent
@@ -1153,7 +1186,7 @@ class TerminalSwitcherDialog(Gtk.Dialog):
         self.filtered_entries = list(entries)
         self.selected_entry = None
         self.initial_selected_target = selected_target
-        self.active_only = False
+        self.active_only = bool(active_only)
         self.set_default_size(760, 560)
         if transient_parent is None:
             self.set_position(Gtk.WindowPosition.CENTER)
@@ -1240,7 +1273,7 @@ class TerminalSwitcherDialog(Gtk.Dialog):
 
         self.connect('key-press-event', self._on_key_press)
         self._apply_css()
-        self._populate(self.initial_selected_target)
+        self._on_search_changed(self.search_entry, self.initial_selected_target)
         self.show_all()
         self.search_entry.grab_focus()
 
@@ -1452,6 +1485,7 @@ class WorkspaceSwitcher(Gtk.Window):
         self.config = self._load_full_config()
         self.hosts = self.config.get('hosts', [{'id': 'local', 'name': 'Local', 'ssh': None}])
         self._current_host = 'local'
+        self.terminal_switcher_active_only = load_launcher_preference_bool('activeOnly')
 
         # Session cache for remote hosts
         self.remote_session_cache = RemoteSessionCache()
@@ -1953,11 +1987,14 @@ class WorkspaceSwitcher(Gtk.Window):
             entries,
             selected_target=selected_target,
             transient_parent=None if keep_hidden else self,
+            active_only=self.terminal_switcher_active_only,
         )
         if keep_hidden:
             self._hide_after_switch_if_needed()
         response = dialog.run()
         selected = dialog.selected_entry
+        self.terminal_switcher_active_only = dialog.active_only
+        save_launcher_preference_bool('activeOnly', self.terminal_switcher_active_only)
         dialog.destroy()
         if response == Gtk.ResponseType.OK and selected:
             self.open_tmux_window_entry(selected)
@@ -2111,6 +2148,7 @@ class WorkspaceSwitcher(Gtk.Window):
                 entry['window_status'] = metadata.get('status', '')
                 entry['display_window_name'] = entry['window_label'] or entry['tmux_window_name']
                 entry['recent_at'] = terminal_recent_score(entry, recent_scores)
+                entry['selected_at'] = terminal_selected_score(entry, recent_scores)
                 entry['search_text'] = ' '.join([
                     host_name,
                     host_id,
@@ -2135,6 +2173,7 @@ class WorkspaceSwitcher(Gtk.Window):
                 -(entry.get('recent_at') or 0),
                 not entry.get('window_active'),
                 -(entry.get('activity') or 0),
+                -(entry.get('selected_at') or 0),
                 entry.get('host_name', ''),
                 entry.get('workspace_name', ''),
                 entry.get('window_index', 0),

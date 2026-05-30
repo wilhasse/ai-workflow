@@ -109,7 +109,7 @@ class WorkspaceTui:
         self.index = 0
         self.scroll = 0
         self.message = ''
-        self.active_only = False
+        self.active_only = actions.state.preference_bool('activeOnly')
 
     def run(self) -> str | None:
         return curses.wrapper(self._main)
@@ -137,6 +137,7 @@ class WorkspaceTui:
                 continue
             if key == 7:
                 self.active_only = not self.active_only
+                self.actions.state.set_preference_bool('activeOnly', self.active_only)
                 self.index = 0
                 self.scroll = 0
                 self.message = (

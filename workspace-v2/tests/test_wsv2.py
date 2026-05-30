@@ -364,6 +364,15 @@ class LauncherStateTests(unittest.TestCase):
         self.assertIn('vm9:dbtools', scores)
         self.assertGreater(scores['vm9:dbtools'], 0)
 
+    def test_boolean_preferences_persist(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'state.json'
+            state = LauncherState(path)
+            self.assertFalse(state.preference_bool('activeOnly'))
+            state.set_preference_bool('activeOnly', True)
+            reloaded = LauncherState(path)
+            self.assertTrue(reloaded.preference_bool('activeOnly'))
+
     def test_window_label_preserves_recent_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'state.json'
@@ -633,7 +642,7 @@ class CodexParkingTests(unittest.TestCase):
 
 
 class TerminalRankingTests(unittest.TestCase):
-    def test_terminal_recent_score_uses_selection_or_tmux_activity(self) -> None:
+    def test_terminal_recent_score_uses_tmux_activity_not_selection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, \
             mock.patch.dict(os.environ, {'WSV2_SELF_HOST': 'vm10'}, clear=True):
             config = load_config(write_v2_config(Path(tmp)))
@@ -650,8 +659,8 @@ class TerminalRankingTests(unittest.TestCase):
         )
 
         self.assertEqual(terminal_recent_score(status, {}), 100)
-        self.assertEqual(terminal_recent_score(status, {'vm9:dbtools#2': 200}), 200)
-        self.assertEqual(terminal_recent_score(status, {'vm9:dbtools': 300}), 300)
+        self.assertEqual(terminal_recent_score(status, {'vm9:dbtools#2': 200}), 100)
+        self.assertEqual(terminal_recent_score(status, {'vm9:dbtools': 300}), 100)
 
     def test_terminal_sort_prioritizes_labeled_tabs_before_recent_unlabeled_tabs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, \
@@ -722,7 +731,7 @@ class TerminalRankingTests(unittest.TestCase):
 
         self.assertEqual(sorted([active, check, idle], key=terminal_sort_key), [check, idle, active])
 
-    def test_list_terminal_statuses_orders_manual_selection_before_stale_activity(self) -> None:
+    def test_list_terminal_statuses_orders_activity_before_manual_selection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, \
             mock.patch.dict(os.environ, {'WSV2_SELF_HOST': 'vm10'}, clear=True):
             config_path = write_v2_config(Path(tmp))
@@ -764,7 +773,7 @@ class TerminalRankingTests(unittest.TestCase):
             ):
                 statuses = actions.list_terminal_statuses()
 
-        self.assertEqual(statuses[0].target, 'vm9:dbtools@42')
+        self.assertEqual(statuses[0].target, 'vm10:mysql@24')
 
     def test_list_terminal_statuses_prefers_window_label_for_display(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, \
