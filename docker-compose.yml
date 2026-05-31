@@ -13,6 +13,7 @@ services:
     depends_on:
       - terminal-dashboard
       - tmux-session-service
+      - youtube-transcribe-service
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1/health"]
@@ -72,6 +73,32 @@ services:
       timeout: 3s
       retries: 3
       start_period: 5s
+
+  # YouTube → Deepgram transcription service
+  youtube-transcribe-service:
+    build:
+      context: .
+      dockerfile: youtube-transcribe-service/Dockerfile
+    container_name: ai-workflow-transcribe
+    environment:
+      - PORT=5005
+      - HOST=0.0.0.0
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}
+      - DEEPGRAM_STT_MODEL=${DEEPGRAM_STT_MODEL:-nova-3}
+      - DORIS_HOST=${DORIS_HOST:-10.1.0.7}
+      - DORIS_PORT=${DORIS_PORT:-9030}
+      - DORIS_USER=${DORIS_USER:-root}
+      - DORIS_PASSWORD=${DORIS_PASSWORD:-}
+      - DORIS_DATABASE=${DORIS_DATABASE:-agent_history}
+    networks:
+      - ai-workflow-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5005/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   # Whisper API (optional - uncomment to enable voice transcription)
   # whisper-realtime-api:
