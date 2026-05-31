@@ -12,30 +12,25 @@ import WorkspaceSheet from './components/sheets/WorkspaceSheet'
 import WindowSheet from './components/sheets/WindowSheet'
 import VoiceSheet from './components/sheets/VoiceSheet'
 import SettingsSheet from './components/sheets/SettingsSheet'
-import WorkspaceCard from './components/workspace/WorkspaceCard'
 import WindowTabs from './components/workspace/WindowTabs'
 import TerminalOrganizer from './components/workspace/TerminalOrganizer'
 import VmCreatePanel from './components/vm/VmCreatePanel'
+import TranscriptsView from './components/transcripts/TranscriptsView'
+import ViewSelector from './components/layout/ViewSelector'
 
 // Hooks
-import { useIsMobile, useMediaQuery } from './hooks/useMediaQuery'
+import { useIsMobile } from './hooks/useMediaQuery'
 import { useWorkspaces } from './hooks/useWorkspaces'
 
 // Storage keys
 const FONT_SIZE_STORAGE_KEY = 'terminal-dashboard-font-size'
 const VOICE_SERVICE_STORAGE_KEY = 'terminal-dashboard-voice-service'
 const VOICE_LANGUAGE_STORAGE_KEY = 'terminal-dashboard-voice-language'
-const OVERVIEW_COLUMNS_STORAGE_KEY = 'terminal-dashboard-overview-columns'
-const OVERVIEW_HIDDEN_STORAGE_KEY = 'terminal-dashboard-overview-hidden'
 const WINDOW_USAGE_STORAGE_KEY = 'terminal-dashboard-window-usage'
 
 // Constants
 const FONT_SIZE_OPTIONS = [12, 14, 16, 18, 20, 22]
 const DEFAULT_FONT_SIZE = 16
-const OVERVIEW_MIN_FONT_SIZE = 12
-const DEFAULT_OVERVIEW_COLUMNS = 3
-const MIN_OVERVIEW_COLUMNS = 1
-const MAX_OVERVIEW_COLUMNS = 6
 const VOICE_SERVICES = {
   LOCAL: 'local',
   DEEPGRAM: 'deepgram',
@@ -182,8 +177,6 @@ const buildWorkspaceSocketUrl = (workspaceId, windowIndex = null, options = {}) 
 
 function DashboardApp() {
   const isMobile = useIsMobile()
-  const isLargeScreen = useMediaQuery('(min-width: 1280px)')
-  const canUseOverview = !isMobile && isLargeScreen
 
   // Workspaces from API (read-only)
   const {
@@ -203,7 +196,19 @@ function DashboardApp() {
   const [activeTerminalConnection, setActiveTerminalConnection] = useState(null)
   const [windows, setWindows] = useState([])
   const [windowsLoading, setWindowsLoading] = useState(false)
-  const [desktopView, setDesktopView] = useState('organizer')
+  const [view, setView] = useState(() => {
+    if (typeof window === 'undefined') return 'terminal'
+    const param = new URLSearchParams(window.location.search).get('view')
+    return param === 'organizer' || param === 'transcripts' || param === 'vm-create' ? param : 'terminal'
+  })
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    if (view === 'terminal') params.delete('view')
+    else params.set('view', view)
+    const query = params.toString()
+    const next = `${window.location.pathname}${query ? `?${query}` : ''}`
+    window.history.replaceState(null, '', next)
+  }, [view])
   const [terminalTabs, setTerminalTabs] = useState([])
   const [terminalTabsLoading, setTerminalTabsLoading] = useState(false)
   const [terminalTabErrors, setTerminalTabErrors] = useState([])
@@ -219,29 +224,6 @@ function DashboardApp() {
   const handleTerminalBridgeReady = useCallback((bridge) => {
     terminalBridgeRef.current = bridge
   }, [])
-  const [overviewMode, setOverviewMode] = useState(false)
-  const [overviewColumns, setOverviewColumns] = useState(() => {
-    if (typeof window === 'undefined') return DEFAULT_OVERVIEW_COLUMNS
-    const stored = Number(window.localStorage.getItem(OVERVIEW_COLUMNS_STORAGE_KEY))
-    if (Number.isFinite(stored)) {
-      return Math.min(MAX_OVERVIEW_COLUMNS, Math.max(MIN_OVERVIEW_COLUMNS, stored))
-    }
-    return DEFAULT_OVERVIEW_COLUMNS
-  })
-  const [overviewHiddenIds, setOverviewHiddenIds] = useState(() => {
-    if (typeof window === 'undefined') return []
-    try {
-      const stored = JSON.parse(window.localStorage.getItem(OVERVIEW_HIDDEN_STORAGE_KEY) || '[]')
-      if (Array.isArray(stored)) {
-        return stored
-      }
-    } catch {
-      // ignore
-    }
-    return []
-  })
-  const [overviewFilterOpen, setOverviewFilterOpen] = useState(false)
-
   // Voice transcription state
   const [voiceService, setVoiceService] = useState(() => {
     if (typeof window === 'undefined') return VOICE_SERVICES.LOCAL
@@ -281,7 +263,6 @@ function DashboardApp() {
   const lastTrackedWindowKeyRef = useRef(null)
   const [workspaceActivity, setWorkspaceActivity] = useState({})
 
-  const overviewReadOnly = overviewMode && canUseOverview
   const selectedVoiceProviderUnavailable = voiceService === VOICE_SERVICES.DEEPGRAM &&
     voiceProviderStatus.checked &&
     !voiceProviderStatus.deepgramConfigured
@@ -289,18 +270,6 @@ function DashboardApp() {
     () => workspaces.filter((workspace) => workspace.active),
     [workspaces],
   )
-  const overviewHiddenSet = useMemo(
-    () => new Set(overviewHiddenIds),
-    [overviewHiddenIds],
-  )
-  const visibleWorkspaces = useMemo(
-    () => activeWorkspaces.filter((workspace) => !overviewHiddenSet.has(workspace.id)),
-    [activeWorkspaces, overviewHiddenSet],
-  )
-  const overviewFontSize = useMemo(() => {
-    const reduction = Math.min(4, Math.max(2, overviewColumns - 2))
-    return Math.max(OVERVIEW_MIN_FONT_SIZE, terminalFontSize - reduction)
-  }, [overviewColumns, terminalFontSize])
 
   // Check if we're in a secure context (for microphone access)
   const isSecureContext = typeof window !== 'undefined' &&
@@ -448,23 +417,6 @@ function DashboardApp() {
   }, [activeTerminalConnection, activeWindowId, activeWorkspaceId, applyWorkspaceWindows, fetchWindows, terminalTabs])
 
   useEffect(() => {
-    if (!canUseOverview && overviewMode) {
-      setOverviewMode(false)
-    }
-  }, [canUseOverview, overviewMode])
-
-  useEffect(() => {
-    if (!overviewMode) {
-      setOverviewFilterOpen(false)
-    }
-  }, [overviewMode])
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    window.localStorage.setItem(OVERVIEW_HIDDEN_STORAGE_KEY, JSON.stringify(overviewHiddenIds))
-  }, [overviewHiddenIds])
-
-  useEffect(() => {
     const activityTimers = activityTimersRef.current
     const activityTimestamps = activityTimestampsRef.current
     return () => {
@@ -474,17 +426,6 @@ function DashboardApp() {
     }
   }, [])
 
-  const toggleOverviewVisibility = useCallback((workspaceId) => {
-    setOverviewHiddenIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(workspaceId)) {
-        next.delete(workspaceId)
-      } else {
-        next.add(workspaceId)
-      }
-      return Array.from(next)
-    })
-  }, [])
 
   const markWorkspaceActivity = useCallback((workspaceId) => {
     if (!workspaceId) return
@@ -537,11 +478,11 @@ function DashboardApp() {
   }, [fetchTerminalTabs])
 
   useEffect(() => {
-    if (desktopView !== 'organizer' || isMobile) {
+    if (view !== 'organizer' || isMobile) {
       return
     }
     loadTerminalTabs()
-  }, [desktopView, isMobile, loadTerminalTabs])
+  }, [view, isMobile, loadTerminalTabs])
 
   const handleSaveTerminalLabels = useCallback(async (updates) => {
     const changedUpdates = updates.filter((tab) => (
@@ -628,7 +569,7 @@ function DashboardApp() {
       workspaceName: entry.workspaceName,
       workspaceDescription: entry.workspaceDescription,
     })
-    setDesktopView('terminal')
+    setView('terminal')
     lastTrackedWindowKeyRef.current = recordWindowUsage(
       sessionId,
       entry.windowIndex,
@@ -887,10 +828,6 @@ function DashboardApp() {
     }
   }, [])
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    window.localStorage.setItem(OVERVIEW_COLUMNS_STORAGE_KEY, String(overviewColumns))
-  }, [overviewColumns])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -930,9 +867,6 @@ function DashboardApp() {
   const trySendTranscriptToTerminal = async (text, { waitForReady = false } = {}) => {
     const trimmed = text.trim()
     if (!trimmed) return false
-    if (overviewReadOnly) {
-      return false
-    }
     const payload = `${trimmed}\n`
     const bridge = terminalBridgeRef.current
     if (bridge?.sendInput?.(payload)) {
@@ -1144,10 +1078,6 @@ function DashboardApp() {
       setVoiceError('No transcript available.')
       return
     }
-    if (overviewReadOnly) {
-      setVoiceError('Switch to single view to send input.')
-      return
-    }
     if (!terminalBridgeRef.current) {
       setVoiceError('Select a workspace and window first.')
       return
@@ -1167,7 +1097,7 @@ function DashboardApp() {
     if (voiceRecording) {
       handleVoiceRecordingStop()
     } else {
-      handleVoiceRecordingStart(!overviewReadOnly)
+      handleVoiceRecordingStart(true)
     }
   }
 
@@ -1186,181 +1116,6 @@ function DashboardApp() {
 
   // Render terminal view
   const renderTerminalView = () => {
-    if (overviewMode && canUseOverview) {
-      if (workspacesLoading) {
-        return (
-          <div className="empty-state">
-            <p>Loading workspaces...</p>
-          </div>
-        )
-      }
-
-      if (workspacesError) {
-        return (
-          <div className="empty-state">
-            <p>Unable to load workspaces</p>
-            <p className="hint">{workspacesError}</p>
-          </div>
-        )
-      }
-
-      if (activeWorkspaces.length === 0) {
-        return (
-          <div className="empty-state">
-            <p>No active workspaces</p>
-            <p className="hint">Start sessions in your x2go terminal first</p>
-          </div>
-        )
-      }
-
-      if (visibleWorkspaces.length === 0) {
-        return (
-          <div className="empty-state">
-            <p>No terminals selected for grid view</p>
-            <p className="hint">Use the filter to show workspaces again</p>
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => setOverviewHiddenIds([])}
-            >
-              Show all
-            </button>
-          </div>
-        )
-      }
-
-      return (
-        <section className="workspace-overview">
-          <div className="workspace-overview-header">
-            <div>
-              <h2>Active workspaces</h2>
-              <p>Live terminals from running agents</p>
-            </div>
-            <div className="workspace-overview-controls">
-              <div className="workspace-overview-meta">
-                {visibleWorkspaces.length}/{activeWorkspaces.length} visible
-              </div>
-              <div className="workspace-overview-filter">
-                <button
-                  type="button"
-                  className="secondary overview-filter-toggle"
-                  onClick={() => setOverviewFilterOpen((prev) => !prev)}
-                >
-                  Filter
-                </button>
-                {overviewFilterOpen && (
-                  <div className="workspace-overview-filter-menu">
-                    <div className="filter-menu-header">
-                      <span>Show in grid</span>
-                      <button
-                        type="button"
-                        className="filter-reset"
-                        onClick={() => setOverviewHiddenIds([])}
-                      >
-                        Show all
-                      </button>
-                    </div>
-                    <div className="filter-menu-list">
-                      {activeWorkspaces.map((workspace) => (
-                        <label key={`filter-${workspace.id}`} className="filter-menu-item">
-                          <input
-                            type="checkbox"
-                            checked={!overviewHiddenSet.has(workspace.id)}
-                            onChange={() => toggleOverviewVisibility(workspace.id)}
-                          />
-                          <span>{workspace.name}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-              <div className="workspace-overview-columns-control">
-                <span>Columns</span>
-                <button
-                  type="button"
-                  className="icon-btn"
-                  onClick={() =>
-                    setOverviewColumns((prev) =>
-                      Math.max(MIN_OVERVIEW_COLUMNS, prev - 1)
-                    )
-                  }
-                  disabled={overviewColumns <= MIN_OVERVIEW_COLUMNS}
-                  title="Fewer columns"
-                >
-                  −
-                </button>
-                <span className="workspace-overview-columns-value">
-                  {overviewColumns}
-                </span>
-                <button
-                  type="button"
-                  className="icon-btn"
-                  onClick={() =>
-                    setOverviewColumns((prev) =>
-                      Math.min(MAX_OVERVIEW_COLUMNS, prev + 1)
-                    )
-                  }
-                  disabled={overviewColumns >= MAX_OVERVIEW_COLUMNS}
-                  title="More columns"
-                >
-                  +
-                </button>
-              </div>
-            </div>
-          </div>
-          <div
-            className="workspace-overview-grid"
-            style={{ '--overview-columns': overviewColumns }}
-          >
-            {visibleWorkspaces.map((workspace) => (
-              <article
-                key={`overview-${workspace.id}`}
-                className="workspace-overview-card"
-                style={{ '--workspace-color': workspace.color || '#6366f1' }}
-              >
-                <header className="workspace-overview-card-header">
-                  <div>
-                    <h3
-                      className={`terminal-title ${
-                        workspaceActivity[workspace.id] ? 'activity-title' : ''
-                      }`}
-                    >
-                      {workspace.name}
-                    </h3>
-                    {workspace.description && (
-                      <p>{workspace.description}</p>
-                    )}
-                  </div>
-                  <span
-                    className={`workspace-overview-card-status ${
-                      workspaceActivity[workspace.id] ? 'activity-pulse' : ''
-                    }`}
-                  >
-                    ●
-                  </span>
-                </header>
-                <TerminalViewer
-                  wsUrl={buildWorkspaceSocketUrl(
-                    workspace.id,
-                    workspace.id === activeWorkspaceId ? activeWindowIndex : null,
-                    {
-                      monitor: true,
-                      windowId: workspace.id === activeWorkspaceId ? activeWindow?.windowId : '',
-                    },
-                  )}
-                  fontSize={overviewFontSize}
-                  monitorMode
-                  showShortcutBar={false}
-                  onActivity={() => markWorkspaceActivity(workspace.id)}
-                />
-              </article>
-            ))}
-          </div>
-        </section>
-      )
-    }
-
     if (workspacesLoading) {
       return (
         <div className="empty-state">
@@ -1517,7 +1272,7 @@ function DashboardApp() {
           voicePending={voicePending}
           hasDeepgramKey={voiceProviderStatus.deepgramConfigured}
           hasTerminal={!!activeWorkspace?.active}
-          onStartRecording={() => handleVoiceRecordingStart(!overviewReadOnly)}
+          onStartRecording={() => handleVoiceRecordingStart(true)}
           onStopRecording={handleVoiceRecordingStop}
           onFileUpload={handleVoiceFileSelection}
           onCopyTranscript={handleCopyTranscript}
@@ -1589,36 +1344,37 @@ function DashboardApp() {
         </div>
 
         <div className="header-center">
-          <div className="workspace-cards">
-            {workspaces.map((workspace) => (
-              <WorkspaceCard
-                key={workspace.id}
-                workspace={workspace}
-                isSelected={workspace.id === activeWorkspaceId}
-                onSelect={(ws) => {
-                  setActiveTerminalConnection(null)
-                  setActiveWindowId('')
-                  setActiveWorkspaceId(ws.id)
-                }}
-              />
-            ))}
-            {workspaces.length === 0 && !workspacesLoading && (
-              <span className="no-workspaces">
-                No workspaces configured. Use wsp to add workspaces.
-              </span>
-            )}
-          </div>
+          {workspaces.length > 0 && (
+            <ViewSelector
+              prefix="Workspace"
+              placeholder="Select…"
+              value={activeWorkspaceId ?? ''}
+              onChange={(id) => {
+                setActiveTerminalConnection(null)
+                setActiveWindowId('')
+                setActiveWorkspaceId(id)
+              }}
+              options={workspaces.map((workspace) => ({ value: workspace.id, label: workspace.name }))}
+            />
+          )}
+          {workspaces.length === 0 && !workspacesLoading && (
+            <span className="no-workspaces">
+              No workspaces configured. Use wsp to add workspaces.
+            </span>
+          )}
         </div>
 
         <div className="header-right">
-          <button
-            type="button"
-            className={`secondary switcher-btn ${desktopView === 'organizer' ? 'active' : ''}`}
-            onClick={() => setDesktopView((view) => (view === 'organizer' ? 'terminal' : 'organizer'))}
-            title="Organize tmux tab labels"
-          >
-            {desktopView === 'organizer' ? 'Terminal' : 'Organize'}
-          </button>
+          <ViewSelector
+            value={view}
+            onChange={setView}
+            options={[
+              { value: 'terminal', label: 'Terminal' },
+              { value: 'organizer', label: 'Organizer' },
+              { value: 'transcripts', label: 'Transcripts' },
+              { value: 'vm-create', label: 'Create VM' },
+            ]}
+          />
           <button
             type="button"
             className="secondary switcher-btn"
@@ -1629,32 +1385,12 @@ function DashboardApp() {
           </button>
           <button
             type="button"
-            className={`secondary switcher-btn ${desktopView === 'vm-create' ? 'active' : ''}`}
-            onClick={() => setDesktopView('vm-create')}
-            title="Create a Proxmox test VM"
-          >
-            Create VM
-          </button>
-          {canUseOverview && (
-            <button
-              type="button"
-              className={`secondary overview-toggle ${overviewMode ? 'active' : ''}`}
-              onClick={() => setOverviewMode((prev) => !prev)}
-              title={overviewMode ? 'Switch to single workspace view' : 'Show all active workspaces'}
-            >
-              {overviewMode ? 'Single' : 'Grid'}
-            </button>
-          )}
-          <button
-            type="button"
             className={`mic-toggle ${voiceRecording ? 'recording' : ''} ${voicePending ? 'pending' : ''}`}
             onClick={handleMicToggle}
-            disabled={voicePending || !isSecureContext || overviewReadOnly || selectedVoiceProviderUnavailable}
+            disabled={voicePending || !isSecureContext || selectedVoiceProviderUnavailable}
             title={
-              overviewReadOnly
-                ? 'Switch to single view to send voice input'
-                : selectedVoiceProviderUnavailable
-                  ? 'Deepgram is not configured on the server'
+              selectedVoiceProviderUnavailable
+                ? 'Deepgram is not configured on the server'
                 : voiceRecording
                   ? 'Stop recording'
                   : 'Start voice recording'
@@ -1675,7 +1411,11 @@ function DashboardApp() {
 
       {/* Main content */}
       <main className="app-main">
-        {desktopView === 'organizer' ? (
+        {view === 'transcripts' ? (
+          <TranscriptsView active />
+        ) : view === 'vm-create' ? (
+          <VmCreatePanel apiBase={API_BASE} />
+        ) : view === 'organizer' ? (
           <TerminalOrganizer
             tabs={terminalTabs}
             loading={terminalTabsLoading}
@@ -1684,8 +1424,6 @@ function DashboardApp() {
             onRefresh={loadTerminalTabs}
             onSaveLabels={handleSaveTerminalLabels}
           />
-        ) : desktopView === 'vm-create' ? (
-          <VmCreatePanel apiBase={API_BASE} />
         ) : renderTerminalView()}
       </main>
 
