@@ -12,7 +12,7 @@ ENV PULUMI_VERSION=3.167.0
 RUN curl -fsSL https://get.pulumi.com -o /tmp/install-pulumi.sh \
   && sh /tmp/install-pulumi.sh --version "${PULUMI_VERSION}" \
   && rm /tmp/install-pulumi.sh \
-  && ln -s /root/.pulumi/bin/pulumi /usr/local/bin/pulumi
+  && install -m 0755 /root/.pulumi/bin/pulumi /usr/local/bin/pulumi
 
 # Rename the 'node' user to 'cslog' (node user is UID 1000 by default)
 # This ensures tmux sessions run as 'cslog' user
