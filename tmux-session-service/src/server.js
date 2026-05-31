@@ -1,6 +1,6 @@
 import http from 'node:http'
 import os from 'node:os'
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { randomUUID, randomBytes, scrypt, timingSafeEqual } from 'node:crypto'
 import { promisify } from 'node:util'
 import path from 'node:path'
@@ -33,15 +33,52 @@ const config = {
   deepgramTtsEncoding: process.env.DEEPGRAM_TTS_ENCODING ?? 'mp3',
   deepgramTtsMaxChars: Number.parseInt(process.env.DEEPGRAM_TTS_MAX_CHARS ?? '2000', 10),
   voiceMaxAudioBytes: Number.parseInt(process.env.VOICE_MAX_AUDIO_BYTES ?? String(25 * 1024 * 1024), 10),
+  vmCreateEnabled: String(process.env.VM_CREATE_ENABLED || '').toLowerCase() === 'true',
+  pulumiBin: process.env.PULUMI_BIN ?? 'pulumi',
+  pulumiWorkDir: process.env.PULUMI_WORK_DIR ?? path.join(os.homedir(), 'ai-workflow', 'infra', 'proxmox-test-vm'),
+  vmCreateTimeoutMs: Number.parseInt(process.env.VM_CREATE_TIMEOUT_MS ?? String(20 * 60 * 1000), 10),
+  vmIpPollAttempts: Number.parseInt(process.env.VM_IP_POLL_ATTEMPTS ?? '6', 10),
+  vmIpPollIntervalMs: Number.parseInt(process.env.VM_IP_POLL_INTERVAL_MS ?? '10000', 10),
 }
 const DEFAULT_HISTORY_LINES = 1000
 const MAX_HISTORY_LINES = 20000
+const VM_CREATE_LOG_LIMIT = 300
+const VM_TEMPLATE_NODES = {
+  pve1: {
+    node: 'pve1',
+    templateVmId: 9013,
+    templateName: 'debian13-cloud-template',
+    storage: 'pve1-ssd-100G-1',
+  },
+  pve2: {
+    node: 'pve2',
+    templateVmId: 9014,
+    templateName: 'debian13-cloud-template-pve2',
+    storage: 'pve2-ssd-2T-1',
+  },
+  pve3: {
+    node: 'pve3',
+    templateVmId: 9015,
+    templateName: 'debian13-cloud-template-pve3',
+    storage: 'pve3-ssd-2T-1',
+  },
+}
+const VM_CREATE_DEFAULTS = {
+  node: 'pve1',
+  cpuCores: 2,
+  memoryMb: 4096,
+  diskGb: 32,
+  bridge: process.env.VM_CREATE_DEFAULT_BRIDGE ?? 'vmbr0',
+  username: process.env.VM_CREATE_DEFAULT_USER ?? 'debian',
+}
 const storeFile = path.join(config.dataDir, 'sessions.json')
 const userStoreFile = path.join(config.dataDir, 'users.json')
 const sessionStore = new Map()
 const userStoreById = new Map()
 const userStoreByUsername = new Map()
 const authTokens = new Map()
+const vmCreateJobs = new Map()
+const activeVmStacks = new Set()
 const scryptAsync = promisify(scrypt)
 
 const defaultHeaders = {
@@ -366,6 +403,25 @@ const safeErrorMessage = (error) => {
   const message = error?.message ?? String(error)
   const cause = error?.cause?.code ?? error?.cause?.message
   return cause ? `${message} (${cause})` : message
+}
+
+const secretValuesForRedaction = () => [
+  config.deepgramApiKey,
+  process.env.PROXMOX_VE_API_TOKEN,
+  process.env.PROXMOX_VE_PASSWORD,
+  process.env.PULUMI_ACCESS_TOKEN,
+  process.env.PULUMI_CONFIG_PASSPHRASE,
+  process.env.PULUMI_CONFIG_PASSPHRASE_FILE,
+].filter(Boolean)
+
+const redactSecrets = (value) => {
+  let redacted = String(value ?? '')
+  secretValuesForRedaction().forEach((secret) => {
+    if (secret) {
+      redacted = redacted.replaceAll(secret, '[redacted]')
+    }
+  })
+  return redacted
 }
 
 const sanitizeDeepgramToken = (value, fallback = '') => {
@@ -1913,6 +1969,356 @@ const handleMobileAgentAction = async (req, res, hostIdRaw, sessionIdRaw) => {
   }
 }
 
+const serializeVmTemplates = () => ({
+  enabled: config.vmCreateEnabled,
+  defaults: VM_CREATE_DEFAULTS,
+  nodes: Object.values(VM_TEMPLATE_NODES),
+  network: {
+    mode: 'dhcp',
+    ipDetection: 'qemu-guest-agent',
+  },
+})
+
+const handleVmTemplates = (res) => {
+  respond(res, 200, serializeVmTemplates())
+}
+
+const sanitizeVmName = (value) => {
+  const normalized = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+  if (!normalized || normalized.length > 48 || !/^[a-z0-9][a-z0-9-]*[a-z0-9]$/.test(normalized)) {
+    return ''
+  }
+  return normalized
+}
+
+const parseBoundedInteger = (value, { min, max, fallback = null }) => {
+  const parsed = Number.parseInt(value, 10)
+  if (!Number.isFinite(parsed)) {
+    return fallback
+  }
+  return Math.min(max, Math.max(min, parsed))
+}
+
+const validateSshPublicKey = (value) => {
+  const normalized = String(value || '').trim()
+  if (!normalized) {
+    return ''
+  }
+  const parts = normalized.split(/\s+/)
+  if (parts.length < 2) {
+    return ''
+  }
+  if (!/^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521))$/.test(parts[0])) {
+    return ''
+  }
+  if (!/^[A-Za-z0-9+/=]+$/.test(parts[1])) {
+    return ''
+  }
+  return normalized.slice(0, 4096)
+}
+
+const buildVmSpec = (body) => {
+  const node = String(body?.node || VM_CREATE_DEFAULTS.node).trim()
+  const template = VM_TEMPLATE_NODES[node]
+  if (!template) {
+    throw new Error('Node must be one of pve1, pve2, or pve3.')
+  }
+
+  const name = sanitizeVmName(body?.name)
+  if (!name) {
+    throw new Error('VM name must be 3-48 lowercase hostname characters.')
+  }
+
+  const cpuCores = parseBoundedInteger(body?.cpuCores, { min: 1, max: 16 })
+  const memoryMb = parseBoundedInteger(body?.memoryMb, { min: 512, max: 65536 })
+  const diskGb = parseBoundedInteger(body?.diskGb, { min: 8, max: 2048 })
+  if (!cpuCores || !memoryMb || !diskGb) {
+    throw new Error('CPU, memory, and disk values are required.')
+  }
+
+  const sshPublicKey = validateSshPublicKey(body?.sshPublicKey)
+  if (!sshPublicKey) {
+    throw new Error('A valid SSH public key is required.')
+  }
+
+  const bridge = String(body?.bridge || VM_CREATE_DEFAULTS.bridge).trim()
+  if (!/^[A-Za-z0-9_.:-]{2,32}$/.test(bridge)) {
+    throw new Error('Invalid network bridge.')
+  }
+
+  const username = String(body?.username || VM_CREATE_DEFAULTS.username).trim()
+  if (!/^[a-z_][a-z0-9_-]{0,31}$/.test(username)) {
+    throw new Error('Invalid cloud-init username.')
+  }
+
+  const description = String(body?.description || '').trim().slice(0, 240)
+  return {
+    name,
+    node,
+    cpuCores,
+    memoryMb,
+    diskGb,
+    bridge,
+    username,
+    sshPublicKey,
+    description,
+    networkMode: 'dhcp',
+    template,
+  }
+}
+
+const serializeVmJob = (job) => ({
+  id: job.id,
+  stackName: job.stackName,
+  status: job.status,
+  createdAt: job.createdAt,
+  updatedAt: job.updatedAt,
+  finishedAt: job.finishedAt || null,
+  spec: job.spec
+    ? {
+        name: job.spec.name,
+        node: job.spec.node,
+        cpuCores: job.spec.cpuCores,
+        memoryMb: job.spec.memoryMb,
+        diskGb: job.spec.diskGb,
+        bridge: job.spec.bridge,
+        username: job.spec.username,
+        description: job.spec.description,
+        networkMode: job.spec.networkMode,
+        template: job.spec.template,
+      }
+    : null,
+  vm: job.vm || null,
+  ipStatus: job.ipStatus || 'pending',
+  logs: job.logs || [],
+  error: job.error || '',
+})
+
+const appendVmJobLog = (job, line) => {
+  const cleaned = redactSecrets(line).replace(/\r/g, '').trimEnd()
+  if (!cleaned) {
+    return
+  }
+  job.logs.push(cleaned)
+  if (job.logs.length > VM_CREATE_LOG_LIMIT) {
+    job.logs.splice(0, job.logs.length - VM_CREATE_LOG_LIMIT)
+  }
+  job.updatedAt = new Date().toISOString()
+}
+
+const runPulumiJobCommand = (job, args, { timeoutMs = config.vmCreateTimeoutMs, allowFailure = false } = {}) =>
+  new Promise((resolve, reject) => {
+    appendVmJobLog(job, `$ ${config.pulumiBin} ${args.join(' ')}`)
+    const child = spawn(config.pulumiBin, args, {
+      cwd: config.pulumiWorkDir,
+      env: {
+        ...process.env,
+        PULUMI_SKIP_UPDATE_CHECK: 'true',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+    const timeoutId = setTimeout(() => {
+      child.kill('SIGTERM')
+      if (!settled) {
+        settled = true
+        reject(new Error(`Pulumi command timed out after ${timeoutMs}ms.`))
+      }
+    }, timeoutMs)
+
+    const collect = (chunk, target) => {
+      const text = chunk.toString('utf8')
+      if (target === 'stdout') {
+        stdout += text
+      } else {
+        stderr += text
+      }
+      text.split(/\n/).forEach((line) => appendVmJobLog(job, line))
+    }
+
+    child.stdout.on('data', (chunk) => collect(chunk, 'stdout'))
+    child.stderr.on('data', (chunk) => collect(chunk, 'stderr'))
+    child.on('error', (error) => {
+      clearTimeout(timeoutId)
+      if (!settled) {
+        settled = true
+        reject(error)
+      }
+    })
+    child.on('close', (code) => {
+      clearTimeout(timeoutId)
+      if (settled) {
+        return
+      }
+      settled = true
+      if (code === 0 || allowFailure) {
+        resolve({ code, stdout, stderr })
+        return
+      }
+      reject(new Error(`Pulumi command failed with exit code ${code}.`))
+    })
+  })
+
+const parsePulumiOutputs = (raw) => {
+  try {
+    const parsed = JSON.parse(raw || '{}')
+    const valueFor = (key) => {
+      const output = parsed[key]
+      if (output && typeof output === 'object' && Object.prototype.hasOwnProperty.call(output, 'value')) {
+        return output.value
+      }
+      return output
+    }
+    const ipAddresses = valueFor('ipAddresses')
+    const ipv4 = valueFor('ipv4')
+    const vmId = valueFor('vmId')
+    return {
+      ipAddresses: Array.isArray(ipAddresses) ? ipAddresses : [],
+      ipv4: typeof ipv4 === 'string' ? ipv4 : '',
+      vmId: vmId ?? null,
+    }
+  } catch {
+    return { ipAddresses: [], ipv4: '', vmId: null }
+  }
+}
+
+const refreshVmIp = async (job) => {
+  for (let attempt = 1; attempt <= config.vmIpPollAttempts; attempt += 1) {
+    job.ipStatus = 'pending'
+    appendVmJobLog(job, `Checking DHCP IP (${attempt}/${config.vmIpPollAttempts})...`)
+    await runPulumiJobCommand(job, ['refresh', '--yes', '--non-interactive', '--stack', job.stackName], {
+      timeoutMs: Math.min(config.vmCreateTimeoutMs, 5 * 60 * 1000),
+      allowFailure: true,
+    })
+    const outputs = await runPulumiJobCommand(job, ['stack', 'output', '--json', '--stack', job.stackName], {
+      timeoutMs: 60 * 1000,
+      allowFailure: true,
+    })
+    const parsed = parsePulumiOutputs(outputs.stdout)
+    if (parsed.vmId || parsed.ipv4 || parsed.ipAddresses.length) {
+      job.vm = {
+        ...(job.vm || {}),
+        vmId: parsed.vmId ?? job.vm?.vmId ?? null,
+        ipv4: parsed.ipv4 || job.vm?.ipv4 || '',
+        ipAddresses: parsed.ipAddresses.length ? parsed.ipAddresses : (job.vm?.ipAddresses || []),
+      }
+    }
+    if (parsed.ipv4) {
+      job.ipStatus = 'found'
+      return
+    }
+    if (attempt < config.vmIpPollAttempts) {
+      await sleep(config.vmIpPollIntervalMs)
+    }
+  }
+  job.ipStatus = 'unavailable'
+}
+
+const runVmCreateJob = async (job) => {
+  activeVmStacks.add(job.stackName)
+  try {
+    job.status = 'running'
+    job.updatedAt = new Date().toISOString()
+    await fs.access(config.pulumiWorkDir)
+    await runPulumiJobCommand(job, ['stack', 'select', job.stackName, '--create'])
+    await runPulumiJobCommand(job, ['config', 'set', 'spec', JSON.stringify(job.spec), '--plaintext', '--stack', job.stackName])
+    await runPulumiJobCommand(job, ['up', '--yes', '--skip-preview', '--non-interactive', '--stack', job.stackName])
+    const outputs = await runPulumiJobCommand(job, ['stack', 'output', '--json', '--stack', job.stackName], {
+      timeoutMs: 60 * 1000,
+      allowFailure: true,
+    })
+    const parsed = parsePulumiOutputs(outputs.stdout)
+    job.vm = {
+      name: job.spec.name,
+      node: job.spec.node,
+      vmId: parsed.vmId,
+      ipv4: parsed.ipv4,
+      ipAddresses: parsed.ipAddresses,
+    }
+    job.ipStatus = parsed.ipv4 ? 'found' : 'pending'
+    if (!parsed.ipv4) {
+      await refreshVmIp(job)
+    }
+    job.status = 'succeeded'
+    job.finishedAt = new Date().toISOString()
+    job.updatedAt = job.finishedAt
+  } catch (error) {
+    job.status = 'failed'
+    job.error = redactSecrets(safeErrorMessage(error))
+    job.finishedAt = new Date().toISOString()
+    job.updatedAt = job.finishedAt
+    appendVmJobLog(job, `ERROR: ${job.error}`)
+  } finally {
+    activeVmStacks.delete(job.stackName)
+  }
+}
+
+const handleVmCreate = async (req, res) => {
+  if (!config.vmCreateEnabled) {
+    respond(res, 403, { error: 'VM creation is disabled on this server.' })
+    return
+  }
+
+  let body
+  try {
+    body = await readBody(req)
+  } catch (error) {
+    respond(res, 400, { error: error.message })
+    return
+  }
+
+  let spec
+  try {
+    spec = buildVmSpec(body)
+  } catch (error) {
+    respond(res, 400, { error: error.message })
+    return
+  }
+
+  const id = randomUUID()
+  const suffix = id.split('-')[0]
+  const stackName = `${spec.name}-${suffix}`
+  if (activeVmStacks.has(stackName)) {
+    respond(res, 409, { error: 'A VM create job for this stack is already running.' })
+    return
+  }
+
+  const now = new Date().toISOString()
+  const job = {
+    id,
+    stackName,
+    status: 'queued',
+    createdAt: now,
+    updatedAt: now,
+    finishedAt: '',
+    spec,
+    vm: null,
+    ipStatus: 'pending',
+    logs: [],
+    error: '',
+  }
+  vmCreateJobs.set(id, job)
+  runVmCreateJob(job)
+  respond(res, 202, { job: serializeVmJob(job) })
+}
+
+const handleGetVmCreateJob = (res, jobIdRaw) => {
+  const jobId = String(jobIdRaw || '').trim()
+  const job = vmCreateJobs.get(jobId)
+  if (!job) {
+    respond(res, 404, { error: 'VM create job not found.' })
+    return
+  }
+  respond(res, 200, { job: serializeVmJob(job) })
+}
+
 const handleVoiceStatus = (res) => {
   respond(res, 200, {
     deepgram: {
@@ -2437,6 +2843,19 @@ const server = http.createServer(async (req, res) => {
   }
   if (method === 'GET' && pathName === '/terminal-tabs') {
     await handleTerminalTabs(res)
+    return
+  }
+  if (method === 'GET' && pathName === '/vm-templates') {
+    handleVmTemplates(res)
+    return
+  }
+  if (method === 'POST' && pathName === '/vm-create') {
+    await handleVmCreate(req, res)
+    return
+  }
+  const vmCreateJobMatch = pathName.match(/^\/vm-create\/([^/]+)$/)
+  if (vmCreateJobMatch && method === 'GET') {
+    handleGetVmCreateJob(res, vmCreateJobMatch[1])
     return
   }
   const terminalTabLabelMatch = pathName.match(/^\/terminal-tabs\/([^/]+)\/([^/]+)\/([^/]+)\/label$/)

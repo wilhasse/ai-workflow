@@ -56,6 +56,13 @@ services:
       - DEEPGRAM_STT_LANGUAGE=${DEEPGRAM_STT_LANGUAGE:-pt-BR}
       - DEEPGRAM_TTS_MODEL=${DEEPGRAM_TTS_MODEL:-aura-2-thalia-en}
       - DEEPGRAM_TTS_ENCODING=${DEEPGRAM_TTS_ENCODING:-mp3}
+      - VM_CREATE_ENABLED=${VM_CREATE_ENABLED:-false}
+      - PULUMI_WORK_DIR=${PULUMI_WORK_DIR:-/home/cslog/ai-workflow/infra/proxmox-test-vm}
+      - PROXMOX_VE_ENDPOINT=${PROXMOX_VE_ENDPOINT:-}
+      - PROXMOX_VE_API_TOKEN=${PROXMOX_VE_API_TOKEN:-}
+      - PROXMOX_VE_INSECURE=${PROXMOX_VE_INSECURE:-true}
+      - PULUMI_ACCESS_TOKEN=${PULUMI_ACCESS_TOKEN:-}
+      - PULUMI_CONFIG_PASSPHRASE=${PULUMI_CONFIG_PASSPHRASE:-}
     volumes:
       # Persist session data
       - tmux-session-data:/app/data

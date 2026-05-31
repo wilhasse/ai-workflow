@@ -33,6 +33,10 @@ Environment variables:
 - `DEEPGRAM_API_KEY` – server-side key for mobile voice transcription and speech playback.
 - `DEEPGRAM_STT_MODEL` / `DEEPGRAM_STT_LANGUAGE` – defaults `nova-3` / `pt-BR`.
 - `DEEPGRAM_TTS_MODEL` / `DEEPGRAM_TTS_ENCODING` – defaults `aura-2-thalia-en` / `mp3`.
+- `VM_CREATE_ENABLED` – set to `true` to expose dashboard VM creation APIs.
+- `PULUMI_WORK_DIR` – Pulumi project directory for VM creation, defaults to `~/ai-workflow/infra/proxmox-test-vm`.
+- `PROXMOX_VE_ENDPOINT` / `PROXMOX_VE_API_TOKEN` / `PROXMOX_VE_INSECURE` – Proxmox provider credentials for Pulumi.
+- `PULUMI_ACCESS_TOKEN` / `PULUMI_CONFIG_PASSPHRASE` – Pulumi backend/secrets configuration, depending on the selected Pulumi backend.
 
 ## Docker
 ```
@@ -67,5 +71,8 @@ Make sure `tmux` is installed inside the container image (extend from `node:20-s
 | `GET` | `/voice/status` | Reports whether Deepgram is configured and which voice models are active. |
 | `POST` | `/voice/transcribe` | Proxies raw audio to Deepgram STT and returns `{ text }`. |
 | `POST` | `/voice/tts` | Proxies text to Deepgram TTS and streams the audio response. |
+| `GET` | `/vm-templates` | Returns dashboard VM creation defaults and Proxmox template mappings. |
+| `POST` | `/vm-create` | Starts a Pulumi job to clone a Debian 13 test VM with DHCP. |
+| `GET` | `/vm-create/:jobId` | Returns VM creation status, sanitized logs, metadata, and detected DHCP IP state. |
 
 Responses contain structured errors when tmux is unreachable or ids are invalid, making it easy to automate clean-up cron jobs or integrate with your dashboard.

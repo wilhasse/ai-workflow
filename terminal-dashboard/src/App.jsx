@@ -15,6 +15,7 @@ import SettingsSheet from './components/sheets/SettingsSheet'
 import WorkspaceCard from './components/workspace/WorkspaceCard'
 import WindowTabs from './components/workspace/WindowTabs'
 import TerminalOrganizer from './components/workspace/TerminalOrganizer'
+import VmCreatePanel from './components/vm/VmCreatePanel'
 
 // Hooks
 import { useIsMobile, useMediaQuery } from './hooks/useMediaQuery'
@@ -1626,6 +1627,14 @@ function DashboardApp() {
           >
             Jump
           </button>
+          <button
+            type="button"
+            className={`secondary switcher-btn ${desktopView === 'vm-create' ? 'active' : ''}`}
+            onClick={() => setDesktopView('vm-create')}
+            title="Create a Proxmox test VM"
+          >
+            Create VM
+          </button>
           {canUseOverview && (
             <button
               type="button"
@@ -1675,6 +1684,8 @@ function DashboardApp() {
             onRefresh={loadTerminalTabs}
             onSaveLabels={handleSaveTerminalLabels}
           />
+        ) : desktopView === 'vm-create' ? (
+          <VmCreatePanel apiBase={API_BASE} />
         ) : renderTerminalView()}
       </main>
 

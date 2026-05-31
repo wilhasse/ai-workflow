@@ -1,0 +1,3 @@
+name: proxmox-test-vm
+runtime: nodejs
+description: Dashboard-created Proxmox test VMs from Debian 13 cloud-init templates.

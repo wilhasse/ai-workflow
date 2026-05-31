@@ -7,6 +7,11 @@ RUN apt-get update \
   && locale-gen \
   && rm -rf /var/lib/apt/lists/*
 
+ENV PULUMI_VERSION=3.167.0
+
+RUN curl -fsSL https://get.pulumi.com | sh -s -- --version "${PULUMI_VERSION}" \
+  && ln -s /root/.pulumi/bin/pulumi /usr/local/bin/pulumi
+
 # Rename the 'node' user to 'cslog' (node user is UID 1000 by default)
 # This ensures tmux sessions run as 'cslog' user
 RUN usermod -l cslog node \

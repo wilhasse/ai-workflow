@@ -10,5 +10,10 @@ if [ -d "$TMUX_SOCKET_DIR" ]; then
   sudo chmod 700 "$TMUX_SOCKET_DIR"
 fi
 
+PULUMI_WORK_DIR="${PULUMI_WORK_DIR:-/home/cslog/ai-workflow/infra/proxmox-test-vm}"
+if [ -f "$PULUMI_WORK_DIR/package.json" ] && [ ! -d "$PULUMI_WORK_DIR/node_modules" ]; then
+  (cd "$PULUMI_WORK_DIR" && npm install)
+fi
+
 # Execute the main command
 exec "$@"

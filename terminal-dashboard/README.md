@@ -7,6 +7,7 @@ Vite React SPA for browsing and organizing tmux-backed terminal windows through 
 - `Organize` is the default desktop view. It lists active tmux windows by host and workspace, lets you assign short app-only labels, and flags tabs as `Active`, `Check`, or `Idle`.
 - `Terminal` opens the embedded xterm.js viewer for the selected workspace/window.
 - `Jump` opens the Ctrl+Enter terminal switcher. Labeled tabs are prioritized, status flags are visible there, and `Alt+L` / `Alt+C` / `Alt+I` / `Alt+A` edit the selected tab. `Idle` changes the badge/color without demoting a recent tab, and parks only that tmux window's Codex/Claude agents.
+- `Create VM` opens the desktop-only Proxmox test VM creator backed by `tmux-session-service` and Pulumi. The backend must have `VM_CREATE_ENABLED=true`.
 - `/mobile` keeps the phone/tablet workflow separate from the desktop organizer.
 
 ## Development
