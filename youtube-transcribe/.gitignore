@@ -1,0 +1,4 @@
+.env
+output/
+*.m4a
+*.mp3
