@@ -7,8 +7,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This is a monorepo containing three independent AI workflow tools:
 
 1. **whisper-realtime-api/** - FastAPI service exposing Whisper for audio transcription (batch & streaming)
-2. **terminal-dashboard/** - React SPA with xterm.js terminals that organize tmux-backed sessions
+2. **terminal-dashboard/** - React SPA with xterm.js terminals that organize tmux-backed sessions. A header **Terminals / Transcripts** toggle switches to a YouTube transcription view backed by youtube-transcribe-service.
 3. **tmux-session-service/** - Node.js HTTP + WebSocket API for persistent tmux session management
+4. **youtube-transcribe-service/** - FastAPI service: yt-dlp + Deepgram (`nova-3`) → Apache Doris (`agent_history.youtube_transcripts`); backs the dashboard's Transcripts view. Shares its core with `youtube-transcribe/` (CLI). nginx proxies `/api/transcribe/*` to it on `:5005`.
 
 Each project has its own build system, dependencies, and deployment model. The terminal-dashboard works with tmux-session-service to provide persistent terminal sessions.
 
