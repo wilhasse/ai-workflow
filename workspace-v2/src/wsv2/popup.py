@@ -18,7 +18,7 @@ from .window_focus import active_window_title, terminal_target_from_window_title
 PROGRAM_CLASS = "workspace-v2-popup"
 WINDOW_ROLE = "workspace-v2-popup"
 WINDOW_TITLE = "Workspace Launcher"
-SHORTCUT_HELP = "↑↓ Navigate · Enter Open · Ctrl+G Active only · Alt+L Label · Alt+C Check · Alt+I Idle · Alt+A Active"
+SHORTCUT_HELP = "↑↓ Navigate · Enter Open · Ctrl+G Active only · Ctrl+N New tab · Alt+L Label · Alt+C Check · Alt+I Idle · Alt+A Active"
 
 
 @dataclass(slots=True)
@@ -27,8 +27,12 @@ class PopupItem:
     recent_score: float
 
 
-def is_green_active_terminal(status: TerminalStatus) -> bool:
-    return status.active and not status.window_status
+def is_running_terminal(status: TerminalStatus) -> bool:
+    return status.active
+
+
+def query_terms(query: str) -> list[str]:
+    return [term for term in query.lower().split() if term]
 
 
 class WorkspacePopup(Gtk.Window):
@@ -157,7 +161,7 @@ class WorkspacePopup(Gtk.Window):
         label = "terminal" if len(items) == 1 else "terminals"
         mode = " active" if self.active_only else ""
         self.message_label.set_markup(
-            f'<span foreground="#7f8c8d">Showing {len(items)}{mode} {label}. Enter: open   Esc: close   Ctrl+G: green active only.</span>'
+            f'<span foreground="#7f8c8d">Showing {len(items)}{mode} {label}. Enter: open   Esc: close   Ctrl+G: active only   Ctrl+N: new tab.</span>'
         )
 
         for child in self.listbox.get_children():
@@ -215,32 +219,30 @@ class WorkspacePopup(Gtk.Window):
             for status in self.statuses
         ]
         if self.active_only:
-            items = [item for item in items if is_green_active_terminal(item.status)]
+            items = [item for item in items if is_running_terminal(item.status)]
 
-        if query:
+        terms = query_terms(query)
+        if terms:
+            normalized = " ".join(terms)
             scored = []
             for item in items:
-                haystack = " ".join(
-                    [
-                        item.status.session_id,
-                        item.status.workspace_name,
-                        item.status.host.name,
-                        item.status.host_id,
-                        str(item.status.window_index),
-                        f"#{item.status.window_index}",
-                        item.status.window_name,
-                        item.status.window_status,
-                        item.status.display_path,
-                    ]
-                ).lower()
-                if query not in haystack:
+                haystack = item.status.searchable_text
+                if not all(term in haystack for term in terms):
                     continue
                 status = item.status
-                if status.session_id == query or status.workspace_name.lower() == query or str(status.window_index) == query:
+                if (
+                    status.session_id.lower() == normalized
+                    or status.workspace_name.lower() == normalized
+                    or str(status.window_index) == normalized
+                ):
                     rank = 0
-                elif status.session_id.startswith(query) or status.workspace_name.lower().startswith(query) or status.window_name.lower().startswith(query):
+                elif (
+                    status.session_id.lower().startswith(normalized)
+                    or status.workspace_name.lower().startswith(normalized)
+                    or status.window_name.lower().startswith(normalized)
+                ):
                     rank = 1
-                elif status.host_id.startswith(query) or status.host.name.lower().startswith(query):
+                elif status.host_id.lower().startswith(normalized) or status.host.name.lower().startswith(normalized):
                     rank = 2
                 else:
                     rank = 3
@@ -421,12 +423,15 @@ class WorkspacePopup(Gtk.Window):
             return False
         key_name = (Gdk.keyval_name(event.keyval) or "").lower()
         if key_name != "g":
-            return False
+            if key_name != "n":
+                return False
+            self._create_from_selected()
+            return True
         self.active_only = not self.active_only
         self.actions.state.set_preference_bool("activeOnly", self.active_only)
         self._refresh_rows()
         self._set_message(
-            "Green active terminal filter on." if self.active_only else "Green active terminal filter off."
+            "Active terminal filter on." if self.active_only else "Active terminal filter off."
         )
         return True
 
@@ -539,6 +544,23 @@ class WorkspacePopup(Gtk.Window):
         target = getattr(row, "workspace_target", None)
         if target:
             self._launch_target(target)
+
+    def _create_from_selected(self) -> None:
+        status = self._selected_status()
+        if not status:
+            return
+        if not status.active:
+            self._set_message("Select an active tmux terminal before creating a new tab.", error=True)
+            return
+        try:
+            target = self.actions.create_terminal_from(status)
+            self.actions.open_workspace(target)
+        except Exception as error:  # pragma: no cover - interactive path
+            self.message_label.set_markup(
+                f'<span foreground="#fca5a5">{GLib.markup_escape_text(str(error))}</span>'
+            )
+            return
+        self.destroy()
 
     def _launch_target(self, target: str) -> None:
         try:

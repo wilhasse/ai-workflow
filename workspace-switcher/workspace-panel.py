@@ -1208,7 +1208,7 @@ class TerminalSwitcherDialog(Gtk.Dialog):
         shortcut_help = Gtk.Label()
         shortcut_help.set_markup(
             '<span size="small" foreground="#8fa1b6">'
-            '↑↓ Navigate · Enter Open · Ctrl+G Active only · Alt+L Label · Alt+C Check · Alt+I Idle · Alt+A Active'
+            '↑↓ Navigate · Enter Open · Ctrl+G Active only · Ctrl+N New tab · Alt+L Label · Alt+C Check · Alt+I Idle · Alt+A Active'
             '</span>'
         )
         shortcut_help.set_xalign(0)
@@ -1260,6 +1260,10 @@ class TerminalSwitcherDialog(Gtk.Dialog):
         self.rename_button = Gtk.Button(label='Edit tab')
         self.rename_button.connect('clicked', self._rename_selected)
         action_box.pack_start(self.rename_button, False, False, 0)
+
+        self.new_button = Gtk.Button(label='New tab from selected')
+        self.new_button.connect('clicked', self._create_from_selected)
+        action_box.pack_start(self.new_button, False, False, 0)
 
         self.open_button = Gtk.Button(label='Open selected')
         self.open_button.get_style_context().add_class('suggested-action')
@@ -1372,17 +1376,18 @@ class TerminalSwitcherDialog(Gtk.Dialog):
 
     def _on_search_changed(self, entry, selected_target=None):
         query = entry.get_text().strip().lower()
+        query_terms = [term for term in query.split() if term]
         selected_target = selected_target or self._entry_identity(self.selected_entry)
         entries = self.all_entries
         if self.active_only:
             entries = [
                 item for item in entries
-                if normalize_terminal_status(item.get('window_status')) == ''
+                if item.get('window_index', 0) > 0
             ]
-        if query:
+        if query_terms:
             self.filtered_entries = [
                 item for item in entries
-                if query in item.get('search_text', '')
+                if all(term in item.get('search_text', '') for term in query_terms)
             ]
         else:
             self.filtered_entries = list(entries)
@@ -1419,11 +1424,11 @@ class TerminalSwitcherDialog(Gtk.Dialog):
     def _update_hint(self):
         if not hasattr(self, 'hint_label'):
             return
-        mode = 'Active-flagged terminals only' if self.active_only else 'All active tmux windows'
+        mode = 'Active tmux windows only' if self.active_only else 'All active tmux windows'
         self.hint_label.set_markup(
             '<span size="small" foreground="#7f8c8d">'
             f'{GLib.markup_escape_text(mode)} · {len(self.filtered_entries)} shown · '
-            'Ctrl+G toggles Active only. Alt shortcuts update the selected row without closing this dialog.'
+            'Ctrl+G toggles Active only. Ctrl+N creates a tab from the selected terminal.'
             '</span>'
         )
 
@@ -1432,11 +1437,22 @@ class TerminalSwitcherDialog(Gtk.Dialog):
         self.active_only = not self.active_only
         self._on_search_changed(self.search_entry, selected_target)
 
+    def _create_from_selected(self, *args):
+        if not self.selected_entry:
+            return
+        new_entry = self.parent.create_tmux_window_from_entry(self.selected_entry)
+        if new_entry:
+            self.selected_entry = new_entry
+            self.response(Gtk.ResponseType.OK)
+
     def _on_key_press(self, widget, event):
         keyval = event.keyval
         state = event.state & Gtk.accelerator_get_default_mod_mask()
         if state & Gdk.ModifierType.CONTROL_MASK and keyval in (Gdk.KEY_g, Gdk.KEY_G):
             self._toggle_active_filter()
+            return True
+        if state & Gdk.ModifierType.CONTROL_MASK and keyval in (Gdk.KEY_n, Gdk.KEY_N):
+            self._create_from_selected(widget)
             return True
         if state & Gdk.ModifierType.MOD1_MASK:
             if keyval in (Gdk.KEY_l, Gdk.KEY_L):
@@ -2301,6 +2317,108 @@ class WorkspaceSwitcher(Gtk.Window):
             )
         except (OSError, subprocess.TimeoutExpired):
             return
+
+    def _create_local_tmux_window_from_entry(self, entry):
+        session_name = entry['session_name']
+        window_id = normalize_window_id(entry.get('window_id'))
+        base_target = window_id or f"{session_name}:{entry['window_index']}"
+        env = {**os.environ, 'TMUX': ''}
+        cwd = ''
+        try:
+            cwd_result = subprocess.run(
+                ['tmux', 'display-message', '-p', '-t', base_target, '#{pane_current_path}'],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                env=env,
+            )
+            if cwd_result.returncode == 0:
+                cwd = cwd_result.stdout.strip()
+            cmd = ['tmux', 'new-window', '-P', '-F', '#{window_id}|#{window_index}', '-t', f"{session_name}:"]
+            if cwd:
+                cmd.extend(['-c', cwd])
+            return subprocess.run(cmd, capture_output=True, text=True, timeout=5, env=env)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            completed = subprocess.CompletedProcess([], 1, '', str(error))
+            return completed
+
+    def _create_remote_tmux_window_from_entry(self, entry):
+        host_info = entry.get('host_info') or {}
+        ssh_target = host_info.get('ssh')
+        if not ssh_target:
+            return subprocess.CompletedProcess([], 1, '', 'Host has no SSH target')
+        session_name = entry['session_name']
+        window_id = normalize_window_id(entry.get('window_id'))
+        base_target = window_id or f"{session_name}:{entry['window_index']}"
+        remote_command = (
+            f"cwd=$(tmux display-message -p -t {shlex.quote(base_target)} '#{{pane_current_path}}' 2>/dev/null || true); "
+            f"if [ -n \"$cwd\" ]; then "
+            f"tmux new-window -P -F '#{{window_id}}|#{{window_index}}' -t {shlex.quote(session_name + ':')} -c \"$cwd\"; "
+            f"else "
+            f"tmux new-window -P -F '#{{window_id}}|#{{window_index}}' -t {shlex.quote(session_name + ':')}; "
+            f"fi"
+        )
+        try:
+            return subprocess.run(
+                ['ssh', '-o', 'ConnectTimeout=3', '-o', 'BatchMode=yes', ssh_target, remote_command],
+                capture_output=True,
+                text=True,
+                timeout=8,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            return subprocess.CompletedProcess([], 1, '', str(error))
+
+    def create_tmux_window_from_entry(self, entry):
+        """Create a tmux window in the same session/cwd as an existing switcher entry."""
+        if not entry or int(entry.get('window_index') or 0) <= 0:
+            self._show_error('Create tab failed', 'Select an active tmux terminal first.')
+            return None
+
+        host_id = entry.get('host_id', 'local')
+        host_info = entry.get('host_info')
+        if host_id == 'local' or not host_info or not host_info.get('ssh'):
+            result = self._create_local_tmux_window_from_entry(entry)
+        else:
+            result = self._create_remote_tmux_window_from_entry(entry)
+
+        if result.returncode != 0:
+            self._show_error('Create tab failed', (result.stderr or result.stdout or 'tmux new-window failed').strip())
+            return None
+
+        raw_window_id, _, raw_index = result.stdout.strip().partition('|')
+        new_window_id = normalize_window_id(raw_window_id)
+        try:
+            new_window_index = int(raw_index) if raw_index else None
+        except ValueError:
+            new_window_index = None
+        if not new_window_id and new_window_index is None:
+            self._show_error('Create tab failed', 'tmux did not report the new window target.')
+            return None
+
+        session_name = entry['session_name']
+        state_host_id = entry.get('state_host_id') or host_id
+        target = (
+            f"{state_host_id}:{session_name}{new_window_id}"
+            if new_window_id
+            else f"{state_host_id}:{session_name}#{new_window_index}"
+        )
+        new_entry = {
+            **entry,
+            'window_id': new_window_id,
+            'window_index': new_window_index,
+            'window_name': f"window-{new_window_index}" if new_window_index is not None else 'new',
+            'tmux_window_name': f"window-{new_window_index}" if new_window_index is not None else 'new',
+            'display_window_name': f"window-{new_window_index}" if new_window_index is not None else 'new',
+            'window_label': '',
+            'window_status': '',
+            'target': target,
+            'activity': int(time.time()),
+            'recent_at': int(time.time()),
+            'selected_at': int(time.time()),
+        }
+        save_recent_score(target)
+        self.remote_session_cache.invalidate(host_id)
+        return new_entry
 
     def open_tmux_window_entry(self, entry):
         """Select and open a tmux session/window entry from the switcher."""

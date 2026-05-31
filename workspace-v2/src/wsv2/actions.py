@@ -326,6 +326,76 @@ def switch_attached_tmux_clients(
         return
 
 
+def create_tmux_window_from_terminal(
+    host: HostRecord,
+    *,
+    session_id: str,
+    window_index: int | None,
+    window_id: str | None = "",
+    run_local: bool,
+) -> tuple[str, int | None]:
+    normalized_window_id = normalize_window_id(window_id)
+    if window_index is None and not normalized_window_id:
+        raise WorkspaceConfigError("An active tmux window is required to create a new tab")
+
+    base_target = normalized_window_id or f"{session_id}:{window_index}"
+    session_target = f"{session_id}:"
+
+    if run_local:
+        env = {**os.environ, "TMUX": ""}
+        cwd = ""
+        try:
+            cwd_result = subprocess.run(
+                ["tmux", "display-message", "-p", "-t", base_target, "#{pane_current_path}"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                env=env,
+            )
+            if cwd_result.returncode == 0:
+                cwd = cwd_result.stdout.strip()
+            cmd = ["tmux", "new-window", "-P", "-F", "#{window_id}|#{window_index}", "-t", session_target]
+            if cwd:
+                cmd.extend(["-c", cwd])
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5, env=env)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise WorkspaceConfigError(f"Unable to create tmux window: {error}") from error
+    else:
+        if not host.ssh:
+            raise WorkspaceConfigError(f"Host has no SSH target: {host.id}")
+        remote_command = (
+            f"cwd=$(tmux display-message -p -t {shlex.quote(base_target)} '#{{pane_current_path}}' 2>/dev/null || true); "
+            f"if [ -n \"$cwd\" ]; then "
+            f"tmux new-window -P -F '#{{window_id}}|#{{window_index}}' -t {shlex.quote(session_target)} -c \"$cwd\"; "
+            f"else "
+            f"tmux new-window -P -F '#{{window_id}}|#{{window_index}}' -t {shlex.quote(session_target)}; "
+            f"fi"
+        )
+        try:
+            result = subprocess.run(
+                ["ssh", "-o", "ConnectTimeout=3", "-o", "BatchMode=yes", host.ssh, remote_command],
+                capture_output=True,
+                text=True,
+                timeout=8,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise WorkspaceConfigError(f"Unable to create remote tmux window: {error}") from error
+
+    if result.returncode != 0:
+        message = (result.stderr or result.stdout or "tmux new-window failed").strip()
+        raise WorkspaceConfigError(message)
+
+    raw_window_id, _, raw_index = result.stdout.strip().partition("|")
+    new_window_id = normalize_window_id(raw_window_id)
+    try:
+        new_index = int(raw_index) if raw_index else None
+    except ValueError:
+        new_index = None
+    if not new_window_id and new_index is None:
+        raise WorkspaceConfigError("tmux did not report the new window target")
+    return new_window_id, new_index
+
+
 def build_workspace_command(workspace: WorkspaceRecord, *, run_local: bool) -> str:
     return build_attach_command(workspace, run_local=run_local, within_tmux=False)
 
@@ -679,6 +749,24 @@ class WorkspaceActions:
         subprocess.Popen(build_terminal_command(terminal, command, workspace.id))
         self.state.mark_recent(workspace.target)
         return "launched"
+
+    def create_terminal_from(self, terminal: TerminalStatus) -> str:
+        if not terminal.active:
+            raise WorkspaceConfigError("Select an active tmux terminal before creating a new tab")
+        window_id, window_index = create_tmux_window_from_terminal(
+            terminal.host,
+            session_id=terminal.session_id,
+            window_index=terminal.window_index,
+            window_id=terminal.window_id,
+            run_local=self.config.host_runs_local(terminal.host),
+        )
+        target = (
+            f"{terminal.host_id}:{terminal.session_id}{window_id}"
+            if window_id
+            else f"{terminal.host_id}:{terminal.session_id}#{window_index}"
+        )
+        self.state.mark_recent(target)
+        return target
 
     def attach_workspace(self, target: str, *, replace_process: bool = True) -> int:
         terminal_target = parse_terminal_target(target)

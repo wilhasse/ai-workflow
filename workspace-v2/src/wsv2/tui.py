@@ -8,7 +8,7 @@ from typing import Iterable
 from .actions import TerminalStatus, WorkspaceActions, terminal_recent_score, terminal_status_rank
 
 
-SHORTCUT_HELP = 'Enter: switch  Ctrl+G: active only  Alt+L: label  Alt+C: check  Alt+I: idle  Alt+A: active'
+SHORTCUT_HELP = 'Enter: switch  Ctrl+G: active only  Ctrl+N: new tab  Alt+L: label  Alt+C: check  Alt+I: idle  Alt+A: active'
 
 
 @dataclass(slots=True)
@@ -18,8 +18,12 @@ class TuiItem:
     recent_score: float = 0.0
 
 
-def is_green_active_terminal(status: TerminalStatus) -> bool:
-    return status.active and not status.window_status
+def is_running_terminal(status: TerminalStatus) -> bool:
+    return status.active
+
+
+def query_terms(query: str) -> list[str]:
+    return [term for term in query.lower().split() if term]
 
 
 def build_tui_items(
@@ -41,14 +45,15 @@ def build_tui_items(
 
 def filter_tui_items(items: list[TuiItem], query: str, *, active_only: bool = False) -> list[TuiItem]:
     if active_only:
-        items = [item for item in items if is_green_active_terminal(item.status)]
-    if not query:
+        items = [item for item in items if is_running_terminal(item.status)]
+    terms = query_terms(query)
+    if not terms:
         return sorted(items, key=_sort_key)
-    normalized = query.lower()
+    normalized = " ".join(terms)
     ranked: list[tuple[int, TuiItem]] = []
     for item in items:
         status = item.status
-        if normalized not in item.searchable_text:
+        if not all(term in item.searchable_text for term in terms):
             continue
         if normalized in {status.session_id.lower(), status.workspace_name.lower(), str(status.window_index)}:
             rank = 0
@@ -141,10 +146,16 @@ class WorkspaceTui:
                 self.index = 0
                 self.scroll = 0
                 self.message = (
-                    'Green active terminal filter on.'
+                    'Active terminal filter on.'
                     if self.active_only
-                    else 'Green active terminal filter off.'
+                    else 'Active terminal filter off.'
                 )
+                continue
+            if key == 14:
+                if filtered:
+                    target = self._create_from_status(filtered[self.index].status)
+                    if target:
+                        return target
                 continue
             if key == curses.KEY_UP:
                 self.index = max(0, self.index - 1)
@@ -194,7 +205,7 @@ class WorkspaceTui:
                 attr = curses.A_REVERSE if self.scroll + row_offset == self.index else curses.A_NORMAL
                 stdscr.addnstr(row, 0, format_tui_row(item.status, width), width - 1, attr)
 
-        stdscr.addnstr(height - 1, 0, 'Esc: close  Ctrl+U: clear  Ctrl+G: active only  Type to filter terminals', width - 1)
+        stdscr.addnstr(height - 1, 0, 'Esc: close  Ctrl+U: clear  Ctrl+G: active only  Ctrl+N: new tab', width - 1)
         stdscr.refresh()
 
     def _read_alt_key(self, stdscr) -> int | None:
@@ -268,6 +279,16 @@ class WorkspaceTui:
         self.message = (
             f'Updated {status.workspace_name} #{status.window_index}: {label_text}, {status_text}.'
         )
+
+    def _create_from_status(self, status: TerminalStatus) -> str | None:
+        if not status.active:
+            self.message = 'Select an active tmux terminal before creating a new tab.'
+            return None
+        try:
+            return self.actions.create_terminal_from(status)
+        except Exception as error:
+            self.message = f'Unable to create terminal tab: {error}'
+            return None
 
 
 def select_workspace_tui(actions: WorkspaceActions) -> str | None:

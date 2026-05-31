@@ -14,6 +14,7 @@ from wsv2.actions import (
     build_terminal_attach_command,
     build_terminal_command,
     build_workspace_command,
+    create_tmux_window_from_terminal,
     terminal_recent_score,
     terminal_sort_key,
 )
@@ -277,6 +278,39 @@ class CommandBuilderTests(unittest.TestCase):
         )
         self.assertIn('tmux select-window -t @44', stable_command)
         self.assertIn('tmux attach-session -t dbtools', stable_command)
+
+    def test_create_tmux_window_from_terminal_uses_current_pane_cwd(self) -> None:
+        host = HostRecord(id='vm10', name='Main Desktop')
+        with mock.patch(
+            'wsv2.actions.subprocess.run',
+            side_effect=[
+                mock.Mock(returncode=0, stdout='/home/cslog/siscob_trunk\n', stderr=''),
+                mock.Mock(returncode=0, stdout='@99|13\n', stderr=''),
+            ],
+        ) as run:
+            window_id, window_index = create_tmux_window_from_terminal(
+                host,
+                session_id='siscob-trunk',
+                window_index=7,
+                window_id='@311',
+                run_local=True,
+            )
+
+        self.assertEqual((window_id, window_index), ('@99', 13))
+        self.assertEqual(
+            run.call_args_list[1].args[0],
+            [
+                'tmux',
+                'new-window',
+                '-P',
+                '-F',
+                '#{window_id}|#{window_index}',
+                '-t',
+                'siscob-trunk:',
+                '-c',
+                '/home/cslog/siscob_trunk',
+            ],
+        )
 
     def test_build_terminal_command_uses_terminal_specific_flags(self) -> None:
         xfce = build_terminal_command('xfce4-terminal', 'echo hi', 'mysql')
@@ -907,6 +941,34 @@ class TuiFilterTests(unittest.TestCase):
         self.assertEqual(len(filtered), 1)
         self.assertEqual(filtered[0].status.session_id, 'dbtools')
 
+    def test_filter_tui_items_matches_terminal_and_tab_terms(self) -> None:
+        host = HostRecord(id='vm10', name='Main Desktop')
+        statuses = [
+            TerminalStatus(
+                host_id=host.id,
+                host=host,
+                session_id='siscob-trunk',
+                window_index=7,
+                window_id='@311',
+                window_name='Vitor Tel',
+                window_status='idle',
+            ),
+            TerminalStatus(
+                host_id=host.id,
+                host=host,
+                session_id='siscob-trunk',
+                window_index=8,
+                window_id='@312',
+                window_name='other',
+            ),
+        ]
+        items = build_tui_items(statuses)
+
+        filtered = filter_tui_items(items, 'siscob-trunk #7', active_only=True)
+
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(filtered[0].status.target, 'vm10:siscob-trunk@311')
+
     def test_filter_tui_items_can_show_only_active_terminals(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config = load_config(write_legacy_config(Path(tmp)))
@@ -940,8 +1002,7 @@ class TuiFilterTests(unittest.TestCase):
 
         filtered = filter_tui_items(items, '', active_only=True)
 
-        self.assertEqual(len(filtered), 1)
-        self.assertEqual(filtered[0].status.window_index, 1)
+        self.assertEqual([item.status.window_index for item in filtered], [2, 1])
 
     def test_format_tui_row_puts_terminal_label_first(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
