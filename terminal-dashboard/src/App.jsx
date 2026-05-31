@@ -15,6 +15,7 @@ import SettingsSheet from './components/sheets/SettingsSheet'
 import WorkspaceCard from './components/workspace/WorkspaceCard'
 import WindowTabs from './components/workspace/WindowTabs'
 import TerminalOrganizer from './components/workspace/TerminalOrganizer'
+import TranscriptsView from './components/transcripts/TranscriptsView'
 
 // Hooks
 import { useIsMobile, useMediaQuery } from './hooks/useMediaQuery'
@@ -203,6 +204,20 @@ function DashboardApp() {
   const [windows, setWindows] = useState([])
   const [windowsLoading, setWindowsLoading] = useState(false)
   const [desktopView, setDesktopView] = useState('organizer')
+  const [mainView, setMainView] = useState(() => {
+    if (typeof window === 'undefined') return 'terminals'
+    return new URLSearchParams(window.location.search).get('view') === 'transcripts'
+      ? 'transcripts'
+      : 'terminals'
+  })
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    if (mainView === 'transcripts') params.set('view', 'transcripts')
+    else params.delete('view')
+    const query = params.toString()
+    const next = `${window.location.pathname}${query ? `?${query}` : ''}`
+    window.history.replaceState(null, '', next)
+  }, [mainView])
   const [terminalTabs, setTerminalTabs] = useState([])
   const [terminalTabsLoading, setTerminalTabsLoading] = useState(false)
   const [terminalTabErrors, setTerminalTabErrors] = useState([])
@@ -1612,6 +1627,14 @@ function DashboardApp() {
         <div className="header-right">
           <button
             type="button"
+            className={`secondary switcher-btn ${mainView === 'transcripts' ? 'active' : ''}`}
+            onClick={() => setMainView((v) => (v === 'transcripts' ? 'terminals' : 'transcripts'))}
+            title="Switch between terminals and YouTube transcripts"
+          >
+            {mainView === 'transcripts' ? 'Terminals' : 'Transcripts'}
+          </button>
+          <button
+            type="button"
             className={`secondary switcher-btn ${desktopView === 'organizer' ? 'active' : ''}`}
             onClick={() => setDesktopView((view) => (view === 'organizer' ? 'terminal' : 'organizer'))}
             title="Organize tmux tab labels"
@@ -1666,7 +1689,9 @@ function DashboardApp() {
 
       {/* Main content */}
       <main className="app-main">
-        {desktopView === 'organizer' ? (
+        {mainView === 'transcripts' ? (
+          <TranscriptsView active={mainView === 'transcripts'} />
+        ) : desktopView === 'organizer' ? (
           <TerminalOrganizer
             tabs={terminalTabs}
             loading={terminalTabsLoading}
