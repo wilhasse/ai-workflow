@@ -214,6 +214,11 @@
   padding: var(--space-2xl) var(--space-2xl) var(--space-lg);
   gap: var(--space-lg);
   animation: fadeInDown 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+  /* Lift the header's stacking context above .app-main (both get z-index:2 from
+     `.app-shell > *`, and app-main wins by DOM order) so header dropdowns like
+     the View selector render above the xterm terminal instead of behind it. */
+  position: relative;
+  z-index: 300;
 }
 
 @keyframes fadeInDown {
@@ -2092,7 +2097,9 @@ button.danger:hover:not(:disabled) {
 
 .header-center {
   flex: 1;
-  overflow: hidden;
+  display: flex;
+  align-items: center;
+  overflow: visible;
 }
 
 .header-right {

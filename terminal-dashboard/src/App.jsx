@@ -12,7 +12,6 @@ import WorkspaceSheet from './components/sheets/WorkspaceSheet'
 import WindowSheet from './components/sheets/WindowSheet'
 import VoiceSheet from './components/sheets/VoiceSheet'
 import SettingsSheet from './components/sheets/SettingsSheet'
-import WorkspaceCard from './components/workspace/WorkspaceCard'
 import WindowTabs from './components/workspace/WindowTabs'
 import TerminalOrganizer from './components/workspace/TerminalOrganizer'
 import TranscriptsView from './components/transcripts/TranscriptsView'
@@ -1344,26 +1343,23 @@ function DashboardApp() {
         </div>
 
         <div className="header-center">
-          {view !== 'transcripts' && (
-            <div className="workspace-cards">
-              {workspaces.map((workspace) => (
-                <WorkspaceCard
-                  key={workspace.id}
-                  workspace={workspace}
-                  isSelected={workspace.id === activeWorkspaceId}
-                  onSelect={(ws) => {
-                    setActiveTerminalConnection(null)
-                    setActiveWindowId('')
-                    setActiveWorkspaceId(ws.id)
-                  }}
-                />
-              ))}
-              {workspaces.length === 0 && !workspacesLoading && (
-                <span className="no-workspaces">
-                  No workspaces configured. Use wsp to add workspaces.
-                </span>
-              )}
-            </div>
+          {workspaces.length > 0 && (
+            <ViewSelector
+              prefix="Workspace"
+              placeholder="Select…"
+              value={activeWorkspaceId ?? ''}
+              onChange={(id) => {
+                setActiveTerminalConnection(null)
+                setActiveWindowId('')
+                setActiveWorkspaceId(id)
+              }}
+              options={workspaces.map((workspace) => ({ value: workspace.id, label: workspace.name }))}
+            />
+          )}
+          {workspaces.length === 0 && !workspacesLoading && (
+            <span className="no-workspaces">
+              No workspaces configured. Use wsp to add workspaces.
+            </span>
           )}
         </div>
 
@@ -1377,41 +1373,37 @@ function DashboardApp() {
               { value: 'transcripts', label: 'Transcripts' },
             ]}
           />
-          {view !== 'transcripts' && (
-            <>
-              <button
-                type="button"
-                className="secondary switcher-btn"
-                onClick={openTerminalSwitcher}
-                title="Jump between terminals and tmux tabs (Ctrl+Enter)"
-              >
-                Jump
-              </button>
-              <button
-                type="button"
-                className={`mic-toggle ${voiceRecording ? 'recording' : ''} ${voicePending ? 'pending' : ''}`}
-                onClick={handleMicToggle}
-                disabled={voicePending || !isSecureContext || selectedVoiceProviderUnavailable}
-                title={
-                  selectedVoiceProviderUnavailable
-                    ? 'Deepgram is not configured on the server'
-                    : voiceRecording
-                      ? 'Stop recording'
-                      : 'Start voice recording'
-                }
-              >
-                {voiceRecording ? '⏹' : '🎤'}
-              </button>
-              <button
-                type="button"
-                className="secondary refresh-btn"
-                onClick={refreshWorkspaces}
-                title="Refresh workspaces"
-              >
-                ↻
-              </button>
-            </>
-          )}
+          <button
+            type="button"
+            className="secondary switcher-btn"
+            onClick={openTerminalSwitcher}
+            title="Jump between terminals and tmux tabs (Ctrl+Enter)"
+          >
+            Jump
+          </button>
+          <button
+            type="button"
+            className={`mic-toggle ${voiceRecording ? 'recording' : ''} ${voicePending ? 'pending' : ''}`}
+            onClick={handleMicToggle}
+            disabled={voicePending || !isSecureContext || selectedVoiceProviderUnavailable}
+            title={
+              selectedVoiceProviderUnavailable
+                ? 'Deepgram is not configured on the server'
+                : voiceRecording
+                  ? 'Stop recording'
+                  : 'Start voice recording'
+            }
+          >
+            {voiceRecording ? '⏹' : '🎤'}
+          </button>
+          <button
+            type="button"
+            className="secondary refresh-btn"
+            onClick={refreshWorkspaces}
+            title="Refresh workspaces"
+          >
+            ↻
+          </button>
         </div>
       </header>
 

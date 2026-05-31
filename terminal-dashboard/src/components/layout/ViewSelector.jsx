@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 
-// Controlled view-mode dropdown. `options` is [{ value, label }]; `value` is the
-// active option's value; `onChange(value)` fires on selection.
-export default function ViewSelector({ value, onChange, options }) {
+// Controlled dropdown selector. `options` is [{ value, label }]; `value` is the
+// active option's value; `onChange(value)` fires on selection. `prefix` labels
+// the trigger ("View: …", "Workspace: …"); `placeholder` shows when nothing matches.
+export default function ViewSelector({ value, onChange, options, prefix = 'View', placeholder = '' }) {
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
 
@@ -22,7 +23,7 @@ export default function ViewSelector({ value, onChange, options }) {
     }
   }, [open])
 
-  const activeLabel = options.find((o) => o.value === value)?.label ?? value
+  const activeLabel = options.find((o) => o.value === value)?.label ?? placeholder
 
   return (
     <div className="view-selector" ref={ref}>
@@ -34,7 +35,7 @@ export default function ViewSelector({ value, onChange, options }) {
         aria-expanded={open}
         title="Switch view"
       >
-        View: {activeLabel} ▾
+        {prefix}: {activeLabel} ▾
       </button>
       {open && (
         <ul className="view-selector-menu" role="listbox">
