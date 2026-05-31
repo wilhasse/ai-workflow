@@ -3684,7 +3684,15 @@ button.danger:hover:not(:disabled) {
 
 /* View selector dropdown */
 .view-selector { position: relative; display: inline-block; }
-.view-selector-trigger { white-space: nowrap; }
+/* Fixed width so changing the selected label never resizes the trigger or
+   shifts neighbouring controls (keeps the header layout stable/smooth). */
+.view-selector-trigger {
+  width: 13rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+}
 .view-selector-menu {
   position: absolute;
   top: calc(100% + 4px);
