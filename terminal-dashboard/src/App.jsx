@@ -16,6 +16,7 @@ import WindowTabs from './components/workspace/WindowTabs'
 import TerminalOrganizer from './components/workspace/TerminalOrganizer'
 import VmCreatePanel from './components/vm/VmCreatePanel'
 import TranscriptsView from './components/transcripts/TranscriptsView'
+import AgentHistoryView from './components/history/AgentHistoryView'
 import ViewSelector from './components/layout/ViewSelector'
 
 // Hooks
@@ -199,7 +200,9 @@ function DashboardApp() {
   const [view, setView] = useState(() => {
     if (typeof window === 'undefined') return 'terminal'
     const param = new URLSearchParams(window.location.search).get('view')
-    return param === 'organizer' || param === 'transcripts' || param === 'vm-create' ? param : 'terminal'
+    return param === 'organizer' || param === 'transcripts' || param === 'vm-create' || param === 'agent-history'
+      ? param
+      : 'terminal'
   })
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -1372,6 +1375,7 @@ function DashboardApp() {
               { value: 'terminal', label: 'Terminal' },
               { value: 'organizer', label: 'Organizer' },
               { value: 'transcripts', label: 'Transcripts' },
+              { value: 'agent-history', label: 'Agent History' },
               { value: 'vm-create', label: 'Create VM' },
             ]}
           />
@@ -1413,6 +1417,8 @@ function DashboardApp() {
       <main className="app-main">
         {view === 'transcripts' ? (
           <TranscriptsView active />
+        ) : view === 'agent-history' ? (
+          <AgentHistoryView />
         ) : view === 'vm-create' ? (
           <VmCreatePanel apiBase={API_BASE} />
         ) : view === 'organizer' ? (

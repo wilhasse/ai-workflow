@@ -39,6 +39,7 @@ export default function App() {
   const [hasMore, setHasMore] = useState(true)
   const [syncInfo, setSyncInfo] = useState(null)
   const [stats, setStats] = useState(null)
+  const [error, setError] = useState('')
   const [theme, setTheme] = useState(() => localStorage.getItem('ah-theme') || 'dark')
   const [font, setFont] = useState(() => localStorage.getItem('ah-font') || 'JetBrains Mono')
   const [fontSize, setFontSize] = useState(() => Number(localStorage.getItem('ah-fontsize')) || 14)
@@ -75,6 +76,7 @@ export default function App() {
     setOffset(0)
 
     try {
+      setError('')
       if (opts.query && opts.query.trim()) {
         const data = await searchMessages(opts.query, { ...filters, limit: LIMIT })
         if (fetchId !== myId) return
@@ -90,6 +92,7 @@ export default function App() {
       }
     } catch (err) {
       console.error('Fetch failed:', err)
+      setError(err.message || 'Unable to load conversations')
     } finally {
       if (fetchId === myId) setLoading(false)
     }
@@ -117,6 +120,15 @@ export default function App() {
   })
 
   const handleSearch = () => doFetch(currentFilters())
+  const clearFilters = () => {
+    setQuery('')
+    setVmId('')
+    setSource('')
+    setProject('')
+    setFromDate(defaults.from)
+    setToDate(defaults.to)
+    doFetch({ ...defaults, query: '', vm_id: '', source: '', project: '' })
+  }
 
   // Each handler passes ALL current values + the one that changed
   const handleVmChange = (v) => { setVmId(v); doFetch(currentFilters({ vm_id: v })) }
@@ -156,6 +168,7 @@ export default function App() {
   }
 
   const totalFiles = syncInfo?.reduce((sum, s) => sum + (s.file_count || 0), 0) || 0
+  const vmOptions = Array.from(new Set((syncInfo || []).map((s) => s.vm_id).filter(Boolean))).sort()
   const fmt = (n) => n >= 1e6 ? (n/1e6).toFixed(1) + 'M' : n >= 1e3 ? (n/1e3).toFixed(1) + 'k' : String(n)
 
   return (
@@ -194,7 +207,7 @@ export default function App() {
           <input
             className="search-input"
             type="text"
-            placeholder="Search conversations... (full-text)"
+            placeholder="Search by phrase, issue, host, file, error, command..."
             value={query}
             onChange={e => setQuery(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && handleSearch()}
@@ -202,15 +215,16 @@ export default function App() {
           <button className="btn-buscar" onClick={handleSearch} disabled={loading}>
             {loading ? 'Searching...' : 'Search'}
           </button>
+          <button className="btn-secondary" onClick={clearFilters} disabled={loading}>
+            Reset
+          </button>
         </div>
 
         <div className="filters-row">
           <label className="filter-label">VM:</label>
           <select className="filter-select" value={vmId} onChange={e => handleVmChange(e.target.value)}>
             <option value="">All VMs</option>
-            <option value="dev-vm">dev-vm</option>
-            <option value="godev4">godev4</option>
-            <option value="godev8">godev8</option>
+            {vmOptions.map((vm) => <option key={vm} value={vm}>{vm}</option>)}
           </select>
 
           <label className="filter-label">Source:</label>
@@ -234,6 +248,10 @@ export default function App() {
 
           <label className="filter-label">To:</label>
           <input className="filter-input" type="date" value={toDate} onChange={e => handleToChange(e.target.value)} />
+        </div>
+        {error && <div className="search-error">{error}</div>}
+        <div className="sync-line">
+          {syncInfo && `${fmt(totalFiles)} indexed files across ${vmOptions.length || 0} VM${vmOptions.length === 1 ? '' : 's'}`}
         </div>
       </div>
 

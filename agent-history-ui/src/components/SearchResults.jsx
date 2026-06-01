@@ -18,6 +18,22 @@ function highlightText(text, query) {
   )
 }
 
+function snippetAroundMatch(text, query, size = 360) {
+  if (!text) return ''
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean)
+  const lower = text.toLowerCase()
+  const firstHit = words
+    .map((word) => lower.indexOf(word))
+    .filter((idx) => idx >= 0)
+    .sort((a, b) => a - b)[0]
+
+  if (firstHit == null || text.length <= size) return text.slice(0, size)
+
+  const start = Math.max(0, firstHit - Math.floor(size / 3))
+  const end = Math.min(text.length, start + size)
+  return `${start > 0 ? '...' : ''}${text.slice(start, end)}${end < text.length ? '...' : ''}`
+}
+
 function shortId(id) {
   return id && id.length > 12 ? id.slice(0, 12) + '...' : id
 }
@@ -39,6 +55,9 @@ export default function SearchResults({ results, query, onSelectSession }) {
 
   return (
     <div className="session-list">
+      <div className="results-summary">
+        {dedupedResults.length} result{dedupedResults.length === 1 ? '' : 's'}
+      </div>
       {dedupedResults.map((r, i) => (
         <div
           key={`${r.message_id}-${i}`}
@@ -48,6 +67,7 @@ export default function SearchResults({ results, query, onSelectSession }) {
           <div className="search-result-meta">
             <span className={`badge badge-${r.source}`}>{r.source}</span>
             <span className="badge badge-vm">{r.vm_id}</span>
+            {Number.isFinite(Number(r.relevance)) && <span className="badge badge-rank">rank {Number(r.relevance) + 1}</span>}
             <span className="session-id">{shortId(r.session_id)}</span>
             <span className="session-date">{formatDate(r.ts)}</span>
           </div>
@@ -59,7 +79,7 @@ export default function SearchResults({ results, query, onSelectSession }) {
             </div>
           )}
           <div className="search-result-text">
-            {highlightText(r.content_text?.slice(0, 300), query)}
+            {highlightText(snippetAroundMatch(r.content_text, query), query)}
           </div>
         </div>
       ))}

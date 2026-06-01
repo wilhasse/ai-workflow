@@ -98,23 +98,81 @@ export async function upsertSyncState(records) {
   await batchUpsert('sync_state', cols, rows)
 }
 
+function escapeMatchText(value) {
+  return String(value || '')
+    .replace(/[._\-/\\:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/'/g, "''")
+}
+
+function escapeLikeText(value) {
+  return String(value || '')
+    .replace(/\\/g, '\\\\')
+    .replace(/%/g, '\\%')
+    .replace(/_/g, '\\_')
+}
+
+function buildTextPredicate(column, escape, rawQuery) {
+  const phrase = escapeMatchText(rawQuery)
+  const words = phrase.split(/\s+/).filter((word) => word.length >= 2).join(' ')
+  const conditions = [`LOWER(${column}) LIKE LOWER(${escape(`%${escapeLikeText(rawQuery)}%`)}) ESCAPE '\\\\'`]
+
+  if (phrase && phrase.includes(' ')) {
+    conditions.push(`${column} MATCH_PHRASE '${phrase}'`)
+  }
+  if (words) {
+    conditions.push(`${column} MATCH_ALL '${words}'`)
+    conditions.push(`${column} MATCH_ANY '${words}'`)
+  }
+
+  return `(${conditions.join(' OR ')})`
+}
+
+function buildRelevanceExpr(column, escape, rawQuery) {
+  const phrase = escapeMatchText(rawQuery)
+  const words = phrase.split(/\s+/).filter((word) => word.length >= 2).join(' ')
+  const cases = [
+    `WHEN LOWER(${column}) LIKE LOWER(${escape(`%${escapeLikeText(rawQuery)}%`)}) ESCAPE '\\\\' THEN 0`,
+  ]
+
+  if (phrase && phrase.includes(' ')) {
+    cases.push(`WHEN ${column} MATCH_PHRASE '${phrase}' THEN 1`)
+  }
+  if (words) {
+    cases.push(`WHEN ${column} MATCH_ALL '${words}' THEN 2`)
+    cases.push(`WHEN ${column} MATCH_ANY '${words}' THEN 3`)
+  }
+
+  return `CASE ${cases.join(' ')} ELSE 9 END`
+}
+
 // Query helpers for the read API
-export function buildSearchMessagesSql(escape, q, { source, vm_id, from, to, limit = 50, offset = 0 } = {}) {
-  // Split query on special chars into words, drop short tokens (tokenizer ignores them)
-  const words = q.replace(/[._\-/\\]+/g, ' ').trim().split(/\s+/).filter(w => w.length >= 3).join(' ').replace(/'/g, "''")
-  let where = `m.content_text MATCH_ALL '${words}'`
+export function buildSearchMessagesSql(escape, q, { source, vm_id, project, from, to, limit = 50, offset = 0 } = {}) {
+  const sessionLookup = `
+    SELECT session_id, vm_id, MAX(project) AS project, MAX(display_text) AS session_display
+    FROM agent_sessions
+    GROUP BY session_id, vm_id
+  `
+  let where = buildTextPredicate('m.content_text', escape, q)
   if (source) where += ` AND m.source = ${escape(source)}`
   if (vm_id) where += ` AND m.vm_id = ${escape(vm_id)}`
+  if (project) where += ` AND s.project LIKE ${escape('%' + escapeLikeText(project) + '%')} ESCAPE '\\\\'`
   if (from) where += ` AND m.ts >= ${escape(from)}`
   if (to) where += ` AND m.ts <= ${escape(to + ' 23:59:59')}`
+  const relevance = buildRelevanceExpr('m.content_text', escape, q)
+
   return `
     SELECT DISTINCT m.message_id, m.session_id, m.vm_id, m.source, m.msg_role,
            m.content_text, m.ts, m.seq_num,
-           NULL AS project,
-           NULL AS session_display
+           s.project,
+           s.session_display,
+           ${relevance} AS relevance
     FROM agent_messages m
+    LEFT JOIN (${sessionLookup}) s
+      ON s.session_id = m.session_id AND s.vm_id = m.vm_id
     WHERE ${where}
-    ORDER BY m.ts DESC
+    ORDER BY relevance ASC, m.ts DESC
     LIMIT ${Number(limit)} OFFSET ${Number(offset)}
   `
 }
@@ -124,6 +182,52 @@ export async function searchMessages(q, options = {}) {
   const sql = buildSearchMessagesSql(value => pool.escape(value), q, options)
   const [rows] = await pool.query(sql)
   return rows
+}
+
+async function enrichSessionSummaries(rows) {
+  const sessionsNeedingSummary = rows.filter(row => !row.display_text || !Number(row.message_count))
+  if (!sessionsNeedingSummary.length) return rows
+
+  const pool = getPool()
+  const seen = new Set()
+  const pairs = sessionsNeedingSummary
+    .filter(row => {
+      const key = `${row.session_id}::${row.vm_id}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+    .map(row => [row.session_id, row.vm_id])
+
+  const conditions = pairs.map(() => '(session_id = ? AND vm_id = ?)').join(' OR ')
+  const values = pairs.flat()
+  const [summaryRows] = await pool.query(`
+    SELECT session_id, vm_id, content_text, message_count
+    FROM (
+      SELECT
+        session_id,
+        vm_id,
+        content_text,
+        COUNT(*) OVER (PARTITION BY session_id, vm_id) AS message_count,
+        ROW_NUMBER() OVER (PARTITION BY session_id, vm_id ORDER BY seq_num ASC, ts ASC) AS row_num
+      FROM agent_messages
+      WHERE (${conditions})
+        AND content_text IS NOT NULL
+        AND content_text != ''
+    ) summaries
+    WHERE row_num = 1
+  `, values)
+
+  const summaries = new Map(summaryRows.map(row => [`${row.session_id}::${row.vm_id}`, row]))
+  return rows.map(row => {
+    const summary = summaries.get(`${row.session_id}::${row.vm_id}`)
+    if (!summary) return row
+    return {
+      ...row,
+      display_text: row.display_text || summary.content_text?.slice(0, 280) || null,
+      message_count: Number(row.message_count) || Number(summary.message_count) || 0,
+    }
+  })
 }
 
 export async function listSessions({ source, vm_id, project, from, to, limit = 50, offset = 0 } = {}) {
@@ -137,7 +241,7 @@ export async function listSessions({ source, vm_id, project, from, to, limit = 5
   const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : ''
   const sql = `SELECT * FROM agent_sessions ${where} ORDER BY started_at DESC LIMIT ${Number(limit)} OFFSET ${Number(offset)}`
   const [rows] = await pool.query(sql)
-  return rows
+  return enrichSessionSummaries(rows)
 }
 
 export async function getSession(sessionId) {

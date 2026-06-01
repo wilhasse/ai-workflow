@@ -1,4 +1,20 @@
-const API = window.AGENT_HISTORY_API || 'http://10.1.0.7:5002'
+function detectApiBase() {
+  if (window.AGENT_HISTORY_API) {
+    return window.AGENT_HISTORY_API
+  }
+
+  if (window.location.pathname.startsWith('/agent-history')) {
+    return `${window.location.origin}/api/agent-history`
+  }
+
+  if (window.location.port === '5003') {
+    return `${window.location.protocol}//${window.location.hostname}:5002`
+  }
+
+  return 'http://10.1.0.7:5002'
+}
+
+const API = detectApiBase()
 
 function qs(params) {
   const p = new URLSearchParams()
