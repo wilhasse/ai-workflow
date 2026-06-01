@@ -2,7 +2,6 @@
   "name": "proxmox-test-vm",
   "private": true,
   "version": "0.1.0",
-  "type": "module",
   "dependencies": {
     "@muhlba91/pulumi-proxmoxve": "^8.2.1",
     "@pulumi/pulumi": "^3.167.0"
