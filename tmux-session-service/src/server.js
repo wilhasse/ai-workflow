@@ -37,8 +37,6 @@ const config = {
   pulumiBin: process.env.PULUMI_BIN ?? 'pulumi',
   pulumiWorkDir: process.env.PULUMI_WORK_DIR ?? path.join(os.homedir(), 'ai-workflow', 'infra', 'proxmox-test-vm'),
   vmCreateTimeoutMs: Number.parseInt(process.env.VM_CREATE_TIMEOUT_MS ?? String(20 * 60 * 1000), 10),
-  vmIpPollAttempts: Number.parseInt(process.env.VM_IP_POLL_ATTEMPTS ?? '6', 10),
-  vmIpPollIntervalMs: Number.parseInt(process.env.VM_IP_POLL_INTERVAL_MS ?? '10000', 10),
 }
 const DEFAULT_HISTORY_LINES = 1000
 const MAX_HISTORY_LINES = 20000
@@ -2189,38 +2187,6 @@ const parsePulumiOutputs = (raw) => {
   }
 }
 
-const refreshVmIp = async (job) => {
-  for (let attempt = 1; attempt <= config.vmIpPollAttempts; attempt += 1) {
-    job.ipStatus = 'pending'
-    appendVmJobLog(job, `Checking DHCP IP (${attempt}/${config.vmIpPollAttempts})...`)
-    await runPulumiJobCommand(job, ['refresh', '--yes', '--non-interactive', '--stack', job.stackName], {
-      timeoutMs: Math.min(config.vmCreateTimeoutMs, 5 * 60 * 1000),
-      allowFailure: true,
-    })
-    const outputs = await runPulumiJobCommand(job, ['stack', 'output', '--json', '--stack', job.stackName], {
-      timeoutMs: 60 * 1000,
-      allowFailure: true,
-    })
-    const parsed = parsePulumiOutputs(outputs.stdout)
-    if (parsed.vmId || parsed.ipv4 || parsed.ipAddresses.length) {
-      job.vm = {
-        ...(job.vm || {}),
-        vmId: parsed.vmId ?? job.vm?.vmId ?? null,
-        ipv4: parsed.ipv4 || job.vm?.ipv4 || '',
-        ipAddresses: parsed.ipAddresses.length ? parsed.ipAddresses : (job.vm?.ipAddresses || []),
-      }
-    }
-    if (parsed.ipv4) {
-      job.ipStatus = 'found'
-      return
-    }
-    if (attempt < config.vmIpPollAttempts) {
-      await sleep(config.vmIpPollIntervalMs)
-    }
-  }
-  job.ipStatus = 'unavailable'
-}
-
 const runVmCreateJob = async (job) => {
   activeVmStacks.add(job.stackName)
   try {
@@ -2244,7 +2210,11 @@ const runVmCreateJob = async (job) => {
     }
     job.ipStatus = parsed.ipv4 ? 'found' : 'pending'
     if (!parsed.ipv4) {
-      await refreshVmIp(job)
+      job.ipStatus = 'unavailable'
+      appendVmJobLog(
+        job,
+        'VM created, but DHCP IP was not reported by qemu-guest-agent. Install/enable qemu-guest-agent in the template to show IPs automatically.'
+      )
     }
     job.status = 'succeeded'
     job.finishedAt = new Date().toISOString()
