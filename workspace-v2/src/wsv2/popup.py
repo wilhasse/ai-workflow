@@ -18,7 +18,7 @@ from .window_focus import active_window_title, terminal_target_from_window_title
 PROGRAM_CLASS = "workspace-v2-popup"
 WINDOW_ROLE = "workspace-v2-popup"
 WINDOW_TITLE = "Workspace Launcher"
-SHORTCUT_HELP = "↑↓ Navigate · Enter Open · Ctrl+G Active only · Ctrl+N New tab · Alt+L Label · Alt+C Check · Alt+I Idle · Alt+A Active"
+SHORTCUT_HELP = "↑↓ Navigate · Enter Open · Ctrl+G Active only · Ctrl+N New tab · F2/Ctrl+L Label · Alt+C Check · Alt+I Idle · Alt+A Active"
 
 
 @dataclass(slots=True)
@@ -436,9 +436,13 @@ class WorkspacePopup(Gtk.Window):
         return True
 
     def _handle_edit_shortcut(self, event: Gdk.EventKey) -> bool:
-        if not event.state & Gdk.ModifierType.MOD1_MASK:
-            return False
         key_name = (Gdk.keyval_name(event.keyval) or "").lower()
+        state = event.state & Gtk.accelerator_get_default_mod_mask()
+        if key_name == "f2" or (state & Gdk.ModifierType.CONTROL_MASK and key_name == "l"):
+            self._rename_selected()
+            return True
+        if not state & Gdk.ModifierType.MOD1_MASK:
+            return False
         if key_name == "l":
             self._rename_selected()
             return True

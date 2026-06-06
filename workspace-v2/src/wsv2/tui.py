@@ -8,7 +8,7 @@ from typing import Iterable
 from .actions import TerminalStatus, WorkspaceActions, terminal_recent_score, terminal_status_rank
 
 
-SHORTCUT_HELP = 'Enter: switch  Ctrl+G: active only  Ctrl+N: new tab  Alt+L: label  Alt+C: check  Alt+I: idle  Alt+A: active'
+SHORTCUT_HELP = 'Enter: switch  Ctrl+G: active only  Ctrl+N: new tab  F2/Ctrl+L: label  Alt+C: check  Alt+I: idle  Alt+A: active'
 
 
 @dataclass(slots=True)
@@ -156,6 +156,10 @@ class WorkspaceTui:
                     target = self._create_from_status(filtered[self.index].status)
                     if target:
                         return target
+                continue
+            if key in (12, curses.KEY_F2):
+                if filtered:
+                    self._prompt_label(stdscr, filtered[self.index].status)
                 continue
             if key == curses.KEY_UP:
                 self.index = max(0, self.index - 1)

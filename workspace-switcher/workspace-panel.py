@@ -1208,7 +1208,7 @@ class TerminalSwitcherDialog(Gtk.Dialog):
         shortcut_help = Gtk.Label()
         shortcut_help.set_markup(
             '<span size="small" foreground="#8fa1b6">'
-            '↑↓ Navigate · Enter Open · Ctrl+G Active only · Ctrl+N New tab · Alt+L Label · Alt+C Check · Alt+I Idle · Alt+A Active'
+            '↑↓ Navigate · Enter Open · Ctrl+G Active only · Ctrl+N New tab · F2/Ctrl+L Label · Alt+C Check · Alt+I Idle · Alt+A Active'
             '</span>'
         )
         shortcut_help.set_xalign(0)
@@ -1453,6 +1453,9 @@ class TerminalSwitcherDialog(Gtk.Dialog):
             return True
         if state & Gdk.ModifierType.CONTROL_MASK and keyval in (Gdk.KEY_n, Gdk.KEY_N):
             self._create_from_selected(widget)
+            return True
+        if keyval == Gdk.KEY_F2 or (state & Gdk.ModifierType.CONTROL_MASK and keyval in (Gdk.KEY_l, Gdk.KEY_L)):
+            self._rename_selected(widget)
             return True
         if state & Gdk.ModifierType.MOD1_MASK:
             if keyval in (Gdk.KEY_l, Gdk.KEY_L):

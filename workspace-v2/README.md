@@ -37,7 +37,7 @@ Surface selection order:
 2. tmux popup when running inside tmux without a GUI display
 3. inline TUI when running on a normal TTY without tmux
 
-All popup surfaces show the edit shortcuts before the search field. `Alt+L` labels the selected terminal, `Alt+C` marks it for checking, `Alt+I` marks it idle, and `Alt+A` clears the flag.
+All popup surfaces show the edit shortcuts before the search field. `F2`, `Ctrl+L`, or `Alt+L` labels the selected terminal, `Alt+C` marks it for checking, `Alt+I` marks it idle, and `Alt+A` clears the flag.
 `Idle` keeps the tab in its label/recent activity position, changes its color, and parks only that tmux window's Codex/Claude agents. Clearing `Idle` or changing it to `Check` resumes the same window.
 
 ## Canonical host model
