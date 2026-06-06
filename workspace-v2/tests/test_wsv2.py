@@ -31,6 +31,8 @@ from wsv2.codex_parking import (
     unpark_target,
 )
 from wsv2.session_archive import (
+    _last_codex_user_message,
+    build_archive_record,
     build_record_command,
     build_records_for_pane,
     format_archive_records,
@@ -1117,6 +1119,45 @@ class SessionArchiveTests(unittest.TestCase):
         self.assertTrue(all(record['tmux']['session'] == 'harness' for record in records))
         resume_commands = [record['resumeCommand'] for record in records]
         self.assertTrue(any('codex resume codex-1' in command for command in resume_commands))
+
+    def test_last_codex_user_message_reads_latest_real_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            rollout_path = Path(tmp) / 'rollout.jsonl'
+            rollout_path.write_text(
+                '\n'.join(
+                    [
+                        json.dumps({'type': 'event_msg', 'payload': {'type': 'user_message', 'message': 'first prompt'}}),
+                        json.dumps({'type': 'response_item', 'payload': {'type': 'message', 'role': 'user', 'content': []}}),
+                        json.dumps({'type': 'event_msg', 'payload': {'type': 'agent_message', 'message': 'ignored'}}),
+                        json.dumps({'type': 'event_msg', 'payload': {'type': 'user_message', 'message': 'last prompt'}}),
+                    ]
+                ),
+                encoding='utf-8',
+            )
+
+            self.assertEqual(_last_codex_user_message(rollout_path), 'last prompt')
+
+    def test_build_archive_record_uses_last_user_message_for_last_prompt(self) -> None:
+        record = build_archive_record(
+            kind='codex',
+            session={
+                'resumeId': 'codex-1',
+                'cwd': '/repo',
+                'title': 'Fallback title',
+                'firstUserMessage': 'first prompt',
+                'preview': 'preview summary',
+                'lastUserMessage': 'last prompt',
+                'updatedAt': 300,
+            },
+            pane=None,
+            host_id='vm10',
+            host_name='Main Desktop',
+            now_ms=1000,
+            active=False,
+        )
+
+        self.assertEqual(record['firstPrompt'], 'first prompt')
+        self.assertEqual(record['lastPrompt'], 'last prompt')
 
     def test_scan_local_host_prefers_exact_agent_rows_over_cwd_matches(self) -> None:
         pane = {

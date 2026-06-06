@@ -332,6 +332,7 @@ const setWindowMetadata = async (host, sessionId, windowIndex, metadata = {}, wi
   state.windowLabels = labels
 
   const key = windowLabelKey(host.id, sessionId, windowIndex, windowId)
+  const fallbackKey = legacyWindowLabelKey(host.id, sessionId, windowIndex)
   const candidateKeys = windowLabelCandidateKeys(host, sessionId, windowIndex, windowId)
   const existingKey = candidateKeys.find((candidateKey) => (
     labels[candidateKey] && typeof labels[candidateKey] === 'object'
@@ -346,20 +347,19 @@ const setWindowMetadata = async (host, sessionId, windowIndex, metadata = {}, wi
     ? normalizeWindowStatus(metadata.status)
     : normalizeWindowStatus(existing.status)
   if (normalizedLabel || normalizedStatus) {
-    labels[key] = {
+    const nextMetadata = {
       updatedAt: Math.floor(Date.now() / 1000),
     }
     if (normalizedLabel) {
-      labels[key].label = normalizedLabel
+      nextMetadata.label = normalizedLabel
     }
     if (normalizedStatus) {
-      labels[key].status = normalizedStatus
+      nextMetadata.status = normalizedStatus
     }
-    candidateKeys.forEach((candidateKey) => {
-      if (candidateKey !== key) {
-        delete labels[candidateKey]
-      }
-    })
+    labels[key] = { ...nextMetadata }
+    if (fallbackKey !== key) {
+      labels[fallbackKey] = { ...nextMetadata }
+    }
   } else {
     candidateKeys.forEach((candidateKey) => {
       delete labels[candidateKey]
@@ -1383,6 +1383,187 @@ const loadArchiveWorkspaces = async (hosts, seenWorkspaces) => {
       'archive',
     ),
   )
+}
+
+const compactRecoveryText = (value, maxLength = 180) => {
+  const normalized = String(value || '').replace(/\s+/g, ' ').trim()
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 3)}...` : normalized
+}
+
+const recoveryRecordScore = (record) => Math.max(
+  Number(record?.lastActiveAt || 0),
+  Number(record?.activityAt || 0),
+  Number(record?.lastSeenAt || 0),
+  Number(record?.updatedAt || 0),
+)
+
+const recoveryLabelForRecord = (record, hostsById, labels) => {
+  const tmuxData = record?.tmux || {}
+  const host = hostsById.get(String(record?.hostId || '')) || {
+    id: String(record?.hostId || config.mobileSelfHostId),
+    legacyIds: [],
+  }
+  const sessionId = String(tmuxData.session || '')
+  const windowIndex = Number(tmuxData.windowIndex)
+  if (!sessionId || !Number.isFinite(windowIndex)) {
+    return { label: '', status: '' }
+  }
+  return {
+    label: resolveWindowLabel(labels, host, sessionId, windowIndex, tmuxData.windowId),
+    status: resolveWindowStatus(labels, host, sessionId, windowIndex, tmuxData.windowId),
+  }
+}
+
+const buildRecoveryIndex = async (searchParams = new URLSearchParams()) => {
+  const archive = await readOptionalJsonFile(config.sessionArchivePath)
+  const catalog = await loadMobileCatalog().catch(() => ({ hosts: [], workspaces: [] }))
+  const launcherState = await readLauncherState()
+  const labels = launcherState.windowLabels && typeof launcherState.windowLabels === 'object'
+    ? launcherState.windowLabels
+    : {}
+  const records = Array.isArray(archive?.records) ? archive.records : []
+  const hostsById = new Map(catalog.hosts.map((host) => [host.id, host]))
+  const workspacesByKey = new Map(catalog.workspaces.map((workspace) => [`${workspace.hostId}:${workspace.id}`, workspace]))
+
+  const hostFilter = String(searchParams.get('host') || '').trim().toLowerCase()
+  const workspaceFilter = String(searchParams.get('workspace') || '').trim().toLowerCase()
+  const toolFilter = String(searchParams.get('tool') || '').trim().toLowerCase()
+  const query = String(searchParams.get('q') || '').trim().toLowerCase()
+  const limit = Math.min(Math.max(Number.parseInt(searchParams.get('limit') || '800', 10) || 800, 1), 2000)
+
+  const seen = new Set()
+  const rows = []
+  for (const record of records) {
+    const resumeId = String(record?.resumeId || '').trim()
+    const kind = String(record?.kind || '').trim()
+    if (!resumeId || !kind) {
+      continue
+    }
+    const dedupeKey = `${kind}:${resumeId}`
+    if (seen.has(dedupeKey)) {
+      continue
+    }
+    seen.add(dedupeKey)
+
+    const tmuxData = record?.tmux || {}
+    const hostId = String(record?.hostId || '')
+    const sessionId = String(tmuxData.session || '')
+    if (hostFilter && hostId.toLowerCase() !== hostFilter) {
+      continue
+    }
+    if (workspaceFilter && sessionId.toLowerCase() !== workspaceFilter) {
+      continue
+    }
+    if (toolFilter && kind.toLowerCase() !== toolFilter) {
+      continue
+    }
+
+    const workspace = workspacesByKey.get(`${hostId}:${sessionId}`)
+    const { label, status } = recoveryLabelForRecord(record, hostsById, labels)
+    const firstPrompt = compactRecoveryText(record.firstPrompt || record.firstUserMessage || record.title || '', 300)
+    const lastPrompt = compactRecoveryText(record.lastPrompt || record.preview || record.title || record.firstPrompt || '', 300)
+    const summary = compactRecoveryText(record.title || firstPrompt || lastPrompt || 'Agent session', 220)
+    const cwd = String(record.cwd || tmuxData.paneCwd || '')
+    const searchBlob = [
+      hostId,
+      sessionId,
+      workspace?.name,
+      kind,
+      resumeId,
+      label,
+      status,
+      cwd,
+      summary,
+      firstPrompt,
+      lastPrompt,
+    ].join(' ').toLowerCase()
+    if (query && !searchBlob.includes(query)) {
+      continue
+    }
+
+    const score = recoveryRecordScore(record)
+    rows.push({
+      id: String(record.id || dedupeKey),
+      hostId,
+      hostName: record.hostName || hostsById.get(hostId)?.name || hostId,
+      workspaceId: sessionId || '',
+      workspaceName: workspace?.name || (sessionId ? formatArchivedWorkspaceName(sessionId) : '(no tmux)'),
+      terminalIndex: Number.isFinite(Number(tmuxData.windowIndex)) ? Number(tmuxData.windowIndex) : null,
+      terminalId: tmuxData.windowId || '',
+      tmuxName: tmuxData.windowName || '',
+      tool: kind,
+      resumeId,
+      label,
+      status,
+      cwd,
+      summary,
+      firstPrompt,
+      lastPrompt,
+      active: Boolean(record.active),
+      parked: Boolean(record.parked),
+      updatedAt: Number(record.updatedAt || 0),
+      lastSeenAt: Number(record.lastSeenAt || 0),
+      lastActiveAt: Number(record.lastActiveAt || 0),
+      score,
+      resumeCommand: record.resumeCommand || buildRecoveryResumeCommand(kind, cwd, resumeId),
+    })
+  }
+
+  rows.sort((left, right) => {
+    const leftWorkspace = `${left.hostName}:${left.workspaceName}`.toLowerCase()
+    const rightWorkspace = `${right.hostName}:${right.workspaceName}`.toLowerCase()
+    if (leftWorkspace !== rightWorkspace) {
+      return leftWorkspace.localeCompare(rightWorkspace)
+    }
+    const leftIndex = left.terminalIndex ?? 9999
+    const rightIndex = right.terminalIndex ?? 9999
+    if (leftIndex !== rightIndex) {
+      return leftIndex - rightIndex
+    }
+    return right.score - left.score
+  })
+
+  const workspaceCounts = new Map()
+  rows.forEach((row) => {
+    const key = `${row.hostId}:${row.workspaceId || '(no tmux)'}`
+    const current = workspaceCounts.get(key) || {
+      hostId: row.hostId,
+      hostName: row.hostName,
+      workspaceId: row.workspaceId,
+      workspaceName: row.workspaceName,
+      count: 0,
+    }
+    current.count += 1
+    workspaceCounts.set(key, current)
+  })
+
+  return {
+    generatedAt: Date.now(),
+    archiveUpdatedAt: Number(archive?.updatedAt || 0),
+    archivePath: config.sessionArchivePath,
+    labelPath: config.launcherStatePath,
+    total: rows.length,
+    workspaces: Array.from(workspaceCounts.values()).sort((left, right) =>
+      `${left.hostName}:${left.workspaceName}`.localeCompare(`${right.hostName}:${right.workspaceName}`),
+    ),
+    records: rows.slice(0, limit),
+  }
+}
+
+const buildRecoveryResumeCommand = (kind, cwd, resumeId) => {
+  const safeCwd = normalizePath(cwd || os.homedir())
+  if (kind === 'claude') {
+    return `cd ${shellQuote(safeCwd)} && claude --resume ${shellQuote(resumeId)}`
+  }
+  return `cd ${shellQuote(safeCwd)} && codex resume ${shellQuote(resumeId)}`
+}
+
+const handleRecoveryIndex = async (res, searchParams) => {
+  try {
+    respond(res, 200, await buildRecoveryIndex(searchParams))
+  } catch (error) {
+    respond(res, 500, { error: safeErrorMessage(error) })
+  }
 }
 
 const loadMobileCatalog = async () => {
@@ -2813,6 +2994,10 @@ const server = http.createServer(async (req, res) => {
   }
   if (method === 'GET' && pathName === '/terminal-tabs') {
     await handleTerminalTabs(res)
+    return
+  }
+  if (method === 'GET' && pathName === '/recovery-index') {
+    await handleRecoveryIndex(res, parsed.searchParams)
     return
   }
   if (method === 'GET' && pathName === '/vm-templates') {

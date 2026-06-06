@@ -17,6 +17,7 @@ import TerminalOrganizer from './components/workspace/TerminalOrganizer'
 import VmCreatePanel from './components/vm/VmCreatePanel'
 import TranscriptsView from './components/transcripts/TranscriptsView'
 import AgentHistoryView from './components/history/AgentHistoryView'
+import RecoveryIndexView from './components/recovery/RecoveryIndexView'
 import ViewSelector from './components/layout/ViewSelector'
 
 // Hooks
@@ -200,7 +201,7 @@ function DashboardApp() {
   const [view, setView] = useState(() => {
     if (typeof window === 'undefined') return 'terminal'
     const param = new URLSearchParams(window.location.search).get('view')
-    return param === 'organizer' || param === 'transcripts' || param === 'vm-create' || param === 'agent-history'
+    return param === 'organizer' || param === 'transcripts' || param === 'vm-create' || param === 'agent-history' || param === 'recovery-index'
       ? param
       : 'terminal'
   })
@@ -1376,6 +1377,7 @@ function DashboardApp() {
               { value: 'organizer', label: 'Organizer' },
               { value: 'transcripts', label: 'Transcripts' },
               { value: 'agent-history', label: 'Agent History' },
+              { value: 'recovery-index', label: 'Recovery Index' },
               { value: 'vm-create', label: 'Create VM' },
             ]}
           />
@@ -1419,6 +1421,8 @@ function DashboardApp() {
           <TranscriptsView active />
         ) : view === 'agent-history' ? (
           <AgentHistoryView />
+        ) : view === 'recovery-index' ? (
+          <RecoveryIndexView />
         ) : view === 'vm-create' ? (
           <VmCreatePanel apiBase={API_BASE} />
         ) : view === 'organizer' ? (

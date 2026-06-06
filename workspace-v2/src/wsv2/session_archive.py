@@ -272,6 +272,14 @@ def build_archive_record(
         "hostName": host_name,
         "cwd": cwd,
         "title": title,
+        "firstPrompt": str(session.get("firstUserMessage") or session.get("title") or ""),
+        "lastPrompt": str(
+            session.get("lastUserMessage")
+            or session.get("preview")
+            or session.get("title")
+            or session.get("firstUserMessage")
+            or ""
+        ),
         "updatedAt": int(session.get("updatedAt") or session.get("startedAt") or now_ms),
         "activityAt": _pane_activity_ms(pane),
         "startedAt": session.get("startedAt"),
@@ -917,9 +925,11 @@ def _load_codex_threads() -> list[dict[str, Any]]:
             """
             select
                 id,
+                rollout_path,
                 cwd,
                 title,
                 first_user_message,
+                preview,
                 created_at,
                 updated_at,
                 created_at_ms,
@@ -942,9 +952,11 @@ def _load_codex_threads() -> list[dict[str, Any]]:
     for row in rows:
         (
             thread_id,
+            rollout_path,
             cwd,
             title,
             first_user_message,
+            preview,
             created_at,
             updated_at,
             created_at_ms,
@@ -952,12 +964,15 @@ def _load_codex_threads() -> list[dict[str, Any]]:
             model,
             reasoning_effort,
         ) = row
+        last_user_message = _last_codex_user_message(Path(str(rollout_path or "")).expanduser())
         threads.append(
             {
                 "resumeId": str(thread_id),
                 "cwd": str(cwd or Path.home()),
                 "title": str(title or first_user_message or "Codex session"),
                 "firstUserMessage": str(first_user_message or ""),
+                "preview": str(preview or ""),
+                "lastUserMessage": last_user_message,
                 "startedAt": _int_or_none(created_at_ms) or ((_int_or_none(created_at) or 0) * 1000),
                 "updatedAt": _int_or_none(updated_at_ms) or ((_int_or_none(updated_at) or 0) * 1000),
                 "model": model,
@@ -965,6 +980,30 @@ def _load_codex_threads() -> list[dict[str, Any]]:
             }
         )
     return threads
+
+
+def _last_codex_user_message(rollout_path: Path) -> str:
+    if not rollout_path.exists() or not rollout_path.is_file():
+        return ""
+    last_message = ""
+    try:
+        with rollout_path.open(encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("type") != "event_msg":
+                    continue
+                payload = event.get("payload") or {}
+                if payload.get("type") != "user_message":
+                    continue
+                message = str(payload.get("message") or "").strip()
+                if message:
+                    last_message = message
+    except OSError:
+        return ""
+    return last_message
 
 
 def _match_candidates_by_cwd(
