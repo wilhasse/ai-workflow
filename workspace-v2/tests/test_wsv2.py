@@ -1159,6 +1159,25 @@ class SessionArchiveTests(unittest.TestCase):
         self.assertEqual(record['firstPrompt'], 'first prompt')
         self.assertEqual(record['lastPrompt'], 'last prompt')
 
+    def test_build_archive_record_does_not_use_generic_title_as_prompt(self) -> None:
+        record = build_archive_record(
+            kind='codex',
+            session={
+                'resumeId': 'codex-1',
+                'cwd': '/repo',
+                'title': 'Codex session',
+                'updatedAt': 300,
+            },
+            pane=None,
+            host_id='vm10',
+            host_name='Main Desktop',
+            now_ms=1000,
+            active=False,
+        )
+
+        self.assertEqual(record['firstPrompt'], '')
+        self.assertEqual(record['lastPrompt'], '')
+
     def test_scan_local_host_prefers_exact_agent_rows_over_cwd_matches(self) -> None:
         pane = {
             'session': 'harness',

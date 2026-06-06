@@ -272,11 +272,10 @@ def build_archive_record(
         "hostName": host_name,
         "cwd": cwd,
         "title": title,
-        "firstPrompt": str(session.get("firstUserMessage") or session.get("title") or ""),
+        "firstPrompt": str(session.get("firstUserMessage") or ""),
         "lastPrompt": str(
             session.get("lastUserMessage")
             or session.get("preview")
-            or session.get("title")
             or session.get("firstUserMessage")
             or ""
         ),

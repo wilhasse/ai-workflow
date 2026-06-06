@@ -73,8 +73,8 @@ function RecoveryRow({ record }) {
           {record.active && <span className="ri-status active">active</span>}
         </div>
         <div className="ri-prompts">
-          <div><strong>First:</strong> {record.firstPrompt || record.summary || 'Agent session'}</div>
-          <div><strong>Last:</strong> {record.lastPrompt || record.summary || 'Agent session'}</div>
+          <div><strong>First:</strong> {record.firstPrompt || 'No prompt captured'}</div>
+          <div><strong>Last:</strong> {record.lastPrompt || 'No prompt captured'}</div>
         </div>
         <div className="ri-meta">
           <span>{record.hostName || record.hostId}</span>

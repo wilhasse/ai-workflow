@@ -1390,6 +1390,13 @@ const compactRecoveryText = (value, maxLength = 180) => {
   return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 3)}...` : normalized
 }
 
+const cleanRecoveryPrompt = (value) => {
+  const normalized = compactRecoveryText(value, 300)
+  return normalized === 'Codex session' || normalized === 'Claude session' || normalized === 'Agent session'
+    ? ''
+    : normalized
+}
+
 const recoveryRecordScore = (record) => Math.max(
   Number(record?.lastActiveAt || 0),
   Number(record?.activityAt || 0),
@@ -1460,8 +1467,8 @@ const buildRecoveryIndex = async (searchParams = new URLSearchParams()) => {
 
     const workspace = workspacesByKey.get(`${hostId}:${sessionId}`)
     const { label, status } = recoveryLabelForRecord(record, hostsById, labels)
-    const firstPrompt = compactRecoveryText(record.firstPrompt || record.firstUserMessage || record.title || '', 300)
-    const lastPrompt = compactRecoveryText(record.lastPrompt || record.preview || record.title || record.firstPrompt || '', 300)
+    const firstPrompt = cleanRecoveryPrompt(record.firstPrompt || record.firstUserMessage || '')
+    const lastPrompt = cleanRecoveryPrompt(record.lastPrompt || record.preview || record.firstPrompt || '')
     const summary = compactRecoveryText(record.title || firstPrompt || lastPrompt || 'Agent session', 220)
     const cwd = String(record.cwd || tmuxData.paneCwd || '')
     const searchBlob = [
