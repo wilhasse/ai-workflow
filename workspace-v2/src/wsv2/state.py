@@ -171,7 +171,9 @@ class LauncherState:
             labels = {}
             payload["windowLabels"] = labels
 
-        key = window_stable_key(host_id, session_id, window_id) or window_label_key(host_id, session_id, window_index)
+        index_key = window_label_key(host_id, session_id, window_index)
+        stable_key = window_stable_key(host_id, session_id, window_id)
+        key = stable_key or index_key
         candidate_keys = window_metadata_candidate_keys(host_id, session_id, window_index, window_id)
         existing = {}
         for candidate_key in candidate_keys:
@@ -182,14 +184,14 @@ class LauncherState:
         normalized_label = normalize_window_label(label if label is not None else existing.get("label"))
         normalized_status = normalize_terminal_status(status if status is not None else existing.get("status"))
         if normalized_label or normalized_status:
-            labels[key] = {"updatedAt": int(time.time())}
+            metadata = {"updatedAt": int(time.time())}
             if normalized_label:
-                labels[key]["label"] = normalized_label
+                metadata["label"] = normalized_label
             if normalized_status:
-                labels[key]["status"] = normalized_status
-            for candidate_key in candidate_keys:
-                if candidate_key != key:
-                    labels.pop(candidate_key, None)
+                metadata["status"] = normalized_status
+            labels[key] = dict(metadata)
+            if stable_key and index_key != key:
+                labels[index_key] = dict(metadata)
         else:
             for candidate_key in candidate_keys:
                 labels.pop(candidate_key, None)

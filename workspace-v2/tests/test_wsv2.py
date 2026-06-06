@@ -459,8 +459,9 @@ class LauncherStateTests(unittest.TestCase):
 
         self.assertEqual(metadata, {'label': 'RENAC calls', 'status': 'idle'})
         self.assertIn('vm9:dbtools@42', labels)
-        self.assertNotIn('vm9:dbtools#2', labels)
+        self.assertIn('vm9:dbtools#2', labels)
         self.assertEqual(labels['vm9:dbtools@42']['label'], 'RENAC calls')
+        self.assertEqual(labels['vm9:dbtools#2']['label'], 'RENAC calls')
         self.assertEqual(shifted_label, 'RENAC calls')
 
 

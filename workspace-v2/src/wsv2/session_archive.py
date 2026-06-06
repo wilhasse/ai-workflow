@@ -32,6 +32,7 @@ KNOWN_RESUME_FLAGS = {
 _PANE_FIELDS = (
     "#{session_name}",
     "#{window_index}",
+    "#{window_id}",
     "#{window_name}",
     "#{window_active}",
     "#{window_activity}",
@@ -285,6 +286,7 @@ def build_archive_record(
         record["tmux"] = {
             "session": pane.get("session"),
             "windowIndex": pane.get("windowIndex"),
+            "windowId": pane.get("windowId"),
             "windowName": pane.get("windowName"),
             "windowActive": pane.get("windowActive"),
             "windowActivity": pane.get("windowActivity"),
@@ -682,6 +684,7 @@ def _pane_from_agent_row(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "session": row.get("session"),
         "windowIndex": _int_or_none(row.get("windowIndex")) or 0,
+        "windowId": row.get("windowId"),
         "windowName": row.get("windowName") or f"window-{row.get('windowIndex') or 0}",
         "windowActive": bool(row.get("windowActive")),
         "windowActivity": _int_or_none(row.get("windowActivity")) or 0,
@@ -843,6 +846,7 @@ def _parse_tmux_panes(lines: Iterable[str]) -> list[dict[str, Any]]:
         (
             session,
             window_index,
+            window_id,
             window_name,
             window_active,
             window_activity,
@@ -858,6 +862,7 @@ def _parse_tmux_panes(lines: Iterable[str]) -> list[dict[str, Any]]:
             {
                 "session": session,
                 "windowIndex": _int_or_none(window_index) or 0,
+                "windowId": window_id,
                 "windowName": window_name or f"window-{window_index}",
                 "windowActive": window_active == "1",
                 "windowActivity": _int_or_none(window_activity) or 0,
