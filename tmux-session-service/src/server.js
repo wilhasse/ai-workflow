@@ -1436,6 +1436,7 @@ const buildRecoveryIndex = async (searchParams = new URLSearchParams()) => {
   const workspaceFilter = String(searchParams.get('workspace') || '').trim().toLowerCase()
   const toolFilter = String(searchParams.get('tool') || '').trim().toLowerCase()
   const query = String(searchParams.get('q') || '').trim().toLowerCase()
+  const includeLowInfo = searchParams.get('includeLowInfo') === '1'
   const limit = Math.min(Math.max(Number.parseInt(searchParams.get('limit') || '800', 10) || 800, 1), 2000)
 
   const seen = new Set()
@@ -1469,6 +1470,10 @@ const buildRecoveryIndex = async (searchParams = new URLSearchParams()) => {
     const { label, status } = recoveryLabelForRecord(record, hostsById, labels)
     const firstPrompt = cleanRecoveryPrompt(record.firstPrompt || record.firstUserMessage || '')
     const lastPrompt = cleanRecoveryPrompt(record.lastPrompt || record.preview || record.firstPrompt || '')
+    const isLowInformationRecord = !sessionId && !firstPrompt && !lastPrompt
+    if (isLowInformationRecord && !includeLowInfo) {
+      continue
+    }
     const summary = compactRecoveryText(record.title || firstPrompt || lastPrompt || 'Agent session', 220)
     const cwd = String(record.cwd || tmuxData.paneCwd || '')
     const searchBlob = [
