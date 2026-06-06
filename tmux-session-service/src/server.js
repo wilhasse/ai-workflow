@@ -1470,8 +1470,8 @@ const buildRecoveryIndex = async (searchParams = new URLSearchParams()) => {
     const { label, status } = recoveryLabelForRecord(record, hostsById, labels)
     const firstPrompt = cleanRecoveryPrompt(record.firstPrompt || record.firstUserMessage || '')
     const lastPrompt = cleanRecoveryPrompt(record.lastPrompt || record.preview || record.firstPrompt || '')
-    const isLowInformationRecord = !sessionId && !firstPrompt && !lastPrompt
-    if (isLowInformationRecord && !includeLowInfo) {
+    const hasCapturedPrompt = Boolean(firstPrompt || lastPrompt)
+    if (!hasCapturedPrompt && !includeLowInfo) {
       continue
     }
     const summary = compactRecoveryText(record.title || firstPrompt || lastPrompt || 'Agent session', 220)
