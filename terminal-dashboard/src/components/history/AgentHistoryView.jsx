@@ -45,6 +45,24 @@ function shortId(id, size = 12) {
   return id.length > size ? `${id.slice(0, size)}...` : id
 }
 
+async function copyText(text) {
+  if (!text) return
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+
+  const input = document.createElement('textarea')
+  input.value = text
+  input.setAttribute('readonly', '')
+  input.style.position = 'fixed'
+  input.style.opacity = '0'
+  document.body.appendChild(input)
+  input.select()
+  document.execCommand('copy')
+  document.body.removeChild(input)
+}
+
 function queryString(params) {
   const search = new URLSearchParams()
   for (const [key, value] of Object.entries(params)) {
@@ -95,11 +113,42 @@ function SourceBadge({ source }) {
   return <span className={`ah-badge ah-badge-${source || 'unknown'}`}>{source || 'unknown'}</span>
 }
 
-function SessionCard({ session, active, onClick }) {
+function ConversationId({ id, copied, onCopy, full = false }) {
+  if (!id) return null
+  return (
+    <span className="ah-conversation-id">
+      <span className="ah-session-id" title={id}>{full ? id : shortId(id, 16)}</span>
+      <span
+        className={`ah-copy-id ${copied ? 'copied' : ''}`}
+        role="button"
+        tabIndex={0}
+        title="Copy conversation id"
+        onClick={(event) => {
+          event.stopPropagation()
+          onCopy(id)
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return
+          event.preventDefault()
+          event.stopPropagation()
+          onCopy(id)
+        }}
+      >
+        {copied ? 'Copied' : 'Copy ID'}
+      </span>
+    </span>
+  )
+}
+
+function SessionCard({ session, active, copiedSessionId, onCopySessionId, onClick }) {
   return (
     <button className={`ah-session-card ${active ? 'active' : ''}`} type="button" onClick={onClick}>
       <span className="ah-session-card-top">
-        <span className="ah-session-id" title={session.session_id}>{shortId(session.session_id, 16)}</span>
+        <ConversationId
+          id={session.session_id}
+          copied={copiedSessionId === session.session_id}
+          onCopy={onCopySessionId}
+        />
         <span className="ah-muted">{formatDate(session.started_at || session.ts)}</span>
       </span>
       <span className="ah-badge-row">
@@ -112,7 +161,7 @@ function SessionCard({ session, active, onClick }) {
   )
 }
 
-function SearchResults({ results, query, onSelectSession }) {
+function SearchResults({ results, query, copiedSessionId, onCopySessionId, onSelectSession }) {
   if (!results.length) return <div className="ah-empty">No results found</div>
 
   return (
@@ -131,7 +180,11 @@ function SearchResults({ results, query, onSelectSession }) {
             {Number.isFinite(Number(result.relevance)) && (
               <span className="ah-badge ah-badge-rank">rank {Number(result.relevance) + 1}</span>
             )}
-            <span className="ah-session-id" title={result.session_id}>{shortId(result.session_id)}</span>
+            <ConversationId
+              id={result.session_id}
+              copied={copiedSessionId === result.session_id}
+              onCopy={onCopySessionId}
+            />
             <span className="ah-muted">{formatDate(result.ts)}</span>
           </span>
           {result.project && <span className="ah-badge ah-badge-project">{cleanProject(result.project)}</span>}
@@ -154,7 +207,7 @@ function MessageBubble({ message }) {
   )
 }
 
-function SessionDetail({ session, onBack }) {
+function SessionDetail({ session, copiedSessionId, onCopySessionId, onBack }) {
   const [messages, setMessages] = useState([])
   const [offset, setOffset] = useState(0)
   const [loading, setLoading] = useState(false)
@@ -191,7 +244,12 @@ function SessionDetail({ session, onBack }) {
       <header className="ah-detail-header">
         <button className="secondary" type="button" onClick={onBack}>Back</button>
         <div className="ah-detail-title">
-          <span className="ah-session-id" title={session.session_id}>{session.session_id}</span>
+          <ConversationId
+            id={session.session_id}
+            copied={copiedSessionId === session.session_id}
+            onCopy={onCopySessionId}
+            full
+          />
           <span className="ah-badge-row">
             <SourceBadge source={session.source} />
             <span className="ah-badge ah-badge-vm">{session.vm_id}</span>
@@ -235,6 +293,8 @@ export default function AgentHistoryView() {
   const [hasMore, setHasMore] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [copiedSessionId, setCopiedSessionId] = useState('')
+  const copiedTimerRef = useRef(null)
 
   const vmOptions = useMemo(
     () => Array.from(new Set(syncInfo.map((item) => item.vm_id).filter(Boolean))).sort(),
@@ -350,6 +410,19 @@ export default function AgentHistoryView() {
     })
   }
 
+  const copySessionId = async (sessionId) => {
+    try {
+      await copyText(sessionId)
+      setCopiedSessionId(sessionId)
+      window.clearTimeout(copiedTimerRef.current)
+      copiedTimerRef.current = window.setTimeout(() => setCopiedSessionId(''), 1600)
+    } catch (err) {
+      setError(err.message || 'Unable to copy conversation id')
+    }
+  }
+
+  useEffect(() => () => window.clearTimeout(copiedTimerRef.current), [])
+
   return (
     <section className="ah-view">
       <header className="ah-toolbar">
@@ -427,14 +500,27 @@ export default function AgentHistoryView() {
                   key={`${session.session_id}-${session.vm_id || ''}-${index}`}
                   session={session}
                   active={session.session_id === selectedSession.session_id}
+                  copiedSessionId={copiedSessionId}
+                  onCopySessionId={copySessionId}
                   onClick={() => selectSession(session)}
                 />
               ))}
             </div>
-            <SessionDetail session={selectedSession} onBack={() => setSelectedSession(null)} />
+            <SessionDetail
+              session={selectedSession}
+              copiedSessionId={copiedSessionId}
+              onCopySessionId={copySessionId}
+              onBack={() => setSelectedSession(null)}
+            />
           </>
         ) : searchResults ? (
-          <SearchResults results={searchResults} query={query} onSelectSession={selectSession} />
+          <SearchResults
+            results={searchResults}
+            query={query}
+            copiedSessionId={copiedSessionId}
+            onCopySessionId={copySessionId}
+            onSelectSession={selectSession}
+          />
         ) : (
           <div className="ah-list">
             {loading && sessions.length === 0 && <div className="ah-loading">Loading sessions...</div>}
@@ -444,6 +530,8 @@ export default function AgentHistoryView() {
                 key={`${session.session_id}-${session.vm_id || ''}-${index}`}
                 session={session}
                 active={false}
+                copiedSessionId={copiedSessionId}
+                onCopySessionId={copySessionId}
                 onClick={() => selectSession(session)}
               />
             ))}

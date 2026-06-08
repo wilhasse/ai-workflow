@@ -29,6 +29,7 @@ const FONT_SIZE_STORAGE_KEY = 'terminal-dashboard-font-size'
 const VOICE_SERVICE_STORAGE_KEY = 'terminal-dashboard-voice-service'
 const VOICE_LANGUAGE_STORAGE_KEY = 'terminal-dashboard-voice-language'
 const WINDOW_USAGE_STORAGE_KEY = 'terminal-dashboard-window-usage'
+const DEFAULT_DESKTOP_VIEW = 'agent-history'
 
 // Constants
 const FONT_SIZE_OPTIONS = [12, 14, 16, 18, 20, 22]
@@ -199,11 +200,11 @@ function DashboardApp() {
   const [windows, setWindows] = useState([])
   const [windowsLoading, setWindowsLoading] = useState(false)
   const [view, setView] = useState(() => {
-    if (typeof window === 'undefined') return 'terminal'
+    if (typeof window === 'undefined') return DEFAULT_DESKTOP_VIEW
     const param = new URLSearchParams(window.location.search).get('view')
     return param === 'organizer' || param === 'transcripts' || param === 'vm-create' || param === 'agent-history' || param === 'recovery-index'
       ? param
-      : 'terminal'
+      : DEFAULT_DESKTOP_VIEW
   })
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
