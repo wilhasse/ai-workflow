@@ -141,6 +141,14 @@ Install a periodic local snapshot timer on each VM:
 
 Use the matching host id/name on `vm10` or `vm12`. The timer runs `wsv2 archive-scan-local --save` every five minutes by default.
 
+Install automatic tmux restore after reboot on each VM:
+
+```bash
+./workspace-v2/scripts/install-session-restore-timer.sh --host-id vm9
+```
+
+Use the matching host id on each machine, for example `vm9` on `10.1.0.9` and `vm10` on `10.1.0.10`. The restore timer waits a few minutes after boot/login, then runs `restore-after-reboot.sh` once for that boot. It stamps the current boot when installed, so installing it on a live machine does not duplicate already-restored tmux windows; pass `--run-now` only when you intentionally want to restore immediately.
+
 ## How 16.2 behaves
 
 When you run from a tmux shell on a fallback host:
