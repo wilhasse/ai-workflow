@@ -2578,6 +2578,10 @@ class WorkspaceSwitcher(Gtk.Window):
                 'settings': {'terminal': 'xfce4-terminal', 'shell': '/bin/bash'}
             })
 
+    def _get_terminal(self):
+        """Get configured terminal emulator."""
+        return self.config.get('settings', {}).get('terminal', 'xfce4-terminal')
+
     def _save_full_config(self, config):
         """Save full config file"""
         with open(CONFIG_FILE, 'w') as f:
