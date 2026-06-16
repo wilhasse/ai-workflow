@@ -29,6 +29,29 @@ const formatRelativeTime = (timestamp) => {
 
 const normalizeStatus = (value) => (value === 'check' || value === 'idle' ? value : '')
 
+const shortConversationId = (value) => {
+  const id = String(value || '')
+  return id.length > 14 ? `${id.slice(0, 14)}...` : id
+}
+
+const copyText = async (value) => {
+  const text = String(value || '')
+  if (!text) return
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+  const input = document.createElement('textarea')
+  input.value = text
+  input.setAttribute('readonly', '')
+  input.style.position = 'fixed'
+  input.style.opacity = '0'
+  document.body.appendChild(input)
+  input.select()
+  document.execCommand('copy')
+  document.body.removeChild(input)
+}
+
 const draftFromValue = (value, tab) => {
   if (value && typeof value === 'object') {
     return {
@@ -61,7 +84,22 @@ const changedDraftIds = (tabs, drafts) => {
   return changed
 }
 
-function TerminalLabelRow({ tab, value, status, changed, disabled, onChange, onStatusChange, onSubmit }) {
+function TerminalLabelRow({
+  tab,
+  value,
+  status,
+  changed,
+  disabled,
+  copiedConversationId,
+  onCopyConversationId,
+  onChange,
+  onStatusChange,
+  onSubmit,
+}) {
+  const conversationIds = Array.isArray(tab.conversationIds) ? tab.conversationIds : []
+  const visibleConversationIds = conversationIds.slice(0, 3)
+  const hiddenConversationCount = Math.max(0, conversationIds.length - visibleConversationIds.length)
+
   return (
     <form
       className={`terminal-organizer-row ${changed ? 'changed' : ''}`}
@@ -82,6 +120,29 @@ function TerminalLabelRow({ tab, value, status, changed, disabled, onChange, onS
             {' · '}
             {formatRelativeTime(tab.recentAt)}
           </small>
+          {visibleConversationIds.length > 0 && (
+            <div className="terminal-organizer-conversations">
+              {visibleConversationIds.map((conversation) => (
+                <span
+                  className={`terminal-organizer-conversation ${conversation.source || 'archive'}`}
+                  key={`${conversation.tool}-${conversation.resumeId}`}
+                  title={`${conversation.tool || 'agent'} ${conversation.resumeId}`}
+                >
+                  <span>{conversation.tool || 'agent'} {shortConversationId(conversation.resumeId)}</span>
+                  <button
+                    type="button"
+                    onClick={() => onCopyConversationId(conversation.resumeId)}
+                    disabled={disabled}
+                  >
+                    {copiedConversationId === conversation.resumeId ? 'Copied' : 'Copy'}
+                  </button>
+                </span>
+              ))}
+              {hiddenConversationCount > 0 && (
+                <span className="terminal-organizer-conversation-more">+{hiddenConversationCount} more</span>
+              )}
+            </div>
+          )}
         </div>
       </div>
       <input
@@ -120,6 +181,7 @@ function TerminalOrganizer({
 }) {
   const [drafts, setDrafts] = useState({})
   const [secondsUntilRefresh, setSecondsUntilRefresh] = useState(AUTO_REFRESH_SECONDS)
+  const [copiedConversationId, setCopiedConversationId] = useState('')
 
   const groups = useMemo(() => {
     const hosts = new Map()
@@ -248,6 +310,12 @@ function TerminalOrganizer({
     setDrafts({})
   }
 
+  const handleCopyConversationId = async (conversationId) => {
+    await copyText(conversationId)
+    setCopiedConversationId(conversationId)
+    window.setTimeout(() => setCopiedConversationId(''), 1500)
+  }
+
   return (
     <section className="terminal-organizer">
       <header className="terminal-organizer-header">
@@ -315,6 +383,8 @@ function TerminalOrganizer({
                         status={draftFromValue(drafts[tab.id], tab).status}
                         changed={changedIds.includes(tab.id)}
                         disabled={saving}
+                        copiedConversationId={copiedConversationId}
+                        onCopyConversationId={handleCopyConversationId}
                         onChange={handleDraftChange}
                         onStatusChange={handleStatusChange}
                         onSubmit={handleSaveChanges}

@@ -1570,6 +1570,197 @@ const buildRecoveryResumeCommand = (kind, cwd, resumeId) => {
   return `cd ${shellQuote(safeCwd)} && codex resume ${shellQuote(resumeId)}`
 }
 
+const conversationIdScore = (record) => Math.max(
+  Number(record?.score || 0),
+  Number(record?.updatedAt || 0),
+  Number(record?.lastActiveAt || 0),
+  Number(record?.lastSeenAt || 0),
+)
+
+const MAX_CONVERSATION_IDS_PER_TAB = 5
+
+const tmuxExactConversationKeys = ({ hostId, sessionId, windowIndex = null, windowId = '' }) => {
+  const keys = []
+  const normalizedWindowId = normalizeWindowId(windowId)
+  if (hostId && sessionId && normalizedWindowId) {
+    keys.push(`${hostId}:${sessionId}${normalizedWindowId}`)
+  }
+  if (hostId && sessionId && Number.isFinite(Number(windowIndex))) {
+    keys.push(`${hostId}:${sessionId}#${Number(windowIndex)}`)
+  }
+  return keys
+}
+
+const tmuxSessionConversationKey = ({ hostId, sessionId }) =>
+  hostId && sessionId ? `${hostId}:${sessionId}` : ''
+
+const tmuxConversationKeys = ({ hostId, sessionId, windowIndex = null, windowId = '' }) => {
+  const keys = tmuxExactConversationKeys({ hostId, sessionId, windowIndex, windowId })
+  if (hostId && sessionId) {
+    keys.push(`${hostId}:${sessionId}`)
+  }
+  return keys
+}
+
+const tmuxArchiveConversationKeys = ({ hostId, sessionId, windowIndex = null, windowId = '' }) => {
+  const keys = tmuxExactConversationKeys({ hostId, sessionId, windowIndex, windowId })
+  if (keys.length === 0) {
+    const sessionKey = tmuxSessionConversationKey({ hostId, sessionId })
+    if (sessionKey) {
+      keys.push(sessionKey)
+    }
+  }
+  return keys
+}
+
+const appendConversationEntry = (map, key, entry) => {
+  if (!key || !entry?.resumeId) {
+    return
+  }
+  if (!map.has(key)) {
+    map.set(key, [])
+  }
+  map.get(key).push(entry)
+}
+
+const parseResumeIdsFromCommand = (command) => {
+  const text = String(command || '')
+  const entries = []
+  const codexPattern = /\bcodex\s+resume\b(?:\s+--[^\s]+)*\s+([0-9a-f]{8,}(?:-[0-9a-f]{4,})*)/gi
+  const claudePattern = /\bclaude\b(?:\s+--[^\s]+)*\s+--resume\s+([0-9a-f]{8,}(?:-[0-9a-f]{4,})*)/gi
+  let match = codexPattern.exec(text)
+  while (match) {
+    entries.push({ tool: 'codex', resumeId: match[1] })
+    match = codexPattern.exec(text)
+  }
+  match = claudePattern.exec(text)
+  while (match) {
+    entries.push({ tool: 'claude', resumeId: match[1] })
+    match = claudePattern.exec(text)
+  }
+  return entries
+}
+
+const buildArchiveConversationIndex = async () => {
+  const archive = await readOptionalJsonFile(config.sessionArchivePath)
+  const records = Array.isArray(archive?.records) ? archive.records : []
+  const index = new Map()
+  records.forEach((record) => {
+    const tmuxData = record?.tmux || {}
+    const hostId = String(record?.hostId || '')
+    const sessionId = String(tmuxData.session || '')
+    const resumeId = String(record?.resumeId || '').trim()
+    const tool = String(record?.kind || '').trim()
+    if (!hostId || !sessionId || !resumeId || !tool) {
+      return
+    }
+    const entry = {
+      tool,
+      resumeId,
+      source: 'archive',
+      active: Boolean(record.active),
+      parked: Boolean(record.parked),
+      updatedAt: Number(record.updatedAt || 0),
+      lastActiveAt: Number(record.lastActiveAt || 0),
+      lastSeenAt: Number(record.lastSeenAt || 0),
+      score: recoveryRecordScore(record),
+    }
+    tmuxArchiveConversationKeys({
+      hostId,
+      sessionId,
+      windowIndex: tmuxData.windowIndex,
+      windowId: tmuxData.windowId,
+    }).forEach((key) => appendConversationEntry(index, key, entry))
+  })
+  return index
+}
+
+const buildLiveConversationIndex = (host, agentRows) => {
+  const index = new Map()
+  agentRows.forEach((row) => {
+    const hostId = String(row?.hostId || host.id || '')
+    const sessionId = String(row?.session || '')
+    if (!hostId || !sessionId) {
+      return
+    }
+    const parsedEntries = []
+    if (row.resumeId) {
+      const kinds = Array.isArray(row.kinds) ? row.kinds : [row.kind]
+      parsedEntries.push({
+        tool: String(kinds.find(Boolean) || 'agent'),
+        resumeId: String(row.resumeId),
+      })
+    }
+    ;(row.commands || []).forEach((command) => {
+      parsedEntries.push(...parseResumeIdsFromCommand(command))
+    })
+    parsedEntries.forEach((parsed) => {
+      const now = Date.now()
+      const entry = {
+        tool: parsed.tool,
+        resumeId: parsed.resumeId,
+        source: row.parked ? 'parked' : 'live',
+        active: !row.parked,
+        parked: Boolean(row.parked),
+        updatedAt: now,
+        score: now,
+      }
+      tmuxConversationKeys({
+        hostId,
+        sessionId,
+        windowIndex: row.windowIndex,
+        windowId: row.windowId,
+      }).forEach((key) => appendConversationEntry(index, key, entry))
+    })
+  })
+  return index
+}
+
+const mergeConversationEntries = (...entryLists) => {
+  const seen = new Set()
+  return entryLists
+    .flat()
+    .filter(Boolean)
+    .sort((left, right) => {
+      const sourceRank = { live: 0, parked: 1, archive: 2 }
+      const leftRank = sourceRank[left.source] ?? 9
+      const rightRank = sourceRank[right.source] ?? 9
+      if (leftRank !== rightRank) return leftRank - rightRank
+      if (Boolean(left.active) !== Boolean(right.active)) return left.active ? -1 : 1
+      return conversationIdScore(right) - conversationIdScore(left)
+    })
+    .filter((entry) => {
+      const key = `${entry.tool}:${entry.resumeId}`
+      if (seen.has(key)) {
+        return false
+      }
+      seen.add(key)
+      return true
+    })
+}
+
+const conversationEntriesForWindow = ({ host, window, archiveIndex, liveIndex }) => {
+  const exactKeys = tmuxExactConversationKeys({
+    hostId: host.id,
+    sessionId: window.sessionId,
+    windowIndex: window.index,
+    windowId: window.id,
+  })
+  const exactEntries = mergeConversationEntries(
+    exactKeys.flatMap((key) => liveIndex.get(key) || []),
+    exactKeys.flatMap((key) => archiveIndex.get(key) || []),
+  )
+  if (exactEntries.length > 0) {
+    return exactEntries.slice(0, MAX_CONVERSATION_IDS_PER_TAB)
+  }
+
+  const sessionKey = tmuxSessionConversationKey({ hostId: host.id, sessionId: window.sessionId })
+  return mergeConversationEntries(
+    sessionKey ? liveIndex.get(sessionKey) || [] : [],
+    sessionKey ? archiveIndex.get(sessionKey) || [] : [],
+  ).slice(0, MAX_CONVERSATION_IDS_PER_TAB)
+}
+
 const handleRecoveryIndex = async (res, searchParams) => {
   try {
     respond(res, 200, await buildRecoveryIndex(searchParams))
@@ -1797,7 +1988,7 @@ const workspaceBySessionForHost = (workspaces) => {
   return lookup
 }
 
-const buildTerminalTabRecord = ({ host, workspace, window, selectedAt = 0 }) => {
+const buildTerminalTabRecord = ({ host, workspace, window, selectedAt = 0, conversationIds = [] }) => {
   const workspaceName = workspace?.name ?? formatDiscoveredWorkspaceName(window.sessionId)
   const workspaceDescription = workspace?.description ?? 'Discovered tmux session'
   const lastActivityAt = window.lastActivityAt || 0
@@ -1824,20 +2015,32 @@ const buildTerminalTabRecord = ({ host, workspace, window, selectedAt = 0 }) => 
     selectedAt,
     recentAt: Math.max(lastActivityAt, selectedAt),
     paneCount: window.paneCount ?? 0,
+    conversationIds,
   }
 }
 
-const buildTerminalTabsForHost = async (host, configuredWorkspaces, labels, launcherState) => {
+const buildTerminalTabsForHost = async (host, configuredWorkspaces, labels, launcherState, archiveConversationIndex) => {
   const rawWindows = isHostLocal(host)
     ? await tmuxListAllWindows()
     : await remoteListAllWindows(host)
   const windows = rawWindows.map((window) => decorateWindowWithLabel(window, host, labels))
+  const agentRows = await listHostAgents(host).catch((error) => {
+    console.warn(`Failed to list Codex/Claude agents for terminal tabs on ${host.name}:`, safeErrorMessage(error))
+    return []
+  })
+  const liveConversationIndex = buildLiveConversationIndex(host, agentRows)
   const workspaceLookup = workspaceBySessionForHost(configuredWorkspaces)
   return windows.map((window) => buildTerminalTabRecord({
     host,
     workspace: workspaceLookup.get(window.sessionId),
     window,
     selectedAt: recentScoreForWindow(launcherState, host, window.sessionId, window.index, window.id),
+    conversationIds: conversationEntriesForWindow({
+      host,
+      window,
+      archiveIndex: archiveConversationIndex,
+      liveIndex: liveConversationIndex,
+    }),
   }))
 }
 
@@ -1866,6 +2069,7 @@ const handleTerminalTabs = async (res) => {
       }
       workspacesByHost.get(workspace.hostId).push(workspace)
     })
+    const archiveConversationIndex = await buildArchiveConversationIndex()
 
     const tabs = []
     const errors = []
@@ -1876,6 +2080,7 @@ const handleTerminalTabs = async (res) => {
           workspacesByHost.get(host.id) ?? [],
           labels,
           launcherState,
+          archiveConversationIndex,
         ))
       } catch (error) {
         errors.push({ hostId: host.id, hostName: host.name, error: safeErrorMessage(error) })

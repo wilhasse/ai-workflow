@@ -2465,6 +2465,76 @@ button.danger:hover:not(:disabled) {
   white-space: nowrap;
 }
 
+.terminal-organizer-conversations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.35rem;
+  min-width: 0;
+}
+
+.terminal-organizer-conversation,
+.terminal-organizer-conversation-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 1.55rem;
+  max-width: 100%;
+  border: 1px solid var(--color-border-medium);
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  padding: 0.15rem 0.2rem 0.15rem 0.5rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  line-height: 1;
+}
+
+.terminal-organizer-conversation.live {
+  border-color: rgba(13, 148, 136, 0.35);
+  background: rgba(13, 148, 136, 0.08);
+  color: #0f766e;
+}
+
+.terminal-organizer-conversation.parked {
+  border-color: rgba(217, 119, 6, 0.35);
+  background: rgba(217, 119, 6, 0.08);
+  color: var(--color-accent-secondary);
+}
+
+.terminal-organizer-conversation span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-organizer-conversation button {
+  min-height: 1.15rem;
+  border: 0;
+  border-left: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: inherit;
+  padding: 0 0.35rem;
+  font: inherit;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.terminal-organizer-conversation button:hover:not(:disabled) {
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.terminal-organizer-conversation button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.terminal-organizer-conversation-more {
+  padding: 0.15rem 0.5rem;
+  font-family: inherit;
+}
+
 .terminal-organizer-row input {
   width: 100%;
   min-width: 0;
