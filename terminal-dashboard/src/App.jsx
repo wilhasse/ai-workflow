@@ -846,7 +846,10 @@ function DashboardApp() {
     }
 
     const handleKeyDown = (event) => {
-      if (event.ctrlKey && event.key === 'Enter') {
+      if (isTerminalSwitcherOpen) {
+        return
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
         event.preventDefault()
         openTerminalSwitcher()
       }
@@ -854,7 +857,7 @@ function DashboardApp() {
 
     window.addEventListener('keydown', handleKeyDown, true)
     return () => window.removeEventListener('keydown', handleKeyDown, true)
-  }, [isMobile, openTerminalSwitcher])
+  }, [isMobile, isTerminalSwitcherOpen, openTerminalSwitcher])
 
   // Voice transcription functions
   const waitForTerminalConnection = async (timeoutMs = 1500) => {
@@ -1386,7 +1389,7 @@ function DashboardApp() {
             type="button"
             className="secondary switcher-btn"
             onClick={openTerminalSwitcher}
-            title="Jump between terminals and tmux tabs (Ctrl+Enter)"
+            title="Jump between terminals and tmux tabs (Ctrl/Cmd+Enter)"
           >
             Jump
           </button>
