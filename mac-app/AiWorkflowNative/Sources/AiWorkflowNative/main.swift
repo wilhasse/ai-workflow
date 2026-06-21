@@ -3,7 +3,7 @@ import WebKit
 
 private let defaultAppURL = "https://10.1.0.10/"
 
-private final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate {
+private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate {
   private let startURL: URL
   private var window: NSWindow?
   private var webView: WKWebView?
@@ -16,8 +16,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDe
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     buildMenu()
-    buildWindow()
-    loadStartURL()
+    showAppWindow(loadIfNeeded: true)
 
     keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
       guard self?.handleKeyDown(event) == true else {
@@ -33,6 +32,15 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDe
     if let keyMonitor {
       NSEvent.removeMonitor(keyMonitor)
     }
+  }
+
+  func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+    showAppWindow(loadIfNeeded: webView == nil)
+    return true
+  }
+
+  func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+    true
   }
 
   private func buildMenu() {
@@ -90,12 +98,28 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDe
     )
     window.title = "AI Workflow"
     window.minSize = NSSize(width: 1040, height: 680)
+    window.isReleasedWhenClosed = false
+    window.delegate = self
     window.contentView = webView
     window.center()
     window.makeKeyAndOrderFront(nil)
 
     self.window = window
     self.webView = webView
+  }
+
+  private func showAppWindow(loadIfNeeded: Bool = false) {
+    if window == nil || webView == nil {
+      buildWindow()
+      loadStartURL()
+    } else {
+      window?.makeKeyAndOrderFront(nil)
+      if loadIfNeeded, webView?.url == nil {
+        loadStartURL()
+      }
+    }
+
+    NSApp.activate(ignoringOtherApps: true)
   }
 
   private func loadStartURL() {
