@@ -199,6 +199,7 @@ function TerminalViewer({
     let resizeFrame = null
     let resizeRetry = null
     let resizePushTimer = null
+    let resizeSettleTimers = []
     let textareaConfigRetry = null
     let writeFrame = null
     let pendingWrite = ''
@@ -271,6 +272,10 @@ function TerminalViewer({
     termRef.current = term
     fitAddonRef.current = fitAddon
 
+    if (!monitorMode && !fitTerminal()) {
+      scheduleFit()
+    }
+
     let initialWsUrl = wsUrl
     if (!monitorMode) {
       try {
@@ -324,10 +329,21 @@ function TerminalViewer({
       }, disableKeyboardInput ? 160 : 80)
     }
 
+    const queueSettleResize = (delay) => {
+      if (monitorMode || typeof window === 'undefined') {
+        return
+      }
+      const timer = window.setTimeout(() => {
+        resizeSettleTimers = resizeSettleTimers.filter((id) => id !== timer)
+        pushResize()
+      }, delay)
+      resizeSettleTimers.push(timer)
+    }
+
     socket.addEventListener('open', () => {
       setConnectionState({ status: 'connected', message: 'Connected' })
       if (!monitorMode) {
-        pushResize()
+        schedulePushResize()
       }
     })
 
@@ -366,6 +382,10 @@ function TerminalViewer({
         }
         if (monitorMode) {
           updateMonitorScale()
+        } else {
+          pushResize()
+          queueSettleResize(160)
+          queueSettleResize(500)
         }
         return
       }
@@ -483,6 +503,8 @@ function TerminalViewer({
       if (resizePushTimer) {
         window.clearTimeout(resizePushTimer)
       }
+      resizeSettleTimers.forEach((timer) => window.clearTimeout(timer))
+      resizeSettleTimers = []
       if (textareaConfigRetry) {
         window.clearTimeout(textareaConfigRetry)
       }
@@ -567,6 +589,10 @@ function TerminalViewer({
       return
     }
     fitAddonRef.current?.fit()
+    const target = socketRef.current
+    if (target && target.readyState === window.WebSocket.OPEN) {
+      target.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
+    }
   }, [fontSize, monitorMode, updateMonitorScale])
 
   const sendShortcut = useCallback((keys) => {
