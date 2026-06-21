@@ -199,7 +199,6 @@ function TerminalViewer({
     let resizeFrame = null
     let resizeRetry = null
     let resizePushTimer = null
-    let resizeSettleTimers = []
     let textareaConfigRetry = null
     let writeFrame = null
     let pendingWrite = ''
@@ -260,11 +259,10 @@ function TerminalViewer({
       }
     }
 
+    if (!monitorMode && !disableKeyboardInput) {
+      term.focus()
+    }
     if (!monitorMode) {
-      scheduleFit()
-      if (!disableKeyboardInput) {
-        term.focus()
-      }
       textareaConfigRetry = window.setTimeout(() => {
         configureMobileTextarea(term, container)
       }, 200)
@@ -329,22 +327,8 @@ function TerminalViewer({
       }, disableKeyboardInput ? 160 : 80)
     }
 
-    const queueSettleResize = (delay) => {
-      if (monitorMode || typeof window === 'undefined') {
-        return
-      }
-      const timer = window.setTimeout(() => {
-        resizeSettleTimers = resizeSettleTimers.filter((id) => id !== timer)
-        pushResize()
-      }, delay)
-      resizeSettleTimers.push(timer)
-    }
-
     socket.addEventListener('open', () => {
       setConnectionState({ status: 'connected', message: 'Connected' })
-      if (!monitorMode) {
-        schedulePushResize()
-      }
     })
 
     socket.addEventListener('close', () => {
@@ -384,8 +368,6 @@ function TerminalViewer({
           updateMonitorScale()
         } else {
           pushResize()
-          queueSettleResize(160)
-          queueSettleResize(500)
         }
         return
       }
@@ -503,8 +485,6 @@ function TerminalViewer({
       if (resizePushTimer) {
         window.clearTimeout(resizePushTimer)
       }
-      resizeSettleTimers.forEach((timer) => window.clearTimeout(timer))
-      resizeSettleTimers = []
       if (textareaConfigRetry) {
         window.clearTimeout(textareaConfigRetry)
       }
