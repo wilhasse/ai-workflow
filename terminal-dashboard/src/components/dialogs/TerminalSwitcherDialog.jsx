@@ -44,7 +44,8 @@ const nextStatusForEntry = (entry) => {
   return 'check'
 }
 
-const SHORTCUT_HELP = '↑↓ Navigate · Enter Open · Alt+L Label · Alt+C Check · Alt+I Idle · Alt+A Active'
+const SWITCHER_SHORTCUT = 'Ctrl/⌘+Enter'
+const SHORTCUT_HELP = `↑↓ Navigate · Enter or ${SWITCHER_SHORTCUT} Open · Alt+L Label · Alt+C Check · Alt+I Idle · Alt+A Active`
 
 function TerminalSwitcherDialog({
   isOpen,
@@ -214,7 +215,7 @@ function TerminalSwitcherDialog({
     if (!hasEntries) {
       return 'Type to filter by workspace name, task, or tmux tab number.'
     }
-    return `${entries.length} tabs shown. Ctrl+Enter opens this switcher.`
+    return `${entries.length} tabs shown. ${SWITCHER_SHORTCUT} opens this switcher and selects the highlighted terminal.`
   }, [entries.length, hasEntries])
 
   if (!isOpen) {
@@ -229,7 +230,7 @@ function TerminalSwitcherDialog({
             <h3 className="dialog-title">Terminal Switcher</h3>
             <p className="terminal-switcher-subtitle">Jump by workspace and tmux tab description</p>
           </div>
-          <span className="terminal-switcher-shortcut">Ctrl+Enter</span>
+          <span className="terminal-switcher-shortcut">{SWITCHER_SHORTCUT}</span>
         </div>
 
         <div className="terminal-switcher-help">{SHORTCUT_HELP}</div>

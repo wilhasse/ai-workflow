@@ -82,6 +82,18 @@ $poteto-mode investigate this failure, reproduce it, fix the root cause, and ver
 
 The adaptation retains the original MIT attribution and replaces Cursor-specific commands, model routing, and agent assumptions with Codex-native workflow guidance.
 
+### macOS Native App
+
+Tiny AppKit/WKWebView wrapper that opens the dashboard from the Linux control host as a normal Mac app window.
+
+**Quick Start:**
+```bash
+./mac-app/build-ai-workflow-app.sh --open
+# Opens mac-app/dist/AI Workflow.app against https://10.1.0.10/
+```
+
+[More details →](mac-app/README.md)
+
 ---
 
 ### 🔄 tmux Session Service
@@ -163,7 +175,7 @@ Available tab flags:
 
 New workspaces added through the GTK panel seed the first tmux tab label from the workspace display name, so the workspace is immediately promoted in Ctrl+Enter and `/mobile` without needing a manual label for the first tab.
 
-Ctrl+Enter switchers support keyboard edits on the selected tab: `F2`, `Ctrl+L`, or `Alt+L` edits the label; `Alt+C` marks `Check`, `Alt+I` marks `Idle`, and `Alt+A` clears the flag back to `Active`.
+Ctrl+Enter switchers (`Cmd+Enter` in the macOS app) support keyboard edits on the selected tab: `F2`, `Ctrl+L`, or `Alt+L` edits the label; `Alt+C` marks `Check`, `Alt+I` marks `Idle`, and `Alt+A` clears the flag back to `Active`.
 `Idle` keeps its label/recent position while changing color, and it parks only the selected tmux window's Codex/Claude agents. Clearing `Idle` or changing it to `Check` resumes that same window.
 
 ### Architecture
