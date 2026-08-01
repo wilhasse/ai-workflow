@@ -68,6 +68,14 @@ function recordMatchesWorkspace(record, workspaceKey) {
   return `${record.hostId}:${record.workspaceId || '(no tmux)'}` === workspaceKey
 }
 
+function compareByRecentActivity(left, right) {
+  const timestampDifference = Number(right.score || 0) - Number(left.score || 0)
+  if (timestampDifference) return timestampDifference
+
+  return `${left.hostName}:${left.workspaceName}:${left.terminalIndex ?? ''}:${left.resumeId}`
+    .localeCompare(`${right.hostName}:${right.workspaceName}:${right.terminalIndex ?? ''}:${right.resumeId}`)
+}
+
 function RecoveryRow({ record }) {
   const [copied, setCopied] = useState(false)
   const manualResume = buildManualResume(record)
@@ -126,7 +134,9 @@ export default function RecoveryIndexView() {
   const records = useMemo(() => data?.records || [], [data?.records])
   const workspaces = data?.workspaces || []
   const filteredRecords = useMemo(
-    () => records.filter((record) => recordMatchesWorkspace(record, workspaceKey)),
+    () => records
+      .filter((record) => recordMatchesWorkspace(record, workspaceKey))
+      .sort(compareByRecentActivity),
     [records, workspaceKey],
   )
 
