@@ -1,0 +1,3 @@
+encryptionsalt: v1:X6uGMnup+QA=:v1:QoOucqRUrG5Oh5Nx:xvxRKkTyG2DlSFbMy4RtxDwMFgFAqA==
+config:
+  proxmox-test-vm:spec: '{"name":"debian-test-01","node":"pve1","cpuCores":2,"memoryMb":4096,"diskGb":32,"bridge":"vmbr0","username":"debian","sshPublicKey":"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHI8PNS75KDpl2VUbXTbR2j0WIENTs35I2ptorXEqpco cslog@ai-workflow","description":"","networkMode":"dhcp","template":{"node":"pve1","templateVmId":9013,"templateName":"debian13-cloud-template","storage":"pve1-ssd-100G-1"}}'

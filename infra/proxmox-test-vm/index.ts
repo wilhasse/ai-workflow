@@ -5,6 +5,7 @@ type VmSpec = {
   name: string
   node: string
   cpuCores: number
+  cpuType?: string
   memoryMb: number
   diskGb: number
   bridge: string
@@ -34,7 +35,7 @@ const vm = new proxmoxve.VmLegacy(spec.name, {
   cpu: {
     cores: spec.cpuCores,
     sockets: 1,
-    type: 'x86-64-v2-AES',
+    type: spec.cpuType || 'x86-64-v2-AES',
   },
   clone: {
     nodeName: spec.template.node,
