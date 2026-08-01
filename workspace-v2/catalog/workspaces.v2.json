@@ -77,15 +77,6 @@
       "host": "vm10"
     },
     {
-      "id": "crm-automation",
-      "name": "CRM Automation",
-      "path": "/home/cslog/svn/ticslog_trunk/docker/crmautotest",
-      "color": "#3498db",
-      "icon": "folder",
-      "description": "",
-      "host": "vm10"
-    },
-    {
       "id": "dbtools",
       "name": "DB Tools",
       "path": "/home/cslog/svn/ticslog_trunk/python/dbtools",
