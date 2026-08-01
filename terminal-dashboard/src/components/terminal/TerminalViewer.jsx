@@ -259,17 +259,20 @@ function TerminalViewer({
       }
     }
 
+    if (!monitorMode && !disableKeyboardInput) {
+      term.focus()
+    }
     if (!monitorMode) {
-      scheduleFit()
-      if (!disableKeyboardInput) {
-        term.focus()
-      }
       textareaConfigRetry = window.setTimeout(() => {
         configureMobileTextarea(term, container)
       }, 200)
     }
     termRef.current = term
     fitAddonRef.current = fitAddon
+
+    if (!monitorMode && !fitTerminal()) {
+      scheduleFit()
+    }
 
     let initialWsUrl = wsUrl
     if (!monitorMode) {
@@ -326,9 +329,6 @@ function TerminalViewer({
 
     socket.addEventListener('open', () => {
       setConnectionState({ status: 'connected', message: 'Connected' })
-      if (!monitorMode) {
-        pushResize()
-      }
     })
 
     socket.addEventListener('close', () => {
@@ -366,6 +366,8 @@ function TerminalViewer({
         }
         if (monitorMode) {
           updateMonitorScale()
+        } else {
+          pushResize()
         }
         return
       }
@@ -567,6 +569,10 @@ function TerminalViewer({
       return
     }
     fitAddonRef.current?.fit()
+    const target = socketRef.current
+    if (target && target.readyState === window.WebSocket.OPEN) {
+      target.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
+    }
   }, [fontSize, monitorMode, updateMonitorScale])
 
   const sendShortcut = useCallback((keys) => {
