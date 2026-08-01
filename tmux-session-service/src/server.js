@@ -1397,12 +1397,19 @@ const cleanRecoveryPrompt = (value) => {
     : normalized
 }
 
-const recoveryRecordScore = (record) => Math.max(
-  Number(record?.lastActiveAt || 0),
-  Number(record?.activityAt || 0),
-  Number(record?.lastSeenAt || 0),
-  Number(record?.updatedAt || 0),
-)
+const recoveryRecordScore = (record) => {
+  const activityScore = Math.max(
+    Number(record?.activityAt || 0),
+    Number(record?.updatedAt || 0),
+  )
+  if (activityScore) {
+    return activityScore
+  }
+  return Math.max(
+    Number(record?.lastActiveAt || 0),
+    Number(record?.lastSeenAt || 0),
+  )
+}
 
 const recoveryLabelForRecord = (record, hostsById, labels) => {
   const tmuxData = record?.tmux || {}
@@ -1513,6 +1520,7 @@ const buildRecoveryIndex = async (searchParams = new URLSearchParams()) => {
       lastPrompt,
       active: Boolean(record.active),
       parked: Boolean(record.parked),
+      activityAt: Number(record.activityAt || 0),
       updatedAt: Number(record.updatedAt || 0),
       lastSeenAt: Number(record.lastSeenAt || 0),
       lastActiveAt: Number(record.lastActiveAt || 0),
@@ -1522,6 +1530,12 @@ const buildRecoveryIndex = async (searchParams = new URLSearchParams()) => {
   }
 
   rows.sort((left, right) => {
+    if (right.score !== left.score) {
+      return right.score - left.score
+    }
+    if (right.active !== left.active) {
+      return right.active ? 1 : -1
+    }
     const leftWorkspace = `${left.hostName}:${left.workspaceName}`.toLowerCase()
     const rightWorkspace = `${right.hostName}:${right.workspaceName}`.toLowerCase()
     if (leftWorkspace !== rightWorkspace) {
@@ -1573,8 +1587,7 @@ const buildRecoveryResumeCommand = (kind, cwd, resumeId) => {
 const conversationIdScore = (record) => Math.max(
   Number(record?.score || 0),
   Number(record?.updatedAt || 0),
-  Number(record?.lastActiveAt || 0),
-  Number(record?.lastSeenAt || 0),
+  Number(record?.activityAt || 0),
 )
 
 const MAX_CONVERSATION_IDS_PER_TAB = 5
@@ -1660,6 +1673,7 @@ const buildArchiveConversationIndex = async () => {
       source: 'archive',
       active: Boolean(record.active),
       parked: Boolean(record.parked),
+      activityAt: Number(record.activityAt || 0),
       updatedAt: Number(record.updatedAt || 0),
       lastActiveAt: Number(record.lastActiveAt || 0),
       lastSeenAt: Number(record.lastSeenAt || 0),

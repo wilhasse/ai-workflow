@@ -71,6 +71,7 @@ function recordMatchesWorkspace(record, workspaceKey) {
 function compareByRecentActivity(left, right) {
   const timestampDifference = Number(right.score || 0) - Number(left.score || 0)
   if (timestampDifference) return timestampDifference
+  if (Boolean(right.active) !== Boolean(left.active)) return right.active ? 1 : -1
 
   return `${left.hostName}:${left.workspaceName}:${left.terminalIndex ?? ''}:${left.resumeId}`
     .localeCompare(`${right.hostName}:${right.workspaceName}:${right.terminalIndex ?? ''}:${right.resumeId}`)
@@ -108,7 +109,7 @@ function RecoveryRow({ record }) {
           <span>{record.tool}</span>
           <span title={record.resumeId}>{shortId(record.resumeId, 18)}</span>
           {record.cwd && <span title={record.cwd}>{record.cwd}</span>}
-          <span>{formatDate(record.lastActiveAt || record.lastSeenAt || record.updatedAt)}</span>
+          <span>{formatDate(record.score || record.updatedAt || record.lastSeenAt)}</span>
         </div>
         {manualResume && (
           <code className="ri-command" title={manualResume}>{manualResume}</code>
