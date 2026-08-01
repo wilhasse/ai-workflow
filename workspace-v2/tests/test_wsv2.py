@@ -36,7 +36,9 @@ from wsv2.session_archive import (
     build_record_command,
     build_records_for_pane,
     format_archive_records,
+    load_archive,
     merge_snapshots,
+    save_archive,
     scan_local_host,
     select_restore_records,
 )
@@ -1155,6 +1157,26 @@ class OutageDrillTests(unittest.TestCase):
 
 
 class SessionArchiveTests(unittest.TestCase):
+    def test_load_archive_recovers_from_empty_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_path = Path(tmp) / 'archive.json'
+            archive_path.touch()
+
+            archive = load_archive(archive_path)
+
+        self.assertEqual(archive, {'version': 1, 'records': []})
+
+    def test_save_archive_atomically_replaces_empty_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_path = Path(tmp) / 'archive.json'
+            archive_path.touch()
+            payload = {'version': 1, 'records': [{'id': 'cx-1'}]}
+
+            save_archive(payload, archive_path)
+
+            self.assertEqual(load_archive(archive_path), payload)
+            self.assertEqual(list(Path(tmp).glob('.archive.json.*.tmp')), [])
+
     def test_build_records_for_pane_matches_codex_and_claude_by_cwd(self) -> None:
         pane = {
             'session': 'harness',

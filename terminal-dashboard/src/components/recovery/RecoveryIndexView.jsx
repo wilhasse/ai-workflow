@@ -40,8 +40,27 @@ async function loadRecoveryIndex(filters) {
 
 function buildManualResume(record) {
   if (!record?.resumeId) return ''
+  const savedCommand = String(record.resumeCommand || '').trim()
+  if (savedCommand) return savedCommand
   const tool = record.tool === 'claude' ? 'claude --resume' : 'codex resume'
-  return `cd ${record.cwd || '~'}\n${tool} ${record.resumeId}`
+  return `cd ${record.cwd || '~'} && ${tool} ${record.resumeId}`
+}
+
+async function copyText(value) {
+  if (!value) return
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value)
+    return
+  }
+  const input = document.createElement('textarea')
+  input.value = value
+  input.setAttribute('readonly', '')
+  input.style.position = 'fixed'
+  input.style.opacity = '0'
+  document.body.appendChild(input)
+  input.select()
+  document.execCommand('copy')
+  document.body.removeChild(input)
 }
 
 function recordMatchesWorkspace(record, workspaceKey) {
@@ -54,8 +73,8 @@ function RecoveryRow({ record }) {
   const manualResume = buildManualResume(record)
 
   const copyResume = async () => {
-    if (!manualResume || !navigator.clipboard) return
-    await navigator.clipboard.writeText(manualResume)
+    if (!manualResume) return
+    await copyText(manualResume)
     setCopied(true)
     window.setTimeout(() => setCopied(false), 1400)
   }
@@ -83,10 +102,13 @@ function RecoveryRow({ record }) {
           {record.cwd && <span title={record.cwd}>{record.cwd}</span>}
           <span>{formatDate(record.lastActiveAt || record.lastSeenAt || record.updatedAt)}</span>
         </div>
+        {manualResume && (
+          <code className="ri-command" title={manualResume}>{manualResume}</code>
+        )}
       </div>
       <div className="ri-actions">
         <button className="secondary" type="button" onClick={copyResume} disabled={!manualResume}>
-          {copied ? 'Copied' : 'Copy resume'}
+          {copied ? 'Copied' : 'Copy command'}
         </button>
       </div>
     </article>
@@ -101,7 +123,7 @@ export default function RecoveryIndexView() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  const records = data?.records || []
+  const records = useMemo(() => data?.records || [], [data?.records])
   const workspaces = data?.workspaces || []
   const filteredRecords = useMemo(
     () => records.filter((record) => recordMatchesWorkspace(record, workspaceKey)),

@@ -4504,6 +4504,20 @@ button.danger:hover:not(:disabled) {
   font-size: 0.78rem;
 }
 
+.ri-command {
+  display: block;
+  margin-top: 0.55rem;
+  padding: 0.45rem 0.55rem;
+  overflow-x: auto;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-size: 0.78rem;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
 .ri-actions {
   flex: 0 0 auto;
 }

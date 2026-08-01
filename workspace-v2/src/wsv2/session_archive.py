@@ -7,6 +7,7 @@ from pathlib import Path
 import shlex
 import sqlite3
 import subprocess
+import tempfile
 import time
 from typing import Any, Iterable
 
@@ -452,17 +453,46 @@ def merge_snapshots(
 def load_archive(path: str | Path | None = None) -> dict[str, Any]:
     archive_path = Path(path).expanduser() if path else default_archive_path()
     try:
-        return json.loads(archive_path.read_text(encoding="utf-8"))
+        contents = archive_path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return {"version": ARCHIVE_VERSION, "records": []}
+
+    # A prior interrupted/non-atomic write may leave a zero-byte file. Treat it
+    # like first startup so the periodic scanner can repair the archive instead
+    # of failing forever on every timer run.
+    if not contents.strip():
+        return {"version": ARCHIVE_VERSION, "records": []}
+
+    try:
+        payload = json.loads(contents)
     except json.JSONDecodeError as error:
         raise SessionArchiveError(f"Invalid session archive: {archive_path}") from error
+    if not isinstance(payload, dict):
+        raise SessionArchiveError(f"Invalid session archive: {archive_path}")
+    return payload
 
 
 def save_archive(payload: dict[str, Any], path: str | Path | None = None) -> None:
     archive_path = Path(path).expanduser() if path else default_archive_path()
     archive_path.parent.mkdir(parents=True, exist_ok=True)
-    archive_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=archive_path.parent,
+            prefix=f".{archive_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+            handle.flush()
+            os.fsync(handle.fileno())
+            temporary_path = Path(handle.name)
+        temporary_path.replace(archive_path)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 def list_archive_records(
