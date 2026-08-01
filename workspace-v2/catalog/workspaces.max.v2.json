@@ -1,0 +1,26 @@
+{
+  "version": 2,
+  "self_host_env": "WSV2_SELF_HOST",
+  "hosts": [
+    {
+      "id": "vm11",
+      "name": "Max Desktop",
+      "ssh": "cslog@10.1.0.11",
+      "hostnames": [
+        "godev5"
+      ],
+      "workspace_group": "max"
+    }
+  ],
+  "workspaces": [],
+  "settings": {
+    "terminal": "xfce4-terminal",
+    "terminals": [
+      "xfce4-terminal",
+      "konsole",
+      "gnome-terminal"
+    ],
+    "shell": "/bin/bash",
+    "defaultEditor": "code"
+  }
+}

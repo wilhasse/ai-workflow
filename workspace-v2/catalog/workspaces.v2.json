@@ -9,6 +9,7 @@
       "hostnames": [
         "godev4"
       ],
+      "workspace_group": "wil",
       "legacy_ids": [
         "local"
       ]
@@ -19,12 +20,14 @@
       "ssh": "cslog@10.1.0.9",
       "hostnames": [
         "godev3"
-      ]
+      ],
+      "workspace_group": "wil"
     },
     {
       "id": "vm12",
       "name": "DB Server",
-      "ssh": "cslog@10.1.0.12"
+      "ssh": "cslog@10.1.0.12",
+      "workspace_group": "wil"
     }
   ],
   "workspaces": [

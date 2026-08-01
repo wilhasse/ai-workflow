@@ -87,12 +87,14 @@ def write_v2_config(tmpdir: Path) -> Path:
                 'ssh': 'cslog@10.1.0.10',
                 'hostnames': ['godev4'],
                 'legacy_ids': ['local'],
+                'workspace_group': 'wil',
             },
             {
                 'id': 'vm9',
                 'name': 'Supersaber',
                 'ssh': 'cslog@10.1.0.9',
                 'hostnames': ['godev3'],
+                'workspace_group': 'wil',
             },
         ],
         'workspaces': [
@@ -156,6 +158,85 @@ class WorkspaceConfigTests(unittest.TestCase):
         self.assertEqual(config.self_host_id, 'vm9')
         self.assertTrue(config.host_runs_local('vm9'))
         self.assertFalse(config.host_runs_local('vm10'))
+
+    def test_v2_config_limits_hosts_to_self_workspace_group(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_v2_config(Path(tmp))
+            payload = json.loads(path.read_text(encoding='utf-8'))
+            payload['hosts'].append(
+                {
+                    'id': 'vm11',
+                    'name': 'Max Desktop',
+                    'ssh': 'cslog@10.1.0.11',
+                    'hostnames': ['godev5'],
+                    'workspace_group': 'max',
+                }
+            )
+            payload['workspaces'].append(
+                {
+                    'id': 'max-local',
+                    'name': 'Max Local',
+                    'path': '/home/cslog/max-local',
+                    'host': 'vm11',
+                }
+            )
+            path.write_text(json.dumps(payload), encoding='utf-8')
+
+            with mock.patch.dict(os.environ, {'WSV2_SELF_HOST': 'vm11'}, clear=True):
+                config = load_config(path)
+
+        self.assertEqual([host.id for host in config.hosts], ['vm11'])
+        self.assertEqual([workspace.id for workspace in config.workspaces], ['max-local'])
+        self.assertTrue(config.host_runs_local('local'))
+        with self.assertRaises(WorkspaceConfigError):
+            config.resolve_workspace('vm10:mysql')
+
+    def test_legacy_local_workspaces_follow_the_current_v2_host(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            config_path = write_v2_config(tmpdir)
+            payload = json.loads(config_path.read_text(encoding='utf-8'))
+            payload['hosts'].append(
+                {
+                    'id': 'vm11',
+                    'name': 'Max Desktop',
+                    'hostnames': ['godev5'],
+                    'workspace_group': 'max',
+                }
+            )
+            config_path.write_text(json.dumps(payload), encoding='utf-8')
+            legacy_path = tmpdir / 'legacy-workspaces.json'
+            legacy_path.write_text(
+                json.dumps(
+                    {
+                        'workspaces': [
+                            {
+                                'id': 'max-local',
+                                'name': 'Max Local',
+                                'path': '/home/cslog/max-local',
+                                'host': 'local',
+                            }
+                        ]
+                    }
+                ),
+                encoding='utf-8',
+            )
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    'WSV2_SELF_HOST': 'vm11',
+                    'WSV2_CONFIG_PATH': str(config_path),
+                    'WSV2_LEGACY_CONFIG_PATH': str(legacy_path),
+                    'WSV2_INCLUDE_ARCHIVE_WORKSPACES': '0',
+                },
+                clear=True,
+            ):
+                config = load_config()
+
+        workspace = config.resolve_workspace('max-local')
+        self.assertEqual(workspace.host_id, 'vm11')
+        self.assertTrue(config.host_runs_local(workspace.host))
 
     def test_default_v2_config_merges_legacy_and_archived_workspaces(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

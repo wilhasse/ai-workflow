@@ -55,6 +55,15 @@ Self-host resolution order:
 
 1. `WSV2_SELF_HOST` environment variable if set
 2. host identity matching from the current machine hostname against catalog host metadata
+
+Hosts can declare a `workspace_group`. Once the current host is resolved, the
+launcher only loads hosts and workspaces in that same group. This keeps a shared
+catalog usable by multiple people without exposing another person's VMs.
+
+For a stronger owner boundary, point each control host at its own catalog with
+`install-control-host.sh --config-path`. The bundled `workspaces.max.v2.json`
+contains only Max's `vm11`; its legacy `local` workspaces are mapped to `vm11`
+at load time and cannot pull hosts from the main catalog.
 3. if neither resolves, all explicit hosts are treated as remote
 
 In the bundled catalog:

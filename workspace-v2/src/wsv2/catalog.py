@@ -25,6 +25,7 @@ class HostRecord:
     ssh: str | None = None
     hostnames: tuple[str, ...] = ()
     legacy_ids: tuple[str, ...] = ()
+    workspace_group: str | None = None
 
     @property
     def ssh_host(self) -> str | None:
@@ -102,6 +103,8 @@ class WorkspaceConfig:
         normalized = host_id.strip()
         if not normalized:
             return None
+        if normalized.lower() == "local" and self.self_host_id:
+            return self.self_host_id
         for host in self.hosts:
             if host.matches_id(normalized):
                 return host.id
@@ -207,9 +210,25 @@ def _normalize_v2_hosts(raw_hosts: list[dict]) -> tuple[HostRecord, ...]:
                     for item in (raw_host.get("legacy_ids") or [])
                     if str(item).strip()
                 ),
+                workspace_group=(
+                    str(raw_host.get("workspace_group") or "").strip() or None
+                ),
             )
         )
     return tuple(hosts)
+
+
+def _visible_hosts(
+    hosts: tuple[HostRecord, ...], self_host_id: str | None
+) -> tuple[HostRecord, ...]:
+    if not self_host_id:
+        return hosts
+    self_host = next((host for host in hosts if host.id == self_host_id), None)
+    if not self_host or not self_host.workspace_group:
+        return hosts
+    return tuple(
+        host for host in hosts if host.workspace_group == self_host.workspace_group
+    )
 
 
 def _runtime_identity_tokens() -> set[str]:
@@ -257,10 +276,13 @@ def _normalize_workspaces(
     host_lookup: dict[str, HostRecord],
     *,
     strict_hosts: bool = True,
+    local_host_id: str | None = None,
 ) -> tuple[WorkspaceRecord, ...]:
     workspaces = []
     for raw_workspace in raw_workspaces:
         host_id = str(raw_workspace.get("host") or "local").strip() or "local"
+        if host_id.lower() == "local" and local_host_id:
+            host_id = local_host_id
         host = _resolve_workspace_host(host_id, host_lookup)
         if not host:
             if not strict_hosts:
@@ -320,12 +342,21 @@ def _dedupe_paths(paths: Iterable[Path]) -> list[Path]:
     return deduped
 
 
-def _load_legacy_workspaces(config_path: Path, host_lookup: dict[str, HostRecord]) -> tuple[WorkspaceRecord, ...]:
+def _load_legacy_workspaces(
+    config_path: Path,
+    host_lookup: dict[str, HostRecord],
+    self_host_id: str | None,
+) -> tuple[WorkspaceRecord, ...]:
     for candidate in _legacy_config_candidates(config_path):
         payload = _optional_json_file(candidate)
         if payload is None:
             continue
-        return _normalize_workspaces(payload.get("workspaces") or [], host_lookup, strict_hosts=False)
+        return _normalize_workspaces(
+            payload.get("workspaces") or [],
+            host_lookup,
+            strict_hosts=False,
+            local_host_id=self_host_id,
+        )
     return ()
 
 
@@ -413,20 +444,26 @@ def load_config(path: str | Path | None = None) -> WorkspaceConfig:
     settings = _normalize_settings(payload.get("settings") or {})
 
     if schema_version >= 2:
-        hosts = _normalize_v2_hosts(payload.get("hosts") or [])
-        if not hosts:
+        all_hosts = _normalize_v2_hosts(payload.get("hosts") or [])
+        if not all_hosts:
             raise WorkspaceConfigError("V2 workspace catalog has no hosts")
-        self_host_id = _resolve_self_host_id(payload, hosts)
+        self_host_id = _resolve_self_host_id(payload, all_hosts)
+        hosts = _visible_hosts(all_hosts, self_host_id)
     else:
         hosts = _normalize_legacy_hosts(payload.get("hosts") or [])
         self_host_id = "local"
 
     host_lookup = {host.id: host for host in hosts}
-    workspaces = _normalize_workspaces(payload.get("workspaces") or [], host_lookup)
+    workspaces = _normalize_workspaces(
+        payload.get("workspaces") or [],
+        host_lookup,
+        strict_hosts=schema_version < 2,
+        local_host_id=self_host_id if schema_version >= 2 else None,
+    )
     if schema_version >= 2 and not explicit_path:
         workspaces = _merge_workspaces(
             workspaces,
-            _load_legacy_workspaces(config_path, host_lookup),
+            _load_legacy_workspaces(config_path, host_lookup, self_host_id),
             _load_archive_workspaces(host_lookup),
         )
 
