@@ -200,6 +200,37 @@ class LauncherState:
         self.path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
         return {"label": normalized_label, "status": normalized_status}
 
+    def clear_session_window_metadata(
+        self,
+        host_id: str,
+        session_id: str,
+        *,
+        legacy_host_ids: tuple[str, ...] = (),
+    ) -> int:
+        payload = self._load_payload()
+        labels = payload.get("windowLabels")
+        if not isinstance(labels, dict):
+            return 0
+
+        host_ids = {str(host_id), *(str(value) for value in legacy_host_ids)}
+        prefixes = tuple(f"{value}:{session_id}" for value in host_ids if value)
+        matching_keys = [
+            key
+            for key in labels
+            if any(
+                key.startswith(prefix)
+                and len(key) > len(prefix)
+                and key[len(prefix)] in {"#", "@"}
+                for prefix in prefixes
+            )
+        ]
+        for key in matching_keys:
+            labels.pop(key, None)
+        if matching_keys:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        return len(matching_keys)
+
     def mark_recent(self, workspace_target: str) -> None:
         payload = self._load_payload()
         recent = payload.setdefault("recent", {})

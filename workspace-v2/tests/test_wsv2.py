@@ -549,6 +549,38 @@ class LauncherStateTests(unittest.TestCase):
         self.assertEqual(labels['vm9:dbtools#2']['label'], 'RENAC calls')
         self.assertEqual(shifted_label, 'RENAC calls')
 
+    def test_clear_session_window_metadata_keeps_other_sessions_and_recent_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'state.json'
+            path.write_text(json.dumps({
+                'recent': {'vm9:dbtools#2': 123},
+                'windowLabels': {
+                    'vm9:dbtools#2': {'label': 'legacy'},
+                    'vm9:dbtools@42': {'label': 'stable'},
+                    'supersaber:dbtools#2': {'status': 'idle'},
+                    'vm9:dbtools-copy#2': {'label': 'keep prefix neighbor'},
+                    'vm9:docker#2': {'label': 'keep other session'},
+                },
+            }), encoding='utf-8')
+            state = LauncherState(path)
+
+            removed = state.clear_session_window_metadata(
+                'vm9',
+                'dbtools',
+                legacy_host_ids=('supersaber',),
+            )
+            payload = json.loads(path.read_text(encoding='utf-8'))
+
+        self.assertEqual(removed, 3)
+        self.assertEqual(payload['recent'], {'vm9:dbtools#2': 123})
+        self.assertEqual(
+            payload['windowLabels'],
+            {
+                'vm9:dbtools-copy#2': {'label': 'keep prefix neighbor'},
+                'vm9:docker#2': {'label': 'keep other session'},
+            },
+        )
+
 
 class CodexParkingTests(unittest.TestCase):
     def test_parse_agent_target_accepts_session_and_window_forms(self) -> None:
@@ -759,6 +791,40 @@ class CodexParkingTests(unittest.TestCase):
             },
         ):
             self.assertTrue(_agent_row_inactive(row))
+
+
+class WorkspaceLifecycleTests(unittest.TestCase):
+    def test_missing_session_cleanup_drops_labels_before_relaunch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, \
+            mock.patch.dict(os.environ, {'WSV2_SELF_HOST': 'vm10'}, clear=True):
+            config_path = write_v2_config(Path(tmp))
+            state_path = Path(tmp) / 'state.json'
+            actions = WorkspaceActions(config_path=config_path, state_path=state_path)
+            workspace = actions.config.resolve_workspace('mysql')
+            actions.state.set_window_metadata('vm10', 'mysql', 1, label='old task', window_id='@42')
+
+            missing = mock.Mock(returncode=1, stdout='', stderr='')
+            with mock.patch('wsv2.actions.subprocess.run', return_value=missing):
+                removed = actions._clear_workspace_metadata_if_session_missing(workspace)
+
+            self.assertEqual(removed, 2)
+            self.assertEqual(actions.state.window_labels(), {})
+
+    def test_active_session_preserves_labels(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, \
+            mock.patch.dict(os.environ, {'WSV2_SELF_HOST': 'vm10'}, clear=True):
+            config_path = write_v2_config(Path(tmp))
+            state_path = Path(tmp) / 'state.json'
+            actions = WorkspaceActions(config_path=config_path, state_path=state_path)
+            workspace = actions.config.resolve_workspace('mysql')
+            actions.state.set_window_metadata('vm10', 'mysql', 1, label='keep task', window_id='@42')
+
+            active = mock.Mock(returncode=0, stdout='', stderr='')
+            with mock.patch('wsv2.actions.subprocess.run', return_value=active):
+                removed = actions._clear_workspace_metadata_if_session_missing(workspace)
+
+            self.assertEqual(removed, 0)
+            self.assertEqual(actions.state.window_label('vm10', 'mysql', 1, '@42'), 'keep task')
 
 
 class TerminalRankingTests(unittest.TestCase):

@@ -288,15 +288,19 @@ const readWindowLabels = async () => {
   return state.windowLabels && typeof state.windowLabels === 'object' ? state.windowLabels : {}
 }
 
-const windowLabelCandidateKeys = (host, sessionId, windowIndex, windowId = '') => {
+const windowMetadataHostIds = (host) => {
   const hostIds = new Set([host?.id, ...(host?.legacyIds || [])].filter(Boolean))
   if (isHostLocal(host)) {
     hostIds.add(config.mobileSelfHostId)
     hostIds.add('local')
   }
+  return Array.from(hostIds)
+}
+
+const windowLabelCandidateKeys = (host, sessionId, windowIndex, windowId = '') => {
   const stableKeys = []
   const legacyKeys = []
-  Array.from(hostIds).forEach((hostId) => {
+  windowMetadataHostIds(host).forEach((hostId) => {
     const stableKey = windowLabelKey(hostId, sessionId, windowIndex, windowId)
     stableKeys.push(stableKey)
     legacyKeys.push(legacyWindowLabelKey(hostId, sessionId, windowIndex))
@@ -367,6 +371,32 @@ const setWindowMetadata = async (host, sessionId, windowIndex, metadata = {}, wi
   }
   await writeLauncherState(state)
   return { label: normalizedLabel, status: normalizedStatus }
+}
+
+const clearSessionWindowMetadata = async (host, sessionId) => {
+  const state = await readLauncherState()
+  const labels = state.windowLabels && typeof state.windowLabels === 'object'
+    ? state.windowLabels
+    : null
+  if (!labels) {
+    return 0
+  }
+
+  const sessionPrefixes = windowMetadataHostIds(host).map((hostId) => `${hostId}:${sessionId}`)
+  let removed = 0
+  Object.keys(labels).forEach((key) => {
+    const matchesSession = sessionPrefixes.some((prefix) => (
+      key.startsWith(prefix) && ['#', '@'].includes(key.charAt(prefix.length))
+    ))
+    if (matchesSession) {
+      delete labels[key]
+      removed += 1
+    }
+  })
+  if (removed > 0) {
+    await writeLauncherState(state)
+  }
+  return removed
 }
 
 const decorateWindowWithLabel = (window, host, labels, sessionId = window.sessionId) => {
@@ -835,6 +865,30 @@ const remoteListAllWindows = async (host) => {
   return parseTmuxWindowRows(response.stdout)
 }
 
+const remoteSessionExists = async (host, sessionId) => {
+  if (!host?.ssh) {
+    throw new Error('Host has no SSH target')
+  }
+  const response = await runSsh(
+    host.ssh,
+    `if ${config.tmuxBin} has-session -t ${shellQuote(sessionId)} 2>/dev/null; then printf present; else printf missing; fi`,
+  )
+  if (!response.ok) {
+    throw response.error
+  }
+  return response.stdout.trim() === 'present'
+}
+
+const clearSessionMetadataIfClosed = async (host, sessionId) => {
+  await sleep(50)
+  const exists = isHostLocal(host)
+    ? await tmuxSessionExists(sessionId)
+    : await remoteSessionExists(host, sessionId)
+  if (!exists) {
+    await clearSessionWindowMetadata(host, sessionId)
+  }
+}
+
 const parseHistoryLines = (value) => {
   const parsed = Number.parseInt(value, 10)
   if (!Number.isFinite(parsed)) {
@@ -1269,6 +1323,7 @@ const ensureMetadata = async (sessionId, { projectId = null, command = null } = 
 const ensureTmuxSession = async ({ sessionId, projectId, command }) => {
   const exists = await tmuxSessionExists(sessionId)
   if (!exists) {
+    await clearSessionWindowMetadata({ id: config.mobileSelfHostId, legacyIds: ['local'] }, sessionId)
     await tmuxCreateSession(sessionId, command ?? config.defaultShell)
   }
   return ensureMetadata(sessionId, { projectId, command })
@@ -2913,6 +2968,7 @@ const handleDeleteSession = async (res, sessionId) => {
   }
   try {
     const removed = await tmuxKillSession(sanitizedId)
+    await clearSessionWindowMetadata({ id: config.mobileSelfHostId, legacyIds: ['local'] }, sanitizedId)
     if (!removed) {
       respond(res, 404, { error: 'Session not found' })
       return
@@ -3447,6 +3503,12 @@ const handleTerminalSocket = async (ws, sessionIdRaw, searchParams) => {
     sendWsMessage(ws, { type: 'exit', exitCode, signal })
     ws.close(1000, 'tmux session detached')
     cleanup()
+    clearSessionMetadataIfClosed(
+      { id: config.mobileSelfHostId, legacyIds: ['local'] },
+      sanitizedSessionId,
+    ).catch((error) => {
+      console.warn('Failed to clean up closed tmux session metadata', safeErrorMessage(error))
+    })
   })
 
   const writeInput = async (payload) => {
@@ -3574,6 +3636,15 @@ const handleRemoteTerminalSocket = async (ws, hostIdRaw, sessionIdRaw, searchPar
   let ptyProcess
   let copyModeActive = false
 
+  try {
+    const exists = await remoteSessionExists(host, sanitizedSessionId)
+    if (!exists) {
+      await clearSessionWindowMetadata(host, sanitizedSessionId)
+    }
+  } catch (error) {
+    console.warn('Failed to check remote tmux session metadata', safeErrorMessage(error))
+  }
+
   if (!monitorMode) {
     try {
       await unparkRemoteAgents(host, sanitizedSessionId, windowIndex, windowId)
@@ -3631,6 +3702,9 @@ const handleRemoteTerminalSocket = async (ws, hostIdRaw, sessionIdRaw, searchPar
     sendWsMessage(ws, { type: 'exit', exitCode, signal })
     ws.close(1000, 'remote tmux session detached')
     cleanup()
+    clearSessionMetadataIfClosed(host, sanitizedSessionId).catch((error) => {
+      console.warn('Failed to clean up closed remote tmux session metadata', safeErrorMessage(error))
+    })
   })
 
   const writeInput = async (payload) => {

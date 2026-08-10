@@ -739,6 +739,7 @@ class WorkspaceActions:
             return "launched"
 
         workspace = self.resolve_workspace(target)
+        self._clear_workspace_metadata_if_session_missing(workspace)
         self.unpark_workspace_target(target)
         if focus_existing and self.focus_workspace_window(workspace.id):
             self.state.mark_recent(workspace.target)
@@ -779,6 +780,7 @@ class WorkspaceActions:
             self.state.mark_recent(target)
         else:
             workspace = self.resolve_workspace(target)
+            self._clear_workspace_metadata_if_session_missing(workspace)
             self.unpark_workspace_target(target)
             command = self.workspace_command(
                 target,
@@ -800,7 +802,14 @@ class WorkspaceActions:
                 capture_output=True,
                 text=True,
             )
-            return result.returncode == 0
+            removed = result.returncode == 0
+            if removed:
+                self.state.clear_session_window_metadata(
+                    workspace.host.id,
+                    session_name,
+                    legacy_host_ids=workspace.host.legacy_ids,
+                )
+            return removed
 
         result = subprocess.run(
             ["ssh", workspace.host.ssh or "", f"tmux kill-session -t {shlex.quote(session_name)}"],
@@ -808,7 +817,65 @@ class WorkspaceActions:
             text=True,
             timeout=5,
         )
-        return result.returncode == 0
+        removed = result.returncode == 0
+        if removed:
+            self.state.clear_session_window_metadata(
+                workspace.host.id,
+                session_name,
+                legacy_host_ids=workspace.host.legacy_ids,
+            )
+        return removed
+
+    def _clear_workspace_metadata_if_session_missing(self, workspace: WorkspaceRecord) -> int:
+        if self.config.host_runs_local(workspace.host_id):
+            try:
+                result = subprocess.run(
+                    ["tmux", "has-session", "-t", workspace.id],
+                    capture_output=True,
+                    text=True,
+                    timeout=4,
+                    env={**os.environ, "TMUX": ""},
+                )
+            except (subprocess.TimeoutExpired, OSError):
+                return 0
+            if result.returncode == 0:
+                return 0
+            if result.returncode != 1:
+                return 0
+        else:
+            if not workspace.host.ssh:
+                return 0
+            remote_command = (
+                f"if tmux has-session -t {shlex.quote(workspace.id)} 2>/dev/null; "
+                "then printf present; else printf missing; fi"
+            )
+            try:
+                result = subprocess.run(
+                    [
+                        "ssh",
+                        "-o",
+                        "ConnectTimeout=2",
+                        "-o",
+                        "BatchMode=yes",
+                        workspace.host.ssh,
+                        remote_command,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+            except (subprocess.TimeoutExpired, OSError):
+                return 0
+            if result.returncode != 0 or result.stdout.strip() != "missing":
+                return 0
+
+        if not workspace.id:
+            return 0
+        return self.state.clear_session_window_metadata(
+            workspace.host.id,
+            workspace.id,
+            legacy_host_ids=workspace.host.legacy_ids,
+        )
 
     def focus_workspace_window(self, session_id: str) -> bool:
         wmctrl_path = shutil.which("wmctrl")

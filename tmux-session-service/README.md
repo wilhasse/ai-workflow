@@ -13,6 +13,7 @@ A lightweight HTTP + WebSocket service that keeps tmux-backed shells alive so th
 - **Stateless HTTP interface**: `POST /sessions` to create or `PUT /sessions/:id` to idempotently ensure a session exists.
 - **tmux orchestration**: Uses `tmux new-session -d` to spawn background shells and `tmux has-session`/`kill-session` to inspect lifecycle.
 - **Metadata tracking**: Persists simple JSON metadata to `data/sessions.json` (mounted volume friendly) so restarts remember labels and timestamps.
+- **Label lifecycle**: Browser disconnects keep app-only window labels while tmux is alive; closing or deleting the tmux session clears its saved labels before that session ID can be reused.
 - **Container ready**: Includes a minimal Node entrypoint and example Dockerfile plus `node-pty` for streaming tmux output.
 - **WebSocket bridge**: `/ws/sessions/:id` spawns `tmux attach-session -t :id` inside a pseudo-terminal and streams bytes to/from the browser.
 
