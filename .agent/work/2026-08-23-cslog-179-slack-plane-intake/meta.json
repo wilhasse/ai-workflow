@@ -1,0 +1,11 @@
+{
+  "id": "2026-08-23-cslog-179-slack-plane-intake",
+  "title": "Slack Hermes Plane problem intake",
+  "stage": "implementation",
+  "state": "active",
+  "created_at": "2026-08-23T23:41:28Z",
+  "updated_at": "2026-08-23T23:44:10Z",
+  "artifacts": {
+    "execplan": "execplan.md"
+  }
+}
