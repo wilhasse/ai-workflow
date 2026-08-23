@@ -585,6 +585,35 @@ function DashboardApp() {
     closeTerminalSwitcher()
   }, [closeTerminalSwitcher, recordWindowUsage])
 
+  const handleSwitchToTmux = useCallback(async (owner) => {
+    const result = await fetchTerminalTabs()
+    setTerminalTabs(result.tabs)
+    setTerminalTabErrors(result.errors)
+
+    const ownerWindowId = normalizeWindowId(owner.windowId)
+    const matchesOwner = (tab) => {
+      if (owner.hostId && tab.hostId !== owner.hostId) return false
+      if (tab.sessionId !== owner.sessionId) return false
+      if (ownerWindowId) return normalizeWindowId(tab.windowId) === ownerWindowId
+      return Number(tab.windowIndex) === Number(owner.windowIndex)
+    }
+    const carriesThread = (tab) => (tab.conversationIds || []).some((conversation) => (
+      String(conversation?.resumeId || conversation || '') === owner.threadId
+    ))
+    const entry = result.tabs.find(matchesOwner)
+      || result.tabs.find((tab) => (
+        (!owner.hostId || tab.hostId === owner.hostId) && carriesThread(tab)
+      ))
+
+    if (!entry) {
+      const scanErrors = result.errors.map((item) => item.error).filter(Boolean).join('; ')
+      const suffix = scanErrors ? ` Host scan errors: ${scanErrors}` : ''
+      throw new Error(`The owning tmux window is no longer available. Refresh the Agent Board and try again.${suffix}`)
+    }
+
+    handleSelectTerminalEntry(entry)
+  }, [fetchTerminalTabs, handleSelectTerminalEntry])
+
   const handleSelectWindow = useCallback((windowIndex) => {
     const selectedWindow = windows.find((window) => window.index === windowIndex) ?? null
     setActiveWindowIndex(windowIndex)
@@ -1430,7 +1459,7 @@ function DashboardApp() {
         ) : view === 'recovery-index' ? (
           <RecoveryIndexView />
         ) : view === 'agent-board' ? (
-          <AgentBoard />
+          <AgentBoard onSwitchToTmux={handleSwitchToTmux} />
         ) : view === 'vm-create' ? (
           <VmCreatePanel apiBase={API_BASE} />
         ) : view === 'organizer' ? (
