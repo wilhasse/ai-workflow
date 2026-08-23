@@ -10,7 +10,7 @@ Environment=CODEX_CONTROL_CODEX_BIN=%h/.local/bin/codex
 Environment=CODEX_CONTROL_DEFAULT_CWD=%h/ai-workflow
 Environment=CODEX_CONTROL_ALLOWED_ROOTS=%h
 Environment=CODEX_CONTROL_SOCKET=%h/ai-workflow/runtime/codex-control/control.sock
-ExecStart=/usr/bin/node %h/ai-workflow/codex-control-service/src/server.js
+ExecStart=%h/ai-workflow/codex-control-service/deploy/run-user-service.sh
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=20
