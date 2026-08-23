@@ -1,0 +1,20 @@
+{
+  "name": "agent-history-oci-sync",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "OCI MySQL index for agent conversation history (Codex/Claude): ingest API, FULLTEXT search, LLM summaries, handoff export.",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "schema": "node src/db/schema.js",
+    "summarize": "node src/summarize.js",
+    "backfill": "node scripts/backfill.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "mysql2": "^3.11.0"
+  }
+}

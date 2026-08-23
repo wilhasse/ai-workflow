@@ -13,6 +13,10 @@ services:
     environment:
       - VM_ID=${VM_ID:-remote-vm}
       - API_URL=http://10.1.0.7:5002
+      # Optional second ingest target (OCI MySQL index, CSLOG-166).
+      # Requires DNS A record for the domain + Caddy running on the VM.
+      - OCI_API_URL=${OCI_API_URL:-}
+      - OCI_API_TOKEN=${OCI_API_TOKEN:-}
       - CLAUDE_HOME=/data/.claude
       - CODEX_HOME=/data/.codex
       - SYNC_INTERVAL_MS=300000

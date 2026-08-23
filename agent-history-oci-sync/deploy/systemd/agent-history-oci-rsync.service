@@ -1,0 +1,9 @@
+[Unit]
+Description=Mirror raw agent history files to oci-ubuntu-pub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=cslog
+ExecStart=/home/cslog/ai-workflow/agent-history-oci-sync/deploy/rsync-to-oci.sh

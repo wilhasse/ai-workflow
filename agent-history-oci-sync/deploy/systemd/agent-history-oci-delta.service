@@ -1,0 +1,9 @@
+[Unit]
+Description=Delta sync Doris agent history to OCI MySQL via SSH tunnel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=cslog
+ExecStart=/home/cslog/ai-workflow/agent-history-oci-sync/scripts/delta-sync.sh

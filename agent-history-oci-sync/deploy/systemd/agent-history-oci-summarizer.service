@@ -1,0 +1,8 @@
+[Unit]
+Description=Generate LLM summaries for agent history sessions (runs on oci-ubuntu-pub)
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/agent-history-oci-sync/deploy
+ExecStart=/usr/bin/docker compose run --rm --no-deps api node src/summarize.js
