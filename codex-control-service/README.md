@@ -49,9 +49,16 @@ Install the checked-in systemd user unit from the repository:
 ```
 
 The unit uses the current user's `~/.local/bin/codex`, `~/.codex` state, and
-provider configuration without copying or modifying them. Override settings by
-adding a systemd drop-in for `codex-control-service.service`; useful variables
-include `CODEX_CONTROL_DEFAULT_CWD`, `CODEX_CONTROL_ALLOWED_ROOTS` (comma-separated),
+provider configuration without copying or modifying them. Its launcher sources
+`~/.codex/provider-env` when that file exists so credentials exported there are
+available to custom providers even though systemd does not load interactive
+shell startup files. Keep that file outside the repository and readable only by
+the user. Set `CODEX_CONTROL_PROVIDER_ENV_FILE` in a systemd drop-in to use a
+different private file.
+
+Override other settings by adding a systemd drop-in for
+`codex-control-service.service`; useful variables include
+`CODEX_CONTROL_DEFAULT_CWD`, `CODEX_CONTROL_ALLOWED_ROOTS` (comma-separated),
 `CODEX_CONTROL_REQUEST_TIMEOUT_MS`, and `CODEX_CONTROL_COMPARISON_TIMEOUT_MS`.
 The unit also sets a soft `MemoryHigh=768M` boundary so app-server's reclaimable
 startup file cache does not become permanent overhead; it is not a hard kill limit.

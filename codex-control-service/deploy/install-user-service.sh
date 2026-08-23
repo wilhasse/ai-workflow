@@ -8,5 +8,6 @@ runtime_dir="${HOME}/ai-workflow/runtime/codex-control"
 mkdir -p "$(dirname "${service_target}")" "${runtime_dir}"
 install -m 0644 "${service_source}" "${service_target}"
 systemctl --user daemon-reload
-systemctl --user enable --now codex-control-service.service
+systemctl --user enable codex-control-service.service
+systemctl --user restart codex-control-service.service
 systemctl --user --no-pager --full status codex-control-service.service
