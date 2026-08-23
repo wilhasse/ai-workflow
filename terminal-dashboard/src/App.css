@@ -4462,7 +4462,8 @@ button.danger:hover:not(:disabled) {
 }
 
 .ri-label,
-.ri-status {
+.ri-status,
+.ri-runtime-badge {
   display: inline-flex;
   align-items: center;
   min-height: 1.35rem;
@@ -4471,6 +4472,19 @@ button.danger:hover:not(:disabled) {
   background: rgba(245, 158, 11, 0.16);
   color: var(--color-text-primary);
   font-size: 0.75rem;
+}
+
+.ri-runtime-badge {
+  background: rgba(59, 130, 246, 0.17);
+}
+
+.ri-runtime-badge.provider {
+  background: rgba(139, 92, 246, 0.17);
+}
+
+.ri-runtime-badge.effort {
+  background: rgba(14, 165, 233, 0.17);
+  text-transform: capitalize;
 }
 
 .ri-status.active {

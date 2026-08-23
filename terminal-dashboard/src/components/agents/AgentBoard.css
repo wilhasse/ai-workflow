@@ -1,0 +1,304 @@
+.ab-view {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+  gap: var(--space-md);
+  padding: var(--space-md);
+  overflow-y: auto;
+}
+
+.ab-toolbar,
+.ab-panel {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+}
+
+.ab-toolbar,
+.ab-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-md);
+}
+
+.ab-toolbar {
+  padding: 0.8rem 0.95rem;
+}
+
+.ab-toolbar h2,
+.ab-panel-header h3 {
+  margin: 0;
+  color: var(--color-text-primary);
+}
+
+.ab-toolbar h2 { font-size: 1rem; }
+.ab-panel-header h3 { font-size: 0.94rem; }
+
+.ab-toolbar p,
+.ab-panel-header p {
+  margin: 0.2rem 0 0;
+  color: var(--color-text-secondary);
+  font-size: 0.82rem;
+}
+
+.ab-connection,
+.ab-runtime-row,
+.ab-thread-meta,
+.ab-thread-actions,
+.ab-approval-actions,
+.ab-usage-row,
+.ab-preset-checks {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.ab-connection > span,
+.ab-status,
+.ab-runtime-row > span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.35rem;
+  padding: 0.12rem 0.45rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.72rem;
+}
+
+.ab-connection .connected,
+.ab-status.completed,
+.ab-status.idle {
+  background: rgba(34, 197, 94, 0.18);
+}
+
+.ab-connection .disconnected,
+.ab-status.failed,
+.ab-status.systemError,
+.ab-status.completedWithErrors {
+  background: rgba(239, 68, 68, 0.18);
+}
+
+.ab-status.active,
+.ab-status.running,
+.ab-status.starting {
+  background: rgba(59, 130, 246, 0.2);
+}
+
+.ab-status.notLoaded,
+.ab-status.queued {
+  background: rgba(100, 116, 139, 0.22);
+}
+
+.ab-panel {
+  padding: 0.85rem;
+}
+
+.ab-main-grid {
+  display: grid;
+  grid-template-columns: minmax(19rem, 0.8fr) minmax(28rem, 1.2fr);
+  gap: var(--space-md);
+  min-height: 34rem;
+}
+
+.ab-work-column {
+  display: grid;
+  gap: var(--space-md);
+  align-content: start;
+}
+
+.ab-thread-list-panel {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.ab-thread-list {
+  display: grid;
+  gap: 0.45rem;
+  max-height: 44rem;
+  overflow-y: auto;
+}
+
+.ab-thread-card {
+  display: grid;
+  gap: 0.35rem;
+  width: 100%;
+  padding: 0.65rem 0.7rem;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  text-align: left;
+}
+
+.ab-thread-card:hover,
+.ab-thread-card.selected {
+  border-color: var(--color-accent, #3b82f6);
+}
+
+.ab-thread-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.55rem;
+}
+
+.ab-thread-top strong {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 0.82rem;
+  line-height: 1.3;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.ab-runtime-row > span {
+  background: rgba(59, 130, 246, 0.14);
+  color: var(--color-text-secondary);
+}
+
+.ab-runtime-row.detail { margin-bottom: 0.65rem; }
+
+.ab-thread-meta {
+  color: var(--color-text-tertiary);
+  font-size: 0.7rem;
+}
+
+.ab-thread-meta span:nth-child(2) {
+  overflow: hidden;
+  max-width: 18rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ab-create-form,
+.ab-compare-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+  margin-top: 0.7rem;
+}
+
+.ab-create-form textarea,
+.ab-create-form button,
+.ab-compare-form textarea,
+.ab-compare-form button,
+.ab-preset-checks {
+  grid-column: 1 / -1;
+}
+
+.ab-view input,
+.ab-view select,
+.ab-view textarea {
+  width: 100%;
+  min-height: 2.2rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--color-border-medium);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  font: inherit;
+}
+
+.ab-view textarea { resize: vertical; }
+
+.ab-output,
+.ab-plan,
+.ab-diff,
+.ab-compare-result pre {
+  max-height: 18rem;
+  padding: 0.7rem;
+  overflow: auto;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font: 0.78rem/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ab-plan { border-color: rgba(59, 130, 246, 0.35); }
+.ab-diff { border-color: rgba(245, 158, 11, 0.35); }
+
+.ab-approval-list { display: grid; gap: 0.55rem; margin-top: 0.65rem; }
+
+.ab-approval {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.7rem;
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  border-radius: var(--radius-sm);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.ab-approval code,
+.ab-approval small { display: block; margin-top: 0.25rem; }
+.ab-approval p { margin: 0.25rem 0; }
+
+.ab-comparison { flex: 0 0 auto; }
+
+.ab-compare-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin-top: 0.85rem;
+}
+
+.ab-compare-result {
+  min-width: 0;
+  padding: 0.7rem;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-tertiary);
+}
+
+.ab-compare-result > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.45rem;
+}
+
+.ab-usage-row {
+  margin-top: 0.35rem;
+  color: var(--color-text-tertiary);
+  font-size: 0.74rem;
+}
+
+.ab-error {
+  padding: 0.65rem 0.75rem;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: var(--radius-sm);
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--color-text-primary);
+  font-size: 0.82rem;
+}
+
+.ab-empty {
+  padding: 1rem;
+  color: var(--color-text-tertiary);
+  text-align: center;
+}
+
+@media (max-width: 1100px) {
+  .ab-main-grid { grid-template-columns: 1fr; }
+  .ab-thread-list { max-height: 24rem; }
+  .ab-compare-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 680px) {
+  .ab-toolbar,
+  .ab-panel-header,
+  .ab-approval { flex-direction: column; }
+  .ab-create-form,
+  .ab-compare-form { grid-template-columns: 1fr; }
+  .ab-create-form > *,
+  .ab-compare-form > * { grid-column: 1; }
+}

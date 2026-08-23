@@ -18,6 +18,12 @@ function shortId(id, size = 12) {
   return id.length > size ? `${id.slice(0, size)}...` : id
 }
 
+function formatTokens(value) {
+  const tokens = Number(value || 0)
+  if (!tokens) return ''
+  return new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(tokens)
+}
+
 function queryString(params) {
   const search = new URLSearchParams()
   for (const [key, value] of Object.entries(params)) {
@@ -99,6 +105,9 @@ function RecoveryRow({ record }) {
           {record.label && <span className="ri-label">{record.label}</span>}
           {record.status && <span className={`ri-status ${record.status}`}>{record.status}</span>}
           {record.active && <span className="ri-status active">active</span>}
+          {record.model && <span className="ri-runtime-badge">{record.model}</span>}
+          {record.modelProvider && <span className="ri-runtime-badge provider">{record.modelProvider}</span>}
+          {record.reasoningEffort && <span className="ri-runtime-badge effort">{record.reasoningEffort}</span>}
         </div>
         <div className="ri-prompts">
           <div><strong>First:</strong> {record.firstPrompt || 'No prompt captured'}</div>
@@ -109,6 +118,7 @@ function RecoveryRow({ record }) {
           <span>{record.tool}</span>
           <span title={record.resumeId}>{shortId(record.resumeId, 18)}</span>
           {record.cwd && <span title={record.cwd}>{record.cwd}</span>}
+          {record.tokensUsed > 0 && <span>{formatTokens(record.tokensUsed)} tokens</span>}
           <span>{formatDate(record.score || record.updatedAt || record.lastSeenAt)}</span>
         </div>
         {manualResume && (

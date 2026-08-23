@@ -7,5 +7,12 @@ export default defineConfig({
   server: {
     host: true,
     port: 5173,
+    proxy: {
+      '/api/codex': {
+        target: 'http://127.0.0.1:5006',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/codex/, ''),
+      },
+    },
   },
 })

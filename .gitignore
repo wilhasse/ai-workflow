@@ -66,5 +66,6 @@ coverage/
 # Runtime data
 tmux-session-service/data/sessions.json
 tmux-session-service/data/users.json
+runtime/codex-control/*.sock
 
 .omx/

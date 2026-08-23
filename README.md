@@ -49,6 +49,23 @@ npm run dev
 
 ---
 
+### Codex Agent Board
+
+Host-side application layer built on `codex app-server`. The dashboard can list
+and inspect threads, launch controlled `default`/`k3`/`qwen` sessions, stream
+progress, steer or interrupt active turns, resolve approvals, and compare the
+same prompt across providers in read-only ephemeral threads.
+
+```bash
+cd codex-control-service
+npm test
+./deploy/install-user-service.sh
+```
+
+[Architecture and API →](codex-control-service/README.md)
+
+---
+
 ### 🔄 tmux Session Service
 
 Lightweight Node.js HTTP + WebSocket service that provisions persistent tmux sessions for the dashboard.
@@ -98,6 +115,7 @@ The Docker deployment includes:
 - **nginx** - Reverse proxy with SSL termination + WebSocket upgrades
 - **terminal-dashboard** - React frontend with embedded terminals
 - **tmux-session-service** - Session persistence API + WebSocket bridge
+- **codex-control-service** - Host user service proxied through a Unix socket
 - **whisper-realtime-api** (optional) - Voice transcription
 
 ### Deepgram Voice
@@ -135,6 +153,7 @@ Ctrl+Enter switchers support keyboard edits on the selected tab: `F2`, `Ctrl+L`,
 ```
 Internet → nginx (443) ─→ terminal-dashboard (React + xterm)
                       └→ tmux-session-service (API + WebSocket)
+                      └→ codex-control-service (Unix socket → Codex app-server)
 ```
 
 ### Services
@@ -144,6 +163,7 @@ Internet → nginx (443) ─→ terminal-dashboard (React + xterm)
 | nginx | 80, 443 | 80, 443 | Reverse proxy, SSL |
 | terminal-dashboard | 3000 | via nginx | React frontend |
 | tmux-session-service | 5001 | proxied via nginx | Session API + terminal bridge |
+| codex-control-service | Unix socket | proxied via nginx | Codex threads, turns, approvals, events, comparisons |
 
 ### Complete Documentation
 

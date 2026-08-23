@@ -288,6 +288,15 @@ def build_archive_record(
         "active": active,
         "resumeCommand": build_local_resume_command(kind, cwd, resume_id),
     }
+    if kind == "codex":
+        record.update(
+            {
+                "model": session.get("model"),
+                "modelProvider": session.get("modelProvider"),
+                "reasoningEffort": session.get("reasoningEffort"),
+                "tokensUsed": int(session.get("tokensUsed") or 0),
+            }
+        )
     if active:
         record["lastActiveAt"] = now_ms
     if pane:
@@ -963,8 +972,10 @@ def _load_codex_threads() -> list[dict[str, Any]]:
                 updated_at,
                 created_at_ms,
                 updated_at_ms,
+                model_provider,
                 model,
-                reasoning_effort
+                reasoning_effort,
+                tokens_used
             from threads
             where archived = 0
             order by coalesce(updated_at_ms, updated_at * 1000, created_at_ms, created_at * 1000) desc
@@ -990,8 +1001,10 @@ def _load_codex_threads() -> list[dict[str, Any]]:
             updated_at,
             created_at_ms,
             updated_at_ms,
+            model_provider,
             model,
             reasoning_effort,
+            tokens_used,
         ) = row
         last_user_message = _last_codex_user_message(Path(str(rollout_path or "")).expanduser())
         threads.append(
@@ -1005,7 +1018,9 @@ def _load_codex_threads() -> list[dict[str, Any]]:
                 "startedAt": _int_or_none(created_at_ms) or ((_int_or_none(created_at) or 0) * 1000),
                 "updatedAt": _int_or_none(updated_at_ms) or ((_int_or_none(updated_at) or 0) * 1000),
                 "model": model,
+                "modelProvider": model_provider,
                 "reasoningEffort": reasoning_effort,
+                "tokensUsed": _int_or_none(tokens_used) or 0,
             }
         )
     return threads

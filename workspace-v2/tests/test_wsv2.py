@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import sqlite3
 import tempfile
 import unittest
 from unittest import mock
@@ -31,6 +32,7 @@ from wsv2.codex_parking import (
     unpark_target,
 )
 from wsv2.session_archive import (
+    _load_codex_threads,
     _last_codex_user_message,
     build_archive_record,
     build_record_command,
@@ -1327,6 +1329,91 @@ class SessionArchiveTests(unittest.TestCase):
 
         self.assertEqual(record['firstPrompt'], 'first prompt')
         self.assertEqual(record['lastPrompt'], 'last prompt')
+
+    def test_build_archive_record_includes_codex_runtime_metadata(self) -> None:
+        record = build_archive_record(
+            kind='codex',
+            session={
+                'resumeId': 'codex-1',
+                'cwd': '/repo',
+                'model': 'kimi-k3',
+                'modelProvider': 'cliproxy',
+                'reasoningEffort': 'high',
+                'tokensUsed': 4321,
+            },
+            pane=None,
+            host_id='vm10',
+            host_name='Main Desktop',
+            now_ms=1000,
+            active=False,
+        )
+
+        self.assertEqual(
+            {
+                key: record[key]
+                for key in ('model', 'modelProvider', 'reasoningEffort', 'tokensUsed')
+            },
+            {
+                'model': 'kimi-k3',
+                'modelProvider': 'cliproxy',
+                'reasoningEffort': 'high',
+                'tokensUsed': 4321,
+            },
+        )
+
+    def test_load_codex_threads_reads_model_provider_and_tokens(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            codex_dir = home / '.codex'
+            codex_dir.mkdir()
+            database = sqlite3.connect(codex_dir / 'state_5.sqlite')
+            database.execute(
+                '''
+                create table threads (
+                    id text,
+                    rollout_path text,
+                    cwd text,
+                    title text,
+                    first_user_message text,
+                    preview text,
+                    created_at integer,
+                    updated_at integer,
+                    created_at_ms integer,
+                    updated_at_ms integer,
+                    model_provider text,
+                    model text,
+                    reasoning_effort text,
+                    tokens_used integer,
+                    archived integer
+                )
+                '''
+            )
+            database.execute(
+                'insert into threads values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                (
+                    'thread-1', '', '/repo', 'Test', 'hello', 'preview', 1, 2,
+                    1000, 2000, 'cliproxy', 'qwen3.8-max', 'high', 9876, 0,
+                ),
+            )
+            database.commit()
+            database.close()
+
+            with mock.patch('wsv2.session_archive.Path.home', return_value=home):
+                threads = _load_codex_threads()
+
+        self.assertEqual(
+            {
+                key: threads[0][key]
+                for key in ('resumeId', 'model', 'modelProvider', 'reasoningEffort', 'tokensUsed')
+            },
+            {
+                'resumeId': 'thread-1',
+                'model': 'qwen3.8-max',
+                'modelProvider': 'cliproxy',
+                'reasoningEffort': 'high',
+                'tokensUsed': 9876,
+            },
+        )
 
     def test_build_archive_record_does_not_use_generic_title_as_prompt(self) -> None:
         record = build_archive_record(

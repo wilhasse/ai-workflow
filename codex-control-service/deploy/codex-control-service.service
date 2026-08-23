@@ -1,0 +1,20 @@
+[Unit]
+Description=AI Workflow Codex app-server control service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/ai-workflow/codex-control-service
+Environment=CODEX_CONTROL_CODEX_BIN=%h/.local/bin/codex
+Environment=CODEX_CONTROL_DEFAULT_CWD=%h/ai-workflow
+Environment=CODEX_CONTROL_ALLOWED_ROOTS=%h
+Environment=CODEX_CONTROL_SOCKET=%h/ai-workflow/runtime/codex-control/control.sock
+ExecStart=/usr/bin/node %h/ai-workflow/codex-control-service/src/server.js
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+MemoryHigh=768M
+
+[Install]
+WantedBy=default.target

@@ -18,6 +18,7 @@ import VmCreatePanel from './components/vm/VmCreatePanel'
 import TranscriptsView from './components/transcripts/TranscriptsView'
 import AgentHistoryView from './components/history/AgentHistoryView'
 import RecoveryIndexView from './components/recovery/RecoveryIndexView'
+import AgentBoard from './components/agents/AgentBoard'
 import ViewSelector from './components/layout/ViewSelector'
 
 // Hooks
@@ -202,7 +203,7 @@ function DashboardApp() {
   const [view, setView] = useState(() => {
     if (typeof window === 'undefined') return DEFAULT_DESKTOP_VIEW
     const param = new URLSearchParams(window.location.search).get('view')
-    return param === 'organizer' || param === 'transcripts' || param === 'vm-create' || param === 'agent-history' || param === 'recovery-index'
+    return param === 'organizer' || param === 'transcripts' || param === 'vm-create' || param === 'agent-history' || param === 'recovery-index' || param === 'agent-board'
       ? param
       : DEFAULT_DESKTOP_VIEW
   })
@@ -1379,6 +1380,7 @@ function DashboardApp() {
               { value: 'transcripts', label: 'Transcripts' },
               { value: 'agent-history', label: 'Agent History' },
               { value: 'recovery-index', label: 'Recovery Index' },
+              { value: 'agent-board', label: 'Agent Board' },
               { value: 'vm-create', label: 'Create VM' },
             ]}
           />
@@ -1424,6 +1426,8 @@ function DashboardApp() {
           <AgentHistoryView />
         ) : view === 'recovery-index' ? (
           <RecoveryIndexView />
+        ) : view === 'agent-board' ? (
+          <AgentBoard />
         ) : view === 'vm-create' ? (
           <VmCreatePanel apiBase={API_BASE} />
         ) : view === 'organizer' ? (
