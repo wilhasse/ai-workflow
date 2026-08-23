@@ -13,12 +13,19 @@ configuration.
 - start turns, steer in-flight turns, and interrupt work;
 - surface command and file-change approvals and return explicit decisions;
 - run the same prompt across two or three providers in ephemeral read-only threads;
+- identify threads owned by active tmux Codex processes and expose their exact host/session/window;
 - stream bounded state changes to the dashboard over Server-Sent Events.
 
 Comparison mode always forces the app-server wire values `sandbox=read-only`, `approvalPolicy=never`, and
 `ephemeral=true`. Normal thread creation only exposes `readOnly` and
 `workspaceWrite`; there is no browser route for danger-full-access mode or
 arbitrary provider/model injection.
+
+The service correlates stored thread IDs with the Workspace V2 session archive.
+When an active tmux process owns a thread, the dashboard offers a terminal jump
+instead of app-server controls. Resume, turn, steer, and interrupt routes return
+HTTP 409 while that ownership is active, preventing a second Codex process from
+writing to the same conversation.
 
 ## Development
 

@@ -13,6 +13,7 @@ class FakeClient extends EventEmitter {
     this.calls = []
     this.responses = []
     this.nextThread = 1
+    this.threadList = []
   }
 
   async start() {}
@@ -20,7 +21,7 @@ class FakeClient extends EventEmitter {
 
   async request(method, params) {
     this.calls.push({ method, params })
-    if (method === 'thread/list') return { data: [], nextCursor: null }
+    if (method === 'thread/list') return { data: this.threadList, nextCursor: null }
     if (method === 'thread/start') {
       const id = `thread-${this.nextThread++}`
       return {
@@ -173,4 +174,69 @@ test('routes approval decisions and active-turn controls through app-server', as
 
   assert.deepEqual(await control.steerTurn(thread.id, { prompt: 'focus on tests' }), { turnId: 'turn-active' })
   assert.deepEqual(await control.interruptTurn(thread.id), { threadId: thread.id, turnId: 'turn-active' })
+})
+
+test('marks active tmux ownership and rejects conflicting app-server controls', async () => {
+  const { client, config, control, cwd } = setup()
+  const threadId = 'thread-in-tmux'
+  config.archivePath = path.join(cwd, 'archive.json')
+  const archive = {
+    records: [{
+      kind: 'codex',
+      resumeId: threadId,
+      active: true,
+      hostId: 'vm10',
+      hostName: 'Main Desktop',
+      activityAt: 1234,
+      lastActiveAt: 1250,
+      tmux: {
+        session: 'ai-workflow',
+        windowIndex: 1,
+        windowId: '@9',
+        windowName: 'node',
+        paneId: '%9',
+        paneTitle: 'codex',
+        paneCwd: cwd,
+      },
+    }],
+  }
+  fs.writeFileSync(config.archivePath, JSON.stringify(archive))
+  client.threadList = [{
+    id: threadId,
+    cwd,
+    status: 'notLoaded',
+    createdAt: 1,
+    updatedAt: 2,
+  }]
+
+  await control.refreshThreads()
+
+  assert.deepEqual(control.listCachedThreads()[0].tmuxOwner, {
+    hostId: 'vm10',
+    hostName: 'Main Desktop',
+    sessionId: 'ai-workflow',
+    windowIndex: 1,
+    windowId: '@9',
+    windowName: 'node',
+    paneId: '%9',
+    paneTitle: 'codex',
+    paneCwd: cwd,
+    activityAt: 1234,
+    lastActiveAt: 1250,
+  })
+
+  const isOwnershipConflict = (error) => (
+    error?.statusCode === 409
+      && error.message.includes('active in tmux (ai-workflow #1)')
+  )
+  await assert.rejects(control.resumeThread(threadId), isOwnershipConflict)
+  await assert.rejects(control.startTurn(threadId, { prompt: 'continue' }), isOwnershipConflict)
+  await assert.rejects(control.steerTurn(threadId, { prompt: 'focus' }), isOwnershipConflict)
+  await assert.rejects(control.interruptTurn(threadId), isOwnershipConflict)
+  assert.deepEqual(client.calls.map(({ method }) => method), ['thread/list'])
+
+  archive.records[0].active = false
+  fs.writeFileSync(config.archivePath, JSON.stringify(archive))
+  await control.refreshThreads()
+  assert.equal(control.listCachedThreads()[0].tmuxOwner, null)
 })

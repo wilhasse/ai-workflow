@@ -38,6 +38,13 @@ const formatTokens = (value) => {
 
 const shortId = (value) => value?.length > 16 ? `${value.slice(0, 16)}…` : value
 
+const tmuxOwnerLabel = (owner) => {
+  if (!owner?.sessionId) return ''
+  return Number.isFinite(owner.windowIndex)
+    ? `${owner.sessionId} #${owner.windowIndex}`
+    : owner.sessionId
+}
+
 const mergeById = (current, next) => {
   const records = new Map(current.map((item) => [item.id, item]))
   for (const item of next) records.set(item.id, { ...records.get(item.id), ...item })
@@ -79,6 +86,9 @@ function ThreadCard({ thread, selected, onSelect }) {
         {thread.reasoningEffort && <span>{thread.reasoningEffort}</span>}
         <span>{formatTokens(thread.tokensUsed)} tokens</span>
       </span>
+      {thread.tmuxOwner && (
+        <span className="ab-tmux-badge">Running in tmux: {tmuxOwnerLabel(thread.tmuxOwner)}</span>
+      )}
       <span className="ab-thread-meta">
         <span title={thread.id}>{shortId(thread.id)}</span>
         <span title={thread.cwd}>{thread.cwd}</span>
@@ -88,7 +98,7 @@ function ThreadCard({ thread, selected, onSelect }) {
   )
 }
 
-export default function AgentBoard() {
+export default function AgentBoard({ onSwitchToTmux }) {
   const [presets, setPresets] = useState([])
   const [threads, setThreads] = useState([])
   const [approvals, setApprovals] = useState([])
@@ -180,6 +190,7 @@ export default function AgentBoard() {
   }, [selectedId, threads])
 
   const selectedThread = threads.find((thread) => thread.id === selectedId) || null
+  const tmuxOwned = Boolean(selectedThread?.tmuxOwner)
   const visibleThreads = useMemo(() => {
     const needle = query.trim().toLowerCase()
     return threads.filter((thread) => !needle || [
@@ -189,6 +200,8 @@ export default function AgentBoard() {
       thread.cwd,
       thread.model,
       thread.modelProvider,
+      thread.tmuxOwner?.hostName,
+      thread.tmuxOwner?.sessionId,
     ].join(' ').toLowerCase().includes(needle)).slice(0, 80)
   }, [query, threads])
 
@@ -239,6 +252,14 @@ export default function AgentBoard() {
       { method: 'POST' },
     ))
     scheduleRefresh()
+  }
+
+  const switchToTmux = async () => {
+    if (!selectedThread?.tmuxOwner || !onSwitchToTmux) return
+    await run('switch-to-tmux', () => onSwitchToTmux({
+      ...selectedThread.tmuxOwner,
+      threadId: selectedThread.id,
+    }))
   }
 
   const resolveApproval = async (approvalId, decision) => {
@@ -342,15 +363,31 @@ export default function AgentBoard() {
                   {selectedThread.reasoningEffort && <span>{selectedThread.reasoningEffort}</span>}
                   <span>{formatTokens(selectedThread.tokensUsed)} tokens</span>
                 </div>
+                {selectedThread.tmuxOwner && (
+                  <div className="ab-tmux-owner">
+                    <div>
+                      <strong>Running in tmux: {tmuxOwnerLabel(selectedThread.tmuxOwner)}</strong>
+                      <span>This terminal owns the live Codex process. Continue or interrupt it there.</span>
+                    </div>
+                    <button
+                      className="primary"
+                      type="button"
+                      onClick={switchToTmux}
+                      disabled={Boolean(busy) || !onSwitchToTmux}
+                    >
+                      {busy === 'switch-to-tmux' ? 'Switching…' : 'Switch to tmux'}
+                    </button>
+                  </div>
+                )}
                 {selectedThread.plan && <pre className="ab-plan">{typeof selectedThread.plan === 'string' ? selectedThread.plan : JSON.stringify(selectedThread.plan, null, 2)}</pre>}
                 <pre className="ab-output">{selectedThread.lastAgentMessage || selectedThread.preview || 'No agent output loaded yet.'}</pre>
                 {selectedThread.diff && <details><summary>Current diff</summary><pre className="ab-diff">{selectedThread.diff}</pre></details>}
                 <textarea value={turnPrompt} onChange={(event) => setTurnPrompt(event.target.value)} rows={3} placeholder="New turn or steering instruction" />
                 <div className="ab-thread-actions">
-                  {selectedThread.status === 'notLoaded' && <button className="secondary" type="button" onClick={resume} disabled={Boolean(busy)}>Resume</button>}
-                  <button className="primary" type="button" onClick={() => threadAction('turns')} disabled={Boolean(busy) || !turnPrompt.trim()}>Start turn</button>
-                  <button className="secondary" type="button" onClick={() => threadAction('steer')} disabled={Boolean(busy) || selectedThread.status !== 'active' || !turnPrompt.trim()}>Steer active turn</button>
-                  <button className="danger" type="button" onClick={() => threadAction('interrupt')} disabled={Boolean(busy) || selectedThread.status !== 'active'}>Interrupt</button>
+                  {selectedThread.status === 'notLoaded' && <button className="secondary" type="button" onClick={resume} disabled={Boolean(busy) || tmuxOwned}>Resume</button>}
+                  <button className="primary" type="button" onClick={() => threadAction('turns')} disabled={Boolean(busy) || tmuxOwned || !turnPrompt.trim()}>Start turn</button>
+                  <button className="secondary" type="button" onClick={() => threadAction('steer')} disabled={Boolean(busy) || tmuxOwned || selectedThread.status !== 'active' || !turnPrompt.trim()}>Steer active turn</button>
+                  <button className="danger" type="button" onClick={() => threadAction('interrupt')} disabled={Boolean(busy) || tmuxOwned || selectedThread.status !== 'active'}>Interrupt</button>
                 </div>
               </>
             ) : <div className="ab-empty">Choose a thread to inspect or continue.</div>}

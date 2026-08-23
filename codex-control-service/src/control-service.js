@@ -28,6 +28,27 @@ const boundedText = (value, maxLength = MAX_MESSAGE_CHARS) => {
   return text.length > maxLength ? `${text.slice(0, maxLength)}\n…truncated…` : text
 }
 
+const activeTmuxOwner = (record) => {
+  const tmux = record?.tmux
+  const sessionId = String(tmux?.session || '').trim()
+  if (tmux?.windowIndex === null || tmux?.windowIndex === undefined) return null
+  const windowIndex = Number(tmux?.windowIndex)
+  if (!record?.active || !sessionId || !Number.isFinite(windowIndex)) return null
+  return {
+    hostId: String(record.hostId || ''),
+    hostName: String(record.hostName || ''),
+    sessionId,
+    windowIndex,
+    windowId: String(tmux.windowId || ''),
+    windowName: String(tmux.windowName || ''),
+    paneId: String(tmux.paneId || ''),
+    paneTitle: String(tmux.paneTitle || ''),
+    paneCwd: String(tmux.paneCwd || ''),
+    activityAt: Number(record.activityAt || 0),
+    lastActiveAt: Number(record.lastActiveAt || 0),
+  }
+}
+
 const publicThread = (thread) => {
   if (!thread) return null
   const { drafts: _drafts, itemsById: _itemsById, ...result } = thread
@@ -130,6 +151,7 @@ export class ControlService extends EventEmitter {
           modelProvider: record.modelProvider || '',
           reasoningEffort: record.reasoningEffort || '',
           tokensUsed: Number(record.tokensUsed || 0),
+          tmuxOwner: activeTmuxOwner(record),
         }]),
     )
   }
@@ -160,6 +182,7 @@ export class ControlService extends EventEmitter {
       updatedAt: Number(source.updatedAt ?? current.updatedAt ?? Date.now() / 1000),
       ephemeral: Boolean(source.ephemeral ?? current.ephemeral),
       source: source.source ?? current.source ?? null,
+      tmuxOwner: archived.tmuxOwner || null,
       itemsById: current.itemsById,
       drafts: current.drafts,
     }
@@ -224,6 +247,7 @@ export class ControlService extends EventEmitter {
   }
 
   async resumeThread(threadId) {
+    this.#assertAppServerOwnership(threadId, 'resuming it')
     const result = await this.client.request('thread/resume', { threadId: String(threadId) })
     const thread = this.#upsertThread(result.thread, {
       cwd: result.cwd,
@@ -245,6 +269,7 @@ export class ControlService extends EventEmitter {
   async startTurn(threadId, input = {}) {
     const id = String(threadId)
     const prompt = validateText(input.prompt, 'prompt')
+    this.#assertAppServerOwnership(id, 'starting a turn')
     await this.#ensureLoaded(id)
     const existing = this.#upsertThread({ id }, { status: 'active' })
     existing.lastAgentMessage = ''
@@ -268,6 +293,7 @@ export class ControlService extends EventEmitter {
   async steerTurn(threadId, input = {}) {
     const id = String(threadId)
     const prompt = validateText(input.prompt, 'prompt')
+    this.#assertAppServerOwnership(id, 'steering its active turn')
     const thread = this.threads.get(id)
     const expectedTurnId = String(input.expectedTurnId || thread?.activeTurnId || '')
     if (!expectedTurnId) throw new InputError('expectedTurnId is required for steering')
@@ -282,12 +308,23 @@ export class ControlService extends EventEmitter {
 
   async interruptTurn(threadId, input = {}) {
     const id = String(threadId)
+    this.#assertAppServerOwnership(id, 'interrupting its active turn')
     const thread = this.threads.get(id)
     const turnId = String(input.turnId || thread?.activeTurnId || '')
     if (!turnId) throw new InputError('turnId is required for interruption')
     await this.client.request('turn/interrupt', { threadId: id, turnId })
     this.#publish('turn.interrupted', { threadId: id, turnId })
     return { threadId: id, turnId }
+  }
+
+  #assertAppServerOwnership(threadId, action) {
+    const id = String(threadId)
+    const owner = this.threads.get(id)?.tmuxOwner || this.archiveMetadata.get(id)?.tmuxOwner
+    if (!owner) return
+    throw new InputError(
+      `Thread is active in tmux (${owner.sessionId} #${owner.windowIndex}); switch to that terminal before ${action}.`,
+      409,
+    )
   }
 
   listApprovals() {
