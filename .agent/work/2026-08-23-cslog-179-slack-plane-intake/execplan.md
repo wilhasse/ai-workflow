@@ -15,7 +15,7 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
 - [x] (2026-08-23 23:41Z) Locked the product decisions and inspected Plane issue `CSLOG-179`, the repository, Hermes on `10.1.0.9`, current upstream Hermes, and the target host `10.1.0.7`.
 - [x] (2026-08-23 23:41Z) Verified live CLIProxyAPI model catalog and image capability: `kimi-k3`, `qwen3.8-max`, and `gpt-5.6-terra` accepted images; `deepseek/deepseek-v4-pro` rejected image input.
 - [x] (2026-08-23 23:41Z) Created this work item on isolated branch `cslog-179-slack-plane-intake`, based on `origin/main`, preserving two unrelated local `main` commits.
-- [ ] Implement the `slack-plane-intake` package, tests, deployment assets, and operator documentation.
+- [ ] Implement the `slack-plane-intake` package, tests, deployment assets, and operator documentation. Core package and contract suite are complete (`21 passed`, Ruff clean); deployment assets and operator documentation remain.
 - [ ] Create and verify Plane project `Problem Intake` with identifier `PROB`.
 - [ ] Install a pinned fresh Hermes checkout and intake package on `10.1.0.7`, transferring only required secrets from `10.1.0.9`.
 - [ ] Configure and start the restricted Slack gateway, then complete live text, image, duplicate, authorization, and failure-path acceptance checks.
@@ -31,6 +31,9 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
 
 - Observation: the existing Hermes checkout on `10.1.0.9` contains unrelated modified and untracked files and its gateway is stopped.
   Evidence: read-only `git status` and process inspection on that host. This checkout must remain reference-only.
+
+- Observation: MCP Python SDK 2.0 removed the old `FastMCP` import path but current upstream Hermes already supports the replacement `mcp.server.MCPServer` interface.
+  Evidence: the clean development install resolved `mcp==2.0.0`; the intake server imports and instantiates `MCPServer`, and all package tests pass.
 
 ## Decision Log
 
@@ -53,6 +56,10 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
 - Decision: Create tickets automatically in a dedicated Plane project named `Problem Intake`, identifier `PROB`, initially Backlog, unassigned, and with no priority.
   Rationale: This replaces the original Kanban concept with the user's chosen system of record and keeps intake neutral until a human triages it.
   Date/Author: 2026-08-23 / user and Codex.
+
+- Decision: Derive the Slack bot user ID from `auth.test` on each MCP process lifetime instead of requiring `SPI_SLACK_BOT_USER_ID`.
+  Rationale: Slack is authoritative for the token's identity. Removing a duplicated configured ID prevents stale mention validation while retaining the fixed channel and user allowlists.
+  Date/Author: 2026-08-23 / Codex.
 
 ## Outcomes & Retrospective
 
@@ -150,7 +157,7 @@ Do not copy any credential values, signed Plane storage URLs, policies, or signa
 
 ## Interfaces and Dependencies
 
-`slack_plane_intake.config.load_config()` returns an immutable `AppConfig` containing Slack, CLIProxyAPI, Plane, limits, paths, and model chains. Required environment names use the `SPI_` prefix: `SPI_SLACK_BOT_TOKEN`, `SPI_SLACK_CHANNEL_ID`, `SPI_SLACK_ALLOWED_USERS`, `SPI_SLACK_BOT_USER_ID`, `SPI_CLIPROXY_BASE_URL`, `SPI_CLIPROXY_API_KEY`, `SPI_TEXT_MODELS`, `SPI_VISION_MODELS`, `SPI_PLANE_BASE_URL`, `SPI_PLANE_API_KEY`, `SPI_PLANE_WORKSPACE`, `SPI_PLANE_PROJECT_ID`, `SPI_PLANE_STATE_ID`, `SPI_STATE_DB`, and `SPI_WORK_DIR`.
+`slack_plane_intake.config.load_config()` returns an immutable `AppConfig` containing Slack, CLIProxyAPI, Plane, limits, paths, and model chains. Required environment names use the `SPI_` prefix: `SPI_SLACK_BOT_TOKEN`, `SPI_SLACK_CHANNEL_ID`, `SPI_SLACK_ALLOWED_USERS`, `SPI_CLIPROXY_BASE_URL`, `SPI_CLIPROXY_API_KEY`, `SPI_TEXT_MODELS`, `SPI_VISION_MODELS`, `SPI_PLANE_BASE_URL`, `SPI_PLANE_API_KEY`, `SPI_PLANE_WORKSPACE`, `SPI_PLANE_PROJECT_ID`, `SPI_PLANE_STATE_ID`, `SPI_STATE_DB`, and `SPI_WORK_DIR`. The bot ID is intentionally discovered through Slack `auth.test` and is not a configuration value.
 
 `SlackClient.fetch_source_message(message_ts: str) -> SourceMessage` hides Slack authentication, exact-message lookup, allowlists, permalink retrieval, downloads, safety limits, and hashing.
 
@@ -162,6 +169,8 @@ Do not copy any credential values, signed Plane storage URLs, policies, or signa
 
 `ProblemIntakeService.create_from_slack(message_ts: str) -> IntakeResult` is the only orchestration entry point. Hermes sees only MCP tool `create_plane_problem(message_ts)` and the returned result; it never chooses a channel, project, model, ticket field, or upload step.
 
-Dependencies are Python 3.11+, `httpx`, `pydantic`, the official Python `mcp` SDK, `pypdf`, `PyMuPDF`, Pillow, and `pytest` plus `respx` for tests. Pin compatible major versions in `pyproject.toml` and record the resolved versions after the first clean install.
+Dependencies are Python 3.11+, `httpx`, `pydantic`, the official Python `mcp` SDK, `pypdf`, `PyMuPDF`, Pillow, and `pytest` plus `respx` for tests. The first clean install resolved `httpx 0.28.1`, `mcp 2.0.0`, `pydantic 2.13.4`, `pypdf 6.16.2`, `PyMuPDF 1.28.2`, and Pillow 12.3.0 within the compatible major-version bounds in `pyproject.toml`.
 
 Revision note: 2026-08-23 initial ExecPlan created from the user-approved CSLOG-179 design so implementation can proceed under the repository work-item workflow.
+
+Revision note: 2026-08-23 core package milestone recorded after 21 tests and Ruff checks passed; documented MCP 2.0 compatibility and removal of the redundant Slack bot-ID setting.
