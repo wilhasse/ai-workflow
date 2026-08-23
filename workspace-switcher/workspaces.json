@@ -34,7 +34,7 @@
     {
       "id": "olos",
       "name": "Olos API",
-      "path": "/home/cslog/svn/ticslog_trunk/go/apiolos",
+      "path": "/home/cslog/cslog-crm",
       "color": "#3498db",
       "icon": "folder",
       "description": "",
@@ -210,6 +210,15 @@
       "icon": "folder",
       "description": "",
       "host": "local"
+    },
+    {
+      "id": "cslog-query",
+      "name": "Cslog Query",
+      "path": "/home/cslog/cslog-query",
+      "color": "#3498db",
+      "icon": "folder",
+      "description": "",
+      "host": "vm9"
     }
   ],
   "settings": {
