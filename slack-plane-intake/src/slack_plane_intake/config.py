@@ -16,6 +16,7 @@ class SlackConfig:
     bot_token: str
     channel_id: str
     allowed_users: frozenset[str]
+    shortcut_allowed_users: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,7 @@ class AppConfig:
         return {
             "slack_dm_channel_id": self.slack.channel_id,
             "slack_allowed_users": len(self.slack.allowed_users),
+            "slack_shortcut_allowed_users": len(self.slack.shortcut_allowed_users),
             "cliproxy_base_url": self.models.base_url,
             "text_models": list(self.models.text_models),
             "vision_models": list(self.models.vision_models),
@@ -134,6 +136,15 @@ def load_config(environ: Mapping[str, str] | None = None) -> AppConfig:
         raise ConfigurationError(
             "SPI_SLACK_ALLOWED_USERS must contain exactly one Slack user ID for DM intake"
         )
+    shortcut_allowed_users = frozenset(
+        _csv(
+            env.get("SPI_SLACK_SHORTCUT_ALLOWED_USERS", "").strip() or allowed_users_raw
+        )
+    )
+    if not shortcut_allowed_users:
+        raise ConfigurationError(
+            "SPI_SLACK_SHORTCUT_ALLOWED_USERS must contain at least one Slack user ID"
+        )
 
     text_models = _csv(
         env.get(
@@ -166,7 +177,12 @@ def load_config(environ: Mapping[str, str] | None = None) -> AppConfig:
         raise ConfigurationError("SPI_HTTP_TIMEOUT_SECONDS must be greater than zero")
 
     return AppConfig(
-        slack=SlackConfig(slack_token, slack_channel, allowed_users),
+        slack=SlackConfig(
+            slack_token,
+            slack_channel,
+            allowed_users,
+            shortcut_allowed_users,
+        ),
         models=ModelConfig(
             base_url=_safe_base_url(
                 "SPI_CLIPROXY_BASE_URL",

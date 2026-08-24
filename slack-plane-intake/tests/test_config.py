@@ -49,6 +49,21 @@ def test_dm_intake_requires_exactly_one_allowed_user(required_env):
         load_config(required_env)
 
 
+def test_shortcut_allowlist_can_add_users_without_expanding_dm_access(required_env):
+    required_env["SPI_SLACK_SHORTCUT_ALLOWED_USERS"] = "U1,U2,U3,U4"
+    config = load_config(required_env)
+
+    assert config.slack.allowed_users == frozenset({"U1"})
+    assert config.slack.shortcut_allowed_users == frozenset({"U1", "U2", "U3", "U4"})
+    assert config.redacted_summary()["slack_shortcut_allowed_users"] == 4
+
+
+def test_shortcut_allowlist_defaults_to_dm_owner(required_env):
+    config = load_config(required_env)
+
+    assert config.slack.shortcut_allowed_users == config.slack.allowed_users
+
+
 def test_rejects_credentials_embedded_in_base_url(required_env):
     required_env["SPI_PLANE_BASE_URL"] = "https://user:pass@plane.example"
     with pytest.raises(ConfigurationError, match="must not contain credentials"):
