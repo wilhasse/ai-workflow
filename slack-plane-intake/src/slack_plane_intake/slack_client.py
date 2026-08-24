@@ -15,6 +15,9 @@ from .errors import ExternalServiceError, SourceValidationError
 from .models import SourceAttachment, SourceMessage
 
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
+_MESSAGE_TS = re.compile(r"\d{9,}\.(?:\d{1,6})")
+_TEAM_ID = re.compile(r"T[A-Z0-9]+")
+_CHANNEL_ID = re.compile(r"[CDG][A-Z0-9]+")
 
 
 class SlackClient:
@@ -62,7 +65,7 @@ class SlackClient:
         return payload
 
     async def fetch_source_message(self, message_ts: str) -> SourceMessage:
-        if not re.fullmatch(r"\d{9,}\.(?:\d{1,6})", message_ts):
+        if not _MESSAGE_TS.fullmatch(message_ts):
             raise SourceValidationError("Slack message timestamp is invalid")
 
         auth = await self._api("auth.test")
@@ -134,19 +137,7 @@ class SlackClient:
             raise ExternalServiceError("Slack did not return a message permalink")
 
         author_name = author_id
-        try:
-            user_payload = await self._api("users.info", user=author_id)
-            user = user_payload.get("user", {})
-            profile = user.get("profile", {})
-            author_name = str(
-                profile.get("display_name")
-                or profile.get("real_name")
-                or user.get("real_name")
-                or user.get("name")
-                or author_id
-            )
-        except ExternalServiceError:
-            pass
+        author_name = await self._resolve_user_name(author_id)
 
         attachments = await self._download_attachments(
             message_ts, tuple(message.get("files") or ())
@@ -162,6 +153,152 @@ class SlackClient:
             posted_at=datetime.fromtimestamp(float(message_ts), tz=UTC),
             attachments=attachments,
         )
+
+    async def fetch_shortcut_source_message(
+        self,
+        *,
+        team_id: str,
+        channel_id: str,
+        invoking_user_id: str,
+        message_payload: dict,
+    ) -> SourceMessage:
+        """Build a source from a Slack-authenticated message shortcut payload.
+
+        Authorization belongs to the human invoking the shortcut. The selected
+        message may have been posted by a monitoring bot, so its author is
+        recorded as provenance but is not used as the authorization principal.
+        """
+        if invoking_user_id not in self.config.allowed_users:
+            raise SourceValidationError(
+                "Slack user is not allowed to create problem tickets"
+            )
+        if not _TEAM_ID.fullmatch(team_id):
+            raise SourceValidationError("Slack shortcut workspace ID is invalid")
+        if not _CHANNEL_ID.fullmatch(channel_id):
+            raise SourceValidationError("Slack shortcut channel ID is invalid")
+        if not isinstance(message_payload, dict):
+            raise SourceValidationError("Slack shortcut message payload is invalid")
+
+        message_ts = str(message_payload.get("ts", ""))
+        if not _MESSAGE_TS.fullmatch(message_ts):
+            raise SourceValidationError("Slack message timestamp is invalid")
+
+        auth = await self._api("auth.test")
+        authenticated_team_id = str(auth.get("team_id", ""))
+        if authenticated_team_id != team_id:
+            raise SourceValidationError(
+                "Slack shortcut workspace does not match the configured bot token"
+            )
+
+        files = tuple(
+            item
+            for item in (message_payload.get("files") or ())
+            if isinstance(item, dict)
+        )
+        text = self._shortcut_message_text(message_payload)
+        if not text and not files:
+            raise SourceValidationError(
+                "The selected Slack message has no text or files to process"
+            )
+
+        bot_profile = message_payload.get("bot_profile")
+        if not isinstance(bot_profile, dict):
+            bot_profile = {}
+        author_id = str(
+            message_payload.get("user")
+            or message_payload.get("bot_id")
+            or bot_profile.get("id")
+            or "unknown"
+        )
+        if author_id.startswith(("U", "W")):
+            author_name = await self._resolve_user_name(author_id)
+        else:
+            author_name = str(
+                bot_profile.get("name") or message_payload.get("username") or author_id
+            )
+
+        permalink = ""
+        try:
+            permalink_payload = await self._api(
+                "chat.getPermalink", channel=channel_id, message_ts=message_ts
+            )
+            permalink = str(permalink_payload.get("permalink", ""))
+        except ExternalServiceError:
+            # A message shortcut can be invoked where the app is not a channel
+            # member. The authenticated shortcut body remains authoritative;
+            # ticket creation should continue without a clickable permalink.
+            pass
+
+        attachments = await self._download_attachments(message_ts, files)
+        return SourceMessage(
+            team_id=team_id,
+            channel_id=channel_id,
+            message_ts=message_ts,
+            author_id=author_id,
+            author_name=author_name,
+            text=text,
+            permalink=permalink,
+            posted_at=datetime.fromtimestamp(float(message_ts), tz=UTC),
+            attachments=attachments,
+        )
+
+    async def _resolve_user_name(self, user_id: str) -> str:
+        try:
+            user_payload = await self._api("users.info", user=user_id)
+            user = user_payload.get("user", {})
+            profile = user.get("profile", {})
+            return str(
+                profile.get("display_name")
+                or profile.get("real_name")
+                or user.get("real_name")
+                or user.get("name")
+                or user_id
+            )
+        except ExternalServiceError:
+            return user_id
+
+    @staticmethod
+    def _shortcut_message_text(message: dict) -> str:
+        primary = str(message.get("text") or "").strip()
+        details: list[str] = []
+        for attachment in message.get("attachments") or ():
+            if not isinstance(attachment, dict):
+                continue
+            for key in ("pretext", "title", "text", "fallback"):
+                value = str(attachment.get(key) or "").strip()
+                if value and value not in primary and value not in details:
+                    details.append(value)
+            for field in attachment.get("fields") or ():
+                if not isinstance(field, dict):
+                    continue
+                title = str(field.get("title") or "").strip()
+                value = str(field.get("value") or "").strip()
+                rendered = ": ".join(part for part in (title, value) if part)
+                if rendered and rendered not in primary and rendered not in details:
+                    details.append(rendered)
+
+        if not primary:
+            block_text: list[str] = []
+
+            def collect(value: object) -> None:
+                if isinstance(value, dict):
+                    text = value.get("text")
+                    if isinstance(text, str) and text.strip():
+                        block_text.append(text.strip())
+                    for key, child in value.items():
+                        if key != "text":
+                            collect(child)
+                elif isinstance(value, list):
+                    for child in value:
+                        collect(child)
+
+            collect(message.get("blocks") or [])
+            primary = "\n".join(dict.fromkeys(block_text))
+
+        parts = [primary] if primary else []
+        if details:
+            parts.extend(("Slack attachment details:", *details))
+        return "\n\n".join(parts)
 
     async def _download_attachments(
         self, message_ts: str, files: tuple[dict, ...]

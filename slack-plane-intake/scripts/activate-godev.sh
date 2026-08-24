@@ -16,10 +16,23 @@ if [[ ! "$host" =~ ^[A-Za-z0-9._-]+$ || ! "$reference_host" =~ ^[A-Za-z0-9._-]+$
   echo "invalid host" >&2
   exit 2
 fi
-if ssh "$reference_host" 'ps -eo args= | grep -Eq "[h]ermes_cli\.main.*gateway run|[h]ermes gateway run"'; then
-  echo "reference Hermes gateway is still running on $reference_host" >&2
-  exit 1
-fi
+set +e
+ssh -o BatchMode=yes -o ConnectTimeout=5 -o HostKeyAlgorithms=ssh-ed25519 \
+  "$reference_host" \
+  'if ps -eo args= | grep -Eq "[h]ermes_cli\.main.*gateway run|[h]ermes gateway run"; then exit 42; fi'
+reference_status=$?
+set -e
+case "$reference_status" in
+  0) ;;
+  42)
+    echo "reference Hermes gateway is still running on $reference_host" >&2
+    exit 1
+    ;;
+  *)
+    echo "could not verify reference Hermes gateway on $reference_host" >&2
+    exit 1
+    ;;
+esac
 
 remote_root=/home/cslog/.local/share/slack-plane-intake/current
 ssh "$host" "'$remote_root/venv/bin/python' '$remote_root/scripts/activate-target.py'"

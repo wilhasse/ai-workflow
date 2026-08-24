@@ -283,6 +283,11 @@ class PlaneClient:
             raise ValueError("invalid source marker")
         safe_marker = html.escape(source_marker)
         model = analysis.model_used or "unavailable"
+        source = (
+            f'<a href="{html.escape(message.permalink, quote=True)}">Slack</a>'
+            if message.permalink
+            else "Slack (permalink indisponível para o app)"
+        )
         return "".join(
             [
                 "<h2>Resumo</h2><p>",
@@ -295,7 +300,7 @@ class PlaneClient:
                 html.escape(message.text),
                 "</pre>",
                 "<h2>Proveniência</h2><ul>",
-                f'<li>Fonte: <a href="{html.escape(message.permalink, quote=True)}">Slack</a></li>',
+                f"<li>Fonte: {source}</li>",
                 f"<li>Workspace Slack: {html.escape(message.team_id)}</li>",
                 f"<li>Canal: {html.escape(message.channel_id)}</li>",
                 f"<li>Autor: {html.escape(message.author_name)} ({html.escape(message.author_id)})</li>",

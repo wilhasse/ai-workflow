@@ -26,7 +26,8 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
 - [x] (2026-08-24 03:21Z) Recorded final evidence, limited the publication history to CSLOG-179, and marked the work item complete for production handoff.
 - [x] (2026-08-24 11:01Z) Created idempotent Plane project `AGENTE` with identifier `AGENTE` in workspace `cslog` at `https://plane.cslog.com.br`, using the existing protected Codex Plane MCP credential; discovered and validated its Backlog state.
 - [x] (2026-08-24 11:02Z) Deployed release `2026-08-24T10-59-00Z`, atomically changed the protected target configuration, installed the identifier-neutral Hermes acknowledgement skill, and restarted the guarded gateway. Both local and target suites pass `38` tests, the service is active with hardening effective, and the AGENTE work-item endpoint is authenticated and empty.
-- [ ] (blocked 2026-08-24 11:02Z) Send one new human-authored top-level Slack DM after the cutover and verify it creates `AGENTE-1`. Historical completed ledger entries `PROB-1` and `PROB-2` remain intentionally bound to their original URLs and must not be replayed as new AGENTE tickets.
+- [x] (2026-08-24 11:42Z) Added the `create_agente_ticket` Slack message shortcut path, which authorizes the invoking human, accepts bot-authored alerts, preserves message/file provenance, bypasses the LLM routing turn, and returns progress/results only ephemerally or in the invoking user's Hermes DM. Release `2026-08-24T11-42-53Z` passes `45` local and target tests; the patched callback is registered in the one active `10.1.0.7` gateway, and the trusted ED25519 route verified zero gateways on `10.1.0.9`.
+- [ ] (blocked 2026-08-24 11:39Z) Enable the `create_agente_ticket` message shortcut in the Slack app, invoke it on one real alert, and verify it creates `AGENTE-1`. Historical completed ledger entries `PROB-1` and `PROB-2` remain intentionally bound to their original URLs and must not be replayed as new AGENTE tickets.
 
 ## Surprises & Discoveries
 
@@ -75,6 +76,9 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
 - Observation: after creating `AGENTE`, the Plane project-detail endpoint returned it immediately while the first-page project listing used by the initial cutover guard did not contain it.
   Evidence: two guarded configuration attempts restored the old `.env` and left Hermes on `plane.supersaber.dev.br`; direct GET of project `688b0196-af21-49f0-83eb-7b849a9145a8` returned HTTP 200 with name and identifier `AGENTE`. The corrected guard validates the exact project-detail and state endpoints before activation.
 
+- Observation: the reference host's stale ECDSA known-host entry made ordinary SSH fail even though its already-trusted ED25519 key still matched the key presented by `10.1.0.9`; the activation script also treated any SSH failure as equivalent to a stopped gateway.
+  Evidence: strict SSH reported the stale ECDSA line, the stored and freshly presented ED25519 fingerprints matched, an ED25519-pinned connection identified host `godev3` and zero gateway processes, and the guard now fails closed on connection errors.
+
 ## Decision Log
 
 - Decision: Install all new runtime components on `10.1.0.7`; treat `10.1.0.9` only as a source for selected configuration values.
@@ -121,11 +125,17 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
   Rationale: The user selected the replacement Plane deployment and project. The SQLite ledger remains unchanged so completed `PROB-1` and `PROB-2` deliveries stay idempotent and preserve their historical links; only new source keys use AGENTE.
   Date/Author: 2026-08-24 / user and Codex.
 
+- Decision: Register one explicit `create_agente_ticket` message shortcut on Hermes' existing Socket Mode client and invoke the intake package directly through a bounded stdin subprocess, rather than routing the selected alert through a model turn or opening a second Slack connection.
+  Rationale: Slack Bolt authenticates the shortcut transport, the intake independently authorizes the invoking human and validates the workspace, message and limits, and a single Socket Mode owner avoids event distribution races. Private response URLs with a DM fallback keep results invisible to other channel members.
+  Date/Author: 2026-08-24 / user and Codex.
+
 ## Outcomes & Retrospective
 
 The implementation is complete for the production scope accepted on 2026-08-24. Release `2026-08-24T02-36-22Z` is deployed on `10.1.0.7`; the existing one-to-one conversation is both the intake and home target, history/permalink/file scopes pass, persistent systemd hardening is effective, and the gateway is enabled and active with one Socket Mode connection. The intake does not use `#cslog` or a new channel. The first authorized text DM created `PROB-1` through K3 and preserved the exact original evidence. Its provenance ID survives Plane sanitization, and direct replay returned the existing key with Plane count `1 -> 1` and ledger attempt count `1`. Both local and target release suites pass `38` tests. Human-authored screenshot upload, unauthorized-user, thread-reply, and forced live failure scenarios were deferred at production handoff; their contract paths are automated, but no live success is claimed for those deferred checks.
 
 The post-production Plane migration is configured and running in release `2026-08-24T10-59-00Z`. The AGENTE project and Backlog state exist, its API endpoints validate from both the development host and `10.1.0.7`, the target environment remains mode `0600`, and the active Hermes process has the new configuration after a guarded restart. The AGENTE project currently has zero tickets. A fresh human Slack DM is still required for terminal proof that the event-driven path creates `AGENTE-1`; this is not inferred from configuration health alone.
+
+The message-shortcut backend is deployed in release `2026-08-24T11-42-53Z`. The local and target suites pass `45` tests, the pinned Hermes source compiles with both bounded patches, exactly one callback registration is loaded, and the target runs one Hermes gateway plus its MCP subprocess. The old reference host has zero gateway processes. Slack-side shortcut creation and one real click remain the terminal acceptance boundary; no `AGENTE-1` creation is claimed yet.
 
 ## Context and Orientation
 
@@ -296,3 +306,5 @@ Revision note: 2026-08-24 resumed after the user reinstalled the app, passed the
 Revision note: 2026-08-24 closed the work item for the user-accepted production scope after release `2026-08-24T02-36-22Z` passed 38 tests locally and on the target, the hardened service remained active, and `PROB-1` plus its duplicate proof remained the live end-to-end evidence. Deferred human Slack scenarios are preserved as explicit limitations rather than reported as passed.
 
 Revision note: 2026-08-24 migrated the production destination to `plane.cslog.com.br / cslog / AGENTE`, made provisioning defaults and Hermes replies identifier-neutral, retained completed PROB ledger rows, and recorded the guarded rollback/retry evidence. Runtime validation is complete; a new human Slack event remains the acceptance boundary for the first AGENTE ticket.
+
+Revision note: 2026-08-24 added the authenticated `create_agente_ticket` Slack message shortcut and direct intake CLI bridge, deployed it with 45 passing tests, and corrected the reference-gateway activation check to fail closed. A real shortcut click remains externally blocked on Slack-side shortcut creation.

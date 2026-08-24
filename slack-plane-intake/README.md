@@ -1,16 +1,18 @@
 # Slack Plane Intake
 
 `slack-plane-intake` is the restricted Slack-to-Plane boundary used by Hermes
-for CSLOG-179. The authorized user sends one top-level direct message to the
-existing Hermes Slack app and attaches any evidence to that message. The
-service refetches that exact message, analyzes it, creates one Plane work item,
-uploads the unchanged originals, and deduplicates retries.
+for CSLOG-179. The authorized user can send one top-level direct message to the
+existing Hermes Slack app or invoke the `Create AGENTE ticket` message shortcut
+on an alert in another Slack conversation. The service analyzes the exact
+source, creates one Plane work item, uploads unchanged originals when Slack
+permits file access, and deduplicates retries.
 
-Version 1 is deliberately narrow: Slack only, one one-to-one Hermes DM, one
-authorized user, and one Plane project. It does not read a whole thread, use
-reactions as triggers, use Hermes Kanban, or process WhatsApp. The DM is
-dedicated to problem intake; every new top-level message is treated as a new
-intake request.
+The authorization boundary remains deliberately narrow: Slack only, one
+authorized shortcut user, one one-to-one Hermes intake DM, and one Plane
+project. The app does not passively consume generic channels. Channel intake
+occurs only when the authorized user explicitly selects a message shortcut. It
+does not read a whole thread, use reactions as triggers, use Hermes Kanban, or
+process WhatsApp.
 
 ## Runtime contract
 
@@ -137,6 +139,21 @@ acceptance messages.
 The existing Slack app needs Socket Mode, the `message.im` event subscription,
 and bot scopes `im:history`, `im:write`, `chat:write`, `files:read`, and
 `users:read`. No channel creation, invitation, or bot mention is required.
+
+For channel alerts, add an **On messages** shortcut to that same app:
+
+- Name: `Create AGENTE ticket`
+- Callback ID: `create_agente_ticket`
+- Description: `Create a Plane AGENTE ticket from this Slack message`
+
+The patched Hermes adapter registers the callback on its existing Socket Mode
+connection, acknowledges it immediately, authorizes the invoking user against
+`SPI_SLACK_ALLOWED_USERS`, and invokes the intake CLI without an LLM turn. Its
+progress and result are sent ephemerally through Slack's response URL, with the
+invoking user's Hermes DM as a private fallback. A monitoring bot is allowed to
+be the selected message's author; it is the human shortcut invocation that
+grants authority. If the app cannot read a channel permalink or attached file,
+the ticket is still created as partial with an explicit warning.
 
 ## Acceptance and rollback
 

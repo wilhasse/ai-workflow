@@ -97,3 +97,27 @@ async def test_plane_failure_does_not_claim_success(tmp_path, source_message):
     result = await intake.create_from_slack(source_message.message_ts)
     assert result.status == "failed"
     assert result.issue_key is None
+
+
+@pytest.mark.asyncio
+async def test_shortcut_uses_same_idempotent_workflow(tmp_path, source_message):
+    intake, analyzer, plane = service(tmp_path, source_message)
+    intake.slack.fetch_shortcut_source_message.return_value = source_message
+
+    first = await intake.create_from_slack_shortcut(
+        team_id="T1",
+        channel_id="CALERTS",
+        invoking_user_id="U1",
+        message_payload={"ts": source_message.message_ts, "text": "alert"},
+    )
+    second = await intake.create_from_slack_shortcut(
+        team_id="T1",
+        channel_id="CALERTS",
+        invoking_user_id="U1",
+        message_payload={"ts": source_message.message_ts, "text": "alert"},
+    )
+
+    assert first.status == "created"
+    assert second.status == "existing"
+    assert analyzer.analyze.await_count == 1
+    assert plane.create_problem.await_count == 1
