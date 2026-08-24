@@ -57,7 +57,7 @@ class AppConfig:
 
     def redacted_summary(self) -> dict[str, object]:
         return {
-            "slack_channel_id": self.slack.channel_id,
+            "slack_dm_channel_id": self.slack.channel_id,
             "slack_allowed_users": len(self.slack.allowed_users),
             "cliproxy_base_url": self.models.base_url,
             "text_models": list(self.models.text_models),

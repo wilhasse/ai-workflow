@@ -62,10 +62,20 @@ class SlackClient:
 
         auth = await self._api("auth.test")
         team_id = str(auth.get("team_id", ""))
-        bot_user_id = str(auth.get("user_id", ""))
-        if not team_id or not bot_user_id:
-            raise ExternalServiceError(
-                "Slack auth.test did not return team and bot IDs"
+        if not team_id:
+            raise ExternalServiceError("Slack auth.test did not return a team ID")
+
+        conversation = (
+            await self._api("conversations.info", channel=self.config.channel_id)
+        ).get("channel", {})
+        if not conversation.get("is_im") or conversation.get("is_mpim"):
+            raise SourceValidationError(
+                "Configured Slack intake conversation is not a one-to-one Hermes DM"
+            )
+        dm_user_id = str(conversation.get("user", ""))
+        if dm_user_id and dm_user_id not in self.config.allowed_users:
+            raise SourceValidationError(
+                "Configured Slack DM user is not allowed to create problem tickets"
             )
 
         history = await self._api(
@@ -86,13 +96,17 @@ class SlackClient:
         )
         if message is None:
             raise SourceValidationError(
-                "Slack message was not found in the intake channel"
+                "Slack message was not found in the configured Hermes DM"
             )
 
         author_id = str(message.get("user", ""))
         if author_id not in self.config.allowed_users:
             raise SourceValidationError(
                 "Slack author is not allowed to create problem tickets"
+            )
+        if dm_user_id and author_id != dm_user_id:
+            raise SourceValidationError(
+                "Slack message author does not match the configured DM user"
             )
         if message.get("subtype") or message.get("bot_id"):
             raise SourceValidationError(
@@ -102,14 +116,10 @@ class SlackClient:
         thread_ts = str(message.get("thread_ts", ""))
         if thread_ts and thread_ts != message_ts:
             raise SourceValidationError(
-                "Thread replies are not intake sources; repost as a top-level message"
+                "Thread replies are not intake sources; send a new top-level DM"
             )
 
         text = str(message.get("text", ""))
-        if f"<@{bot_user_id}>" not in text:
-            raise SourceValidationError(
-                "Slack message does not mention this Hermes bot"
-            )
 
         permalink_payload = await self._api(
             "chat.getPermalink", channel=self.config.channel_id, message_ts=message_ts

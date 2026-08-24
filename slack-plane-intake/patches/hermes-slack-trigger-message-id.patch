@@ -7,7 +7,7 @@ index 85c4644..2f8635d 100644
 +        # which is Slack's message id. Keep this volatile transport-authenticated
 +        # value out of the cached system prompt and expose it only on the current
 +        # turn, mirroring the Discord message-id treatment above. The restricted
-+        # MCP tool independently refetches and validates channel, author, mention,
++        # MCP tool independently refetches and validates the fixed DM, author,
 +        # and top-level status, so this note grants no additional authority.
 +        if (
 +            source is not None

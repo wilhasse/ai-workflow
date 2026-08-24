@@ -12,7 +12,7 @@ from slack_plane_intake.slack_client import SlackClient
 def slack_client(tmp_path, limits):
     http = httpx.AsyncClient(base_url="https://slack.com/api/")
     return SlackClient(
-        SlackConfig("xoxb-secret", "CINTAKE", frozenset({"U1"})),
+        SlackConfig("xoxb-secret", "DINTAKE", frozenset({"U1"})),
         limits,
         tmp_path,
         client=http,
@@ -23,6 +23,15 @@ def mock_common(message):
     respx.get("https://slack.com/api/auth.test").mock(
         return_value=httpx.Response(
             200, json={"ok": True, "team_id": "T1", "user_id": "UBOT"}
+        )
+    )
+    respx.get("https://slack.com/api/conversations.info").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "channel": {"id": "DINTAKE", "is_im": True, "user": "U1"},
+            },
         )
     )
     respx.get("https://slack.com/api/conversations.history").mock(
@@ -38,7 +47,7 @@ async def test_fetches_exact_authorized_message_and_original_file(tmp_path, limi
         {
             "ts": ts,
             "user": "U1",
-            "text": "<@UBOT> problema no login",
+            "text": "problema no login",
             "files": [{"id": "F1"}],
         }
     )
@@ -77,7 +86,7 @@ async def test_fetches_exact_authorized_message_and_original_file(tmp_path, limi
     message = await client.fetch_source_message(ts)
     await client.close()
 
-    assert message.source_key == f"slack:T1:CINTAKE:{ts}"
+    assert message.source_key == f"slack:T1:DINTAKE:{ts}"
     assert message.author_name == "Alice"
     assert len(message.attachments) == 1
     attachment = message.attachments[0]
@@ -94,7 +103,7 @@ async def test_rejects_thread_reply_before_plane_work(tmp_path, limits):
             "ts": ts,
             "thread_ts": "1724439999.000001",
             "user": "U1",
-            "text": "<@UBOT> create",
+            "text": "create",
         }
     )
     client = slack_client(tmp_path, limits)
@@ -105,10 +114,34 @@ async def test_rejects_thread_reply_before_plane_work(tmp_path, limits):
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_rejects_message_without_bot_mention(tmp_path, limits):
+async def test_accepts_dm_without_bot_mention(tmp_path, limits):
     ts = "1724440000.123456"
     mock_common({"ts": ts, "user": "U1", "text": "problem without mention"})
+    respx.get("https://slack.com/api/chat.getPermalink").mock(
+        return_value=httpx.Response(
+            200, json={"ok": True, "permalink": "https://slack.test/p2"}
+        )
+    )
+    respx.get("https://slack.com/api/users.info").mock(
+        return_value=httpx.Response(200, json={"ok": True, "user": {}})
+    )
     client = slack_client(tmp_path, limits)
-    with pytest.raises(SourceValidationError, match="does not mention"):
+    message = await client.fetch_source_message(ts)
+    assert message.text == "problem without mention"
+    await client.close()
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_rejects_non_dm_configured_conversation(tmp_path, limits):
+    ts = "1724440000.123456"
+    mock_common({"ts": ts, "user": "U1", "text": "problem"})
+    respx.get("https://slack.com/api/conversations.info").mock(
+        return_value=httpx.Response(
+            200, json={"ok": True, "channel": {"id": "CGENERAL"}}
+        )
+    )
+    client = slack_client(tmp_path, limits)
+    with pytest.raises(SourceValidationError, match="not a one-to-one Hermes DM"):
         await client.fetch_source_message(ts)
     await client.close()

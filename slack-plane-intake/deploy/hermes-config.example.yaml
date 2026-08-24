@@ -25,7 +25,8 @@ slack:
   require_mention: true
   strict_mention: true
   thread_require_mention: true
-  disable_dms: true
+  # One-to-one DMs are mention-exempt in Hermes but still user-authorized.
+  disable_dms: false
   allowed_channels:
     - "${SPI_SLACK_CHANNEL_ID}"
   channel_skill_bindings:
@@ -35,7 +36,7 @@ slack:
 platforms:
   slack:
     extra:
-      reply_in_thread: true
+      reply_in_thread: false
       tool_progress: false
       allow_bots: none
 

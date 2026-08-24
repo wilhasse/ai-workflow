@@ -34,17 +34,17 @@ def create_mcp_server(service: ProblemIntakeService) -> MCPServer:
         "slack-plane-intake",
         instructions=(
             "Create a Plane problem only from the current authorized top-level "
-            "Slack intake message. Pass its Slack timestamp exactly. Never "
+            "Slack direct message to Hermes. Pass its Slack timestamp exactly. Never "
             "invent a timestamp, channel, project, ticket field, or success result."
         ),
     )
 
     @server.tool()
     async def create_plane_problem(message_ts: str) -> dict:
-        """Create or recover the Plane ticket for one Slack intake message.
+        """Create or recover the Plane ticket for one Slack DM intake message.
 
         Args:
-            message_ts: Exact Slack timestamp of the current top-level message.
+            message_ts: Exact Slack timestamp of the current top-level DM.
         """
         result = await service.create_from_slack(message_ts)
         return result.model_dump(mode="json")

@@ -1,22 +1,24 @@
 # Slack Plane Intake
 
 `slack-plane-intake` is the restricted Slack-to-Plane boundary used by Hermes
-for CSLOG-179. An authorized user posts one top-level message in the configured
-Slack channel, attaches any evidence to that message, and mentions Hermes. The
+for CSLOG-179. The authorized user sends one top-level direct message to the
+existing Hermes Slack app and attaches any evidence to that message. The
 service refetches that exact message, analyzes it, creates one Plane work item,
 uploads the unchanged originals, and deduplicates retries.
 
-Version 1 is deliberately narrow: Slack only, one channel, an explicit bot
-mention, an author allowlist, and one Plane project. It does not read a whole
-thread, use reactions as triggers, use Hermes Kanban, or process WhatsApp.
+Version 1 is deliberately narrow: Slack only, one one-to-one Hermes DM, one
+authorized user, and one Plane project. It does not read a whole thread, use
+reactions as triggers, use Hermes Kanban, or process WhatsApp. The DM is
+dedicated to problem intake; every new top-level message is treated as a new
+intake request.
 
 ## Runtime contract
 
 Hermes can call only the MCP tool `create_plane_problem(message_ts)`. The tool
 does not trust message text or file paths supplied by the model. It uses the
 configured Slack bot token to retrieve the exact source message, validates the
-channel, author, mention and top-level status, and downloads only that message's
-attachments. Original bytes are SHA-256 hashed and uploaded unchanged.
+fixed one-to-one DM, author, and top-level status, and downloads only that
+message's attachments. Original bytes are SHA-256 hashed and uploaded unchanged.
 
 Text analysis falls back in this order:
 
@@ -102,28 +104,27 @@ install -m 0644 deploy/problem-intake/SKILL.md \
 systemctl --user daemon-reload
 ```
 
-Before starting the service, create the public `#problem-intake` channel, add
-the Slack bot scope `files:read`, reinstall the app, and copy the channel ID.
-The guarded activation command verifies those prerequisites, joins the bot,
-confirms that the reference gateway on `10.1.0.9` is stopped, validates config
-and MCP discovery, and only then starts the service:
+Before starting the service, add the Slack bot scope `files:read` and reinstall
+the existing Hermes app. The guarded activation command resolves the existing
+one-to-one DM from the sole allowed user ID, verifies `im:history`, `im:write`,
+and `files:read`, confirms that the reference gateway on `10.1.0.9` is stopped,
+validates config and MCP discovery, and only then starts the service:
 
 ```bash
-scripts/activate-godev.sh --channel-id C0123456789
+scripts/activate-godev.sh
 ```
 
 Afterward, inspect `systemctl --user is-active hermes-gateway.service` and
 `journalctl --user -u hermes-gateway.service -n 100 --no-pager` before live
 acceptance messages.
 
-The Slack app needs Socket Mode and, for a public intake channel,
-`app_mentions:read`, `chat:write`, `channels:history`, `files:read`, and
-`users:read`. A private channel uses `groups:history` and the matching message
-event instead. The bot must be invited to the configured channel.
+The existing Slack app needs Socket Mode, the `message.im` event subscription,
+and bot scopes `im:history`, `im:write`, `chat:write`, `files:read`, and
+`users:read`. No channel creation, invitation, or bot mention is required.
 
 ## Acceptance and rollback
 
-Live acceptance requires a text message, a screenshot message, a duplicate of
+Live acceptance requires a text DM, a screenshot DM, a duplicate delivery of
 one event, an unauthorized-user attempt, and a thread-reply attempt. Only the
 first two may create tickets; the duplicate must return the same key. Original
 Plane attachments and their recorded hashes must match.

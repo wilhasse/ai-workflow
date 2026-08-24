@@ -1,4 +1,4 @@
-"""Validate Slack prerequisites and save the dedicated intake channel."""
+"""Validate Slack prerequisites and bind intake to one authorized Hermes DM."""
 
 from __future__ import annotations
 
@@ -60,69 +60,85 @@ def update_env(path: Path, updates: dict[str, str]) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("channel_id")
-    args = parser.parse_args(argv)
-    if not re.fullmatch(r"C[A-Z0-9]+", args.channel_id):
-        print("activation error: invalid public Slack channel ID", file=sys.stderr)
-        return 2
+    parser.parse_args(argv)
 
-    env_path = Path.home() / ".hermes/.env"
+    hermes_home = Path(
+        os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))
+    ).expanduser()
+    env_path = hermes_home / ".env"
     values = read_env(env_path)
     token = values.get("SLACK_BOT_TOKEN", "")
     if not token.startswith("xoxb-"):
         print("activation error: Slack bot token is unavailable", file=sys.stderr)
         return 2
 
+    allowed_raw = values.get("SPI_SLACK_ALLOWED_USERS", "") or values.get(
+        "SLACK_ALLOWED_USERS", ""
+    )
+    allowed_users = tuple(
+        dict.fromkeys(item for item in re.split(r"[,\s]+", allowed_raw) if item)
+    )
+    if len(allowed_users) != 1 or not re.fullmatch(r"U[A-Z0-9]+", allowed_users[0]):
+        print(
+            "activation error: DM intake requires exactly one allowed Slack user ID",
+            file=sys.stderr,
+        )
+        return 2
+    allowed_user = allowed_users[0]
+
     auth, scopes_header = slack_call(token, "auth.test", {})
     if not auth.get("ok"):
         print("activation error: Slack authentication failed", file=sys.stderr)
         return 1
     scopes = {item.strip() for item in scopes_header.split(",") if item.strip()}
-    if "files:read" not in scopes:
+    required_scopes = {"files:read", "im:history", "im:write"}
+    missing_scopes = sorted(required_scopes - scopes)
+    if missing_scopes:
         print(
-            "activation error: Slack app lacks files:read; add the scope and reinstall the app",
+            "activation error: Slack app lacks required DM intake scopes: "
+            + ", ".join(missing_scopes)
+            + "; add them and reinstall the app",
             file=sys.stderr,
         )
         return 1
 
-    info, _ = slack_call(token, "conversations.info", {"channel": args.channel_id})
+    opened, _ = slack_call(token, "conversations.open", {"users": allowed_user})
+    channel_id = str((opened.get("channel") or {}).get("id", ""))
+    if not opened.get("ok") or not re.fullmatch(r"D[A-Z0-9]+", channel_id):
+        print(
+            "activation error: Slack did not resolve a one-to-one Hermes DM",
+            file=sys.stderr,
+        )
+        return 1
+
+    info, _ = slack_call(token, "conversations.info", {"channel": channel_id})
     channel = info.get("channel") or {}
-    if not info.get("ok") or channel.get("name") != "problem-intake":
+    if not info.get("ok") or not channel.get("is_im") or channel.get("is_mpim"):
         print(
-            "activation error: channel must exist with exact name problem-intake",
+            "activation error: resolved conversation is not a one-to-one Slack DM",
             file=sys.stderr,
         )
         return 1
-    if channel.get("is_private"):
-        print("activation error: v1 requires a public intake channel", file=sys.stderr)
-        return 1
-
-    if not channel.get("is_member"):
-        joined, _ = slack_call(
-            token, "conversations.join", {"channel": args.channel_id}
+    conversation_user = str(channel.get("user", ""))
+    if conversation_user and conversation_user != allowed_user:
+        print(
+            "activation error: Slack DM user does not match the allowlist",
+            file=sys.stderr,
         )
-        if not joined.get("ok"):
-            print(
-                "activation error: bot could not join the intake channel",
-                file=sys.stderr,
-            )
-            return 1
-        channel = joined.get("channel") or {}
-    if not channel.get("is_member"):
-        print("activation error: bot membership was not verified", file=sys.stderr)
         return 1
 
     update_env(
         env_path,
         {
-            "SLACK_ALLOWED_CHANNELS": args.channel_id,
-            "SPI_SLACK_CHANNEL_ID": args.channel_id,
+            "SLACK_ALLOWED_CHANNELS": channel_id,
+            "SPI_SLACK_CHANNEL_ID": channel_id,
         },
     )
-    print("slack_channel_id=" + args.channel_id)
-    print("slack_channel_name=problem-intake")
+    print("slack_intake_mode=direct_message")
+    print("slack_dm_channel_id=" + channel_id)
+    print("allowed_user_count=1")
     print("files_read_scope=true")
-    print("bot_membership=true")
+    print("dm_history_scope=true")
     return 0
 
 

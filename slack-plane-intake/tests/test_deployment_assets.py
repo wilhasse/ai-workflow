@@ -14,6 +14,8 @@ def test_examples_are_redacted_and_restricted():
     assert "terminal" in config_example
     assert "kanban" in config_example
     assert "whatsapp" not in config_example.lower()
+    assert "disable_dms: false" in config_example
+    assert "D_REDACTED" in env_example
     assert config_example.startswith("_config_version: 38\n")
 
 
@@ -45,6 +47,8 @@ def test_activation_is_guarded_by_slack_and_single_owner_checks():
     assert "reference Hermes gateway is still running" in local
     assert "mcp test slack-plane-intake" in local
     assert "files:read" in target
-    assert 'channel.get("name") != "problem-intake"' in target
-    assert "conversations.join" in target
+    assert "conversations.open" in target
+    assert 'channel.get("is_im")' in target
+    assert "conversations.join" not in target
+    assert "--channel-id" not in local
     assert "systemctl --user restart hermes-gateway.service" in local

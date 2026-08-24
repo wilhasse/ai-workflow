@@ -12,7 +12,7 @@ from slack_plane_intake.models import SourceMessage
 def required_env(tmp_path):
     return {
         "SPI_SLACK_BOT_TOKEN": "xoxb-test-secret",
-        "SPI_SLACK_CHANNEL_ID": "CINTAKE",
+        "SPI_SLACK_CHANNEL_ID": "DINTAKE",
         "SPI_SLACK_ALLOWED_USERS": "U1,U2",
         "SPI_CLIPROXY_API_KEY": "model-secret",
         "SPI_PLANE_API_KEY": "plane-secret",
@@ -37,11 +37,11 @@ def limits():
 def source_message():
     return SourceMessage(
         team_id="T1",
-        channel_id="CINTAKE",
+        channel_id="DINTAKE",
         message_ts="1724440000.123456",
         author_id="U1",
         author_name="Operator",
         text="<@UBOT> problema: API returns HTTP 500",
-        permalink="https://example.slack.com/archives/CINTAKE/p1724440000123456",
+        permalink="https://example.slack.com/archives/DINTAKE/p1724440000123456",
         posted_at=datetime(2026, 8, 23, tzinfo=UTC),
     )
