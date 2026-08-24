@@ -36,3 +36,14 @@ def test_hermes_installer_includes_slack_and_mcp_clients():
     installer = (ROOT / "scripts/install-hermes-godev.sh").read_text()
     assert '"$release_dir[slack,mcp]"' in installer
     assert "/home/cslog/.local/bin/hermes" in installer
+
+
+def test_activation_is_guarded_by_slack_and_single_owner_checks():
+    local = (ROOT / "scripts/activate-godev.sh").read_text()
+    target = (ROOT / "scripts/activate-target.py").read_text()
+    assert "reference Hermes gateway is still running" in local
+    assert "mcp test slack-plane-intake" in local
+    assert "files:read" in target
+    assert 'channel.get("name") != "problem-intake"' in target
+    assert "conversations.join" in target
+    assert "systemctl --user restart hermes-gateway.service" in local

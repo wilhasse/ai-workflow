@@ -102,15 +102,19 @@ install -m 0644 deploy/problem-intake/SKILL.md \
 systemctl --user daemon-reload
 ```
 
-Before starting the service, validate the package config, Hermes config and
-MCP discovery. Confirm that the reference gateway on `10.1.0.9` is stopped and
-that there is only one Socket Mode owner. Activation is then explicit:
+Before starting the service, create the public `#problem-intake` channel, add
+the Slack bot scope `files:read`, reinstall the app, and copy the channel ID.
+The guarded activation command verifies those prerequisites, joins the bot,
+confirms that the reference gateway on `10.1.0.9` is stopped, validates config
+and MCP discovery, and only then starts the service:
 
 ```bash
-systemctl --user enable --now hermes-gateway.service
-systemctl --user is-active hermes-gateway.service
-journalctl --user -u hermes-gateway.service -n 100 --no-pager
+scripts/activate-godev.sh --channel-id C0123456789
 ```
+
+Afterward, inspect `systemctl --user is-active hermes-gateway.service` and
+`journalctl --user -u hermes-gateway.service -n 100 --no-pager` before live
+acceptance messages.
 
 The Slack app needs Socket Mode and, for a public intake channel,
 `app_mentions:read`, `chat:write`, `channels:history`, `files:read`, and

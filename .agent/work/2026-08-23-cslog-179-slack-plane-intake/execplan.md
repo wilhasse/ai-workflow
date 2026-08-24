@@ -15,7 +15,7 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
 - [x] (2026-08-23 23:41Z) Locked the product decisions and inspected Plane issue `CSLOG-179`, the repository, Hermes on `10.1.0.9`, current upstream Hermes, and the target host `10.1.0.7`.
 - [x] (2026-08-23 23:41Z) Verified live CLIProxyAPI model catalog and image capability: `kimi-k3`, `qwen3.8-max`, and `gpt-5.6-terra` accepted images; `deepseek/deepseek-v4-pro` rejected image input.
 - [x] (2026-08-23 23:41Z) Created this work item on isolated branch `cslog-179-slack-plane-intake`, based on `origin/main`, preserving two unrelated local `main` commits.
-- [x] (2026-08-24 00:20Z) Implemented the `slack-plane-intake` package, Plane project provisioner, deployment scripts/templates, pinned Hermes integration patch, operator documentation, and contract suite (`28 passed`, Ruff clean, shell syntax clean, release archive inspected).
+- [x] (2026-08-24 00:28Z) Implemented the `slack-plane-intake` package, Plane project provisioner, deployment/guarded-activation scripts and templates, pinned Hermes integration patch, operator documentation, and contract suite (`29 passed`, Ruff clean, shell syntax clean, release archive inspected).
 - [x] (2026-08-24 00:14Z) Created and idempotently reverified Plane project `Problem Intake` with identifier `PROB` and its Backlog state.
 - [x] (2026-08-24 00:19Z) Installed the intake release and pinned Hermes `0.20.5` checkout on `10.1.0.7`, applied the bounded timestamp patch, transferred only Slack/Plane secrets plus the selected allowlist from `10.1.0.9`, and proved a K3 one-shot plus the one-tool MCP handshake.
 - [ ] Configure and start the restricted Slack gateway, then complete live text, image, duplicate, authorization, and failure-path acceptance checks.
@@ -85,6 +85,10 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
 
 - Decision: Use SQLite full-synchronous rollback journaling on `10.1.0.7` rather than the initially planned WAL mode.
   Rationale: Low intake volume does not require WAL concurrency, claim transactions already serialize writers, and avoiding WAL removes exposure to the target runtime's known WAL-reset defect.
+  Date/Author: 2026-08-24 / Codex.
+
+- Decision: Make final activation a guarded command that refuses to start unless Slack `files:read`, the exact public `#problem-intake` channel, bot membership, stopped reference gateway, package validation, and MCP discovery all pass.
+  Rationale: The two remaining prerequisites require Slack workspace administration outside the bot token's authority. Encoding every safety gate makes the eventual handoff repeatable and prevents a partially capable gateway from being represented as active.
   Date/Author: 2026-08-24 / Codex.
 
 ## Outcomes & Retrospective
@@ -186,6 +190,9 @@ Deployment evidence captured on 2026-08-24:
     Hermes patch: applied and reverse-checkable
     Hermes primary one-shot: HERMES_READY through kimi-k3
     MCP: connected, 1 tool discovered (create_plane_problem)
+    live analyzer: K3 text=success, K3 vision=success
+    forced routes: Qwen text second=success, DeepSeek text third=success,
+                   Terra vision third=success
     Plane project: 97145582-1d9d-416c-8ae3-1a059eb13cbd
     Plane Backlog state: 3f508a61-1716-4ac2-8da6-a6737c571916
     service: disabled, inactive pending Slack administration
@@ -221,3 +228,5 @@ Revision note: 2026-08-24 Hermes install corrected after the live MCP connection
 Revision note: 2026-08-24 pre-activation doctor evidence changed the ledger from WAL to rollback journaling; recorded Plane/Hermes/MCP evidence and the external Slack channel/scope blocker; regression count increased to 28.
 
 Revision note: 2026-08-24 removed the provider-incompatible zero-temperature override after live K3 evidence; retained the 28-test count with a stronger request-contract assertion.
+
+Revision note: 2026-08-24 added a guarded activation workflow for the externally blocked Slack steps and recorded live primary/fallback analyzer evidence; regression count increased to 29.
