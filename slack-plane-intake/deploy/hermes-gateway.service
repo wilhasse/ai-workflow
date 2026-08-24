@@ -1,0 +1,28 @@
+[Unit]
+Description=Hermes Slack problem intake gateway
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=/home/cslog/.hermes
+Environment=HOME=/home/cslog
+Environment=HERMES_HOME=/home/cslog/.hermes
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/home/cslog/.hermes/.env
+ExecStart=/home/cslog/hermes-agent/.venv/bin/python -m hermes_cli.main gateway run
+Restart=always
+RestartSec=5
+RestartPreventExitStatus=78
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

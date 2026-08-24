@@ -1,0 +1,87 @@
+model:
+  default: kimi-k3
+  provider: custom
+  base_url: http://127.0.0.1:8317/v1
+  api_key: "${SPI_CLIPROXY_API_KEY}"
+  api_mode: chat_completions
+  supports_vision: true
+  context_length: 131072
+
+fallback_providers:
+  - provider: custom
+    model: qwen3.8-max
+    base_url: http://127.0.0.1:8317/v1
+    key_env: SPI_CLIPROXY_API_KEY
+    api_mode: chat_completions
+  - provider: custom
+    model: gpt-5.6-terra
+    base_url: http://127.0.0.1:8317/v1
+    key_env: SPI_CLIPROXY_API_KEY
+    api_mode: chat_completions
+
+slack:
+  require_mention: true
+  strict_mention: true
+  thread_require_mention: true
+  disable_dms: true
+  allowed_channels:
+    - "${SPI_SLACK_CHANNEL_ID}"
+  channel_skill_bindings:
+    - id: "${SPI_SLACK_CHANNEL_ID}"
+      skill: problem-intake
+
+platforms:
+  slack:
+    extra:
+      reply_in_thread: true
+      tool_progress: false
+      allow_bots: none
+
+platform_toolsets:
+  slack:
+    - slack-plane-intake
+
+mcp_servers:
+  slack-plane-intake:
+    command: /home/cslog/.local/share/slack-plane-intake/current/venv/bin/python
+    args:
+      - -m
+      - slack_plane_intake.mcp_server
+    enabled: true
+    env:
+      SPI_SLACK_BOT_TOKEN: "${SLACK_BOT_TOKEN}"
+      SPI_SLACK_CHANNEL_ID: "${SPI_SLACK_CHANNEL_ID}"
+      SPI_SLACK_ALLOWED_USERS: "${SPI_SLACK_ALLOWED_USERS}"
+      SPI_CLIPROXY_BASE_URL: "${SPI_CLIPROXY_BASE_URL}"
+      SPI_CLIPROXY_API_KEY: "${SPI_CLIPROXY_API_KEY}"
+      SPI_TEXT_MODELS: "${SPI_TEXT_MODELS}"
+      SPI_VISION_MODELS: "${SPI_VISION_MODELS}"
+      SPI_PLANE_BASE_URL: "${SPI_PLANE_BASE_URL}"
+      SPI_PLANE_API_KEY: "${SPI_PLANE_API_KEY}"
+      SPI_PLANE_WORKSPACE: "${SPI_PLANE_WORKSPACE}"
+      SPI_PLANE_PROJECT_ID: "${SPI_PLANE_PROJECT_ID}"
+      SPI_PLANE_PROJECT_IDENTIFIER: "${SPI_PLANE_PROJECT_IDENTIFIER}"
+      SPI_PLANE_STATE_ID: "${SPI_PLANE_STATE_ID}"
+      SPI_STATE_ROOT: "${SPI_STATE_ROOT}"
+      SPI_HTTP_TIMEOUT_SECONDS: "${SPI_HTTP_TIMEOUT_SECONDS}"
+    tools:
+      include:
+        - create_plane_problem
+      resources: false
+      prompts: false
+
+display:
+  platforms:
+    slack:
+      show_tool_calls: false
+      show_tool_results: false
+
+agent:
+  disabled_toolsets:
+    - file
+    - terminal
+    - web
+    - browser
+    - memory
+    - cron
+    - kanban

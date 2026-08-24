@@ -27,6 +27,7 @@ dev = [
 
 [project.scripts]
 slack-plane-intake = "slack_plane_intake.mcp_server:main"
+slack-plane-intake-provision = "slack_plane_intake.provision:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

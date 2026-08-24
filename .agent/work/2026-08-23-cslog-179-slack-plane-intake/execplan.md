@@ -15,7 +15,7 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
 - [x] (2026-08-23 23:41Z) Locked the product decisions and inspected Plane issue `CSLOG-179`, the repository, Hermes on `10.1.0.9`, current upstream Hermes, and the target host `10.1.0.7`.
 - [x] (2026-08-23 23:41Z) Verified live CLIProxyAPI model catalog and image capability: `kimi-k3`, `qwen3.8-max`, and `gpt-5.6-terra` accepted images; `deepseek/deepseek-v4-pro` rejected image input.
 - [x] (2026-08-23 23:41Z) Created this work item on isolated branch `cslog-179-slack-plane-intake`, based on `origin/main`, preserving two unrelated local `main` commits.
-- [ ] Implement the `slack-plane-intake` package, tests, deployment assets, and operator documentation. Core package and contract suite are complete (`21 passed`, Ruff clean); deployment assets and operator documentation remain.
+- [x] (2026-08-24 00:08Z) Implemented the `slack-plane-intake` package, Plane project provisioner, deployment scripts/templates, pinned Hermes integration patch, operator documentation, and contract suite (`25 passed`, Ruff clean, shell syntax clean, release archive inspected).
 - [ ] Create and verify Plane project `Problem Intake` with identifier `PROB`.
 - [ ] Install a pinned fresh Hermes checkout and intake package on `10.1.0.7`, transferring only required secrets from `10.1.0.9`.
 - [ ] Configure and start the restricted Slack gateway, then complete live text, image, duplicate, authorization, and failure-path acceptance checks.
@@ -34,6 +34,9 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
 
 - Observation: MCP Python SDK 2.0 removed the old `FastMCP` import path but current upstream Hermes already supports the replacement `mcp.server.MCPServer` interface.
   Evidence: the clean development install resolved `mcp==2.0.0`; the intake server imports and instantiates `MCPServer`, and all package tests pass.
+
+- Observation: pinned Hermes carries the Slack triggering timestamp as trusted event metadata for replies and threading but, unlike Discord message IDs, does not expose it in the current model turn.
+  Evidence: `plugins/platforms/slack/adapter.py` sets `MessageEvent.message_id=ts`, while `gateway/run.py` only injected `event.message_id` into model content for `Platform.DISCORD`. Without a bounded integration patch, the model could not supply the exact timestamp required by the restricted MCP contract.
 
 ## Decision Log
 
@@ -61,9 +64,13 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
   Rationale: Slack is authoritative for the token's identity. Removing a duplicated configured ID prevents stale mention validation while retaining the fixed channel and user allowlists.
   Date/Author: 2026-08-23 / Codex.
 
+- Decision: Apply one pinned Hermes patch that injects only the transport-authenticated Slack `event.message_id` into the current turn, mirroring Hermes' existing Discord pattern.
+  Rationale: The timestamp is required to invoke the single MCP tool, changes every turn, and must not be guessed from content. The intake service still independently validates channel, author, mention, and top-level status, so the patch does not broaden authority or expose tokens/message bodies.
+  Date/Author: 2026-08-24 / Codex.
+
 ## Outcomes & Retrospective
 
-Implementation has not started. The expected outcome is one tested package, one restricted Hermes runtime on `10.1.0.7`, one Plane project, and live proof that Slack text and screenshots create deduplicated Plane work items with original evidence preserved. Any incomplete external activation must be stated here rather than represented as complete.
+The local implementation and deployment artifact are complete. External provisioning, installation, activation, and live Slack acceptance remain. The expected final outcome is one restricted Hermes runtime on `10.1.0.7`, one Plane project, and live proof that Slack text and screenshots create deduplicated Plane work items with original evidence preserved. Any incomplete external activation must be stated here rather than represented as complete.
 
 ## Context and Orientation
 
@@ -174,3 +181,5 @@ Dependencies are Python 3.11+, `httpx`, `pydantic`, the official Python `mcp` SD
 Revision note: 2026-08-23 initial ExecPlan created from the user-approved CSLOG-179 design so implementation can proceed under the repository work-item workflow.
 
 Revision note: 2026-08-23 core package milestone recorded after 21 tests and Ruff checks passed; documented MCP 2.0 compatibility and removal of the redundant Slack bot-ID setting.
+
+Revision note: 2026-08-24 deployment milestone recorded after 25 tests, shell syntax checks, a successful application check of the pinned Hermes patch, and inspection of the secret-free release archive; documented the Slack timestamp integration gap and bounded patch.
