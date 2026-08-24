@@ -79,6 +79,15 @@ def _required(env: Mapping[str, str], name: str, missing: list[str]) -> str:
     return value
 
 
+def _required_with_alias(
+    env: Mapping[str, str], name: str, alias: str, missing: list[str]
+) -> str:
+    value = env.get(name, "").strip() or env.get(alias, "").strip()
+    if not value:
+        missing.append(name)
+    return value
+
+
 def _csv(value: str) -> tuple[str, ...]:
     return tuple(part.strip() for part in value.split(",") if part.strip())
 
@@ -106,7 +115,9 @@ def _safe_base_url(name: str, value: str) -> str:
 def load_config(environ: Mapping[str, str] | None = None) -> AppConfig:
     env = os.environ if environ is None else environ
     missing: list[str] = []
-    slack_token = _required(env, "SPI_SLACK_BOT_TOKEN", missing)
+    slack_token = _required_with_alias(
+        env, "SPI_SLACK_BOT_TOKEN", "SLACK_BOT_TOKEN", missing
+    )
     slack_channel = _required(env, "SPI_SLACK_CHANNEL_ID", missing)
     allowed_users_raw = _required(env, "SPI_SLACK_ALLOWED_USERS", missing)
     model_key = _required(env, "SPI_CLIPROXY_API_KEY", missing)

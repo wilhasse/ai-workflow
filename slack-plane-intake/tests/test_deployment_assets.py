@@ -10,6 +10,7 @@ def test_examples_are_redacted_and_restricted():
     assert "xapp-redacted" in env_example
     assert "slack-plane-intake" in config_example
     assert "create_plane_problem" in config_example
+    assert "slack: []" in config_example
     assert "terminal" in config_example
     assert "kanban" in config_example
     assert "whatsapp" not in config_example.lower()

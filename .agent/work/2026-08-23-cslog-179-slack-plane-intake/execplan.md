@@ -15,7 +15,7 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
 - [x] (2026-08-23 23:41Z) Locked the product decisions and inspected Plane issue `CSLOG-179`, the repository, Hermes on `10.1.0.9`, current upstream Hermes, and the target host `10.1.0.7`.
 - [x] (2026-08-23 23:41Z) Verified live CLIProxyAPI model catalog and image capability: `kimi-k3`, `qwen3.8-max`, and `gpt-5.6-terra` accepted images; `deepseek/deepseek-v4-pro` rejected image input.
 - [x] (2026-08-23 23:41Z) Created this work item on isolated branch `cslog-179-slack-plane-intake`, based on `origin/main`, preserving two unrelated local `main` commits.
-- [x] (2026-08-24 00:28Z) Implemented the `slack-plane-intake` package, Plane project provisioner, deployment/guarded-activation scripts and templates, pinned Hermes integration patch, operator documentation, and contract suite (`29 passed`, Ruff clean, shell syntax clean, release archive inspected).
+- [x] (2026-08-24 00:30Z) Implemented the `slack-plane-intake` package, Plane project provisioner, deployment/guarded-activation scripts and templates, pinned Hermes integration patch, operator documentation, and contract suite (`30 passed`, Ruff clean, shell syntax clean, release archive inspected).
 - [x] (2026-08-24 00:14Z) Created and idempotently reverified Plane project `Problem Intake` with identifier `PROB` and its Backlog state.
 - [x] (2026-08-24 00:19Z) Installed the intake release and pinned Hermes `0.20.5` checkout on `10.1.0.7`, applied the bounded timestamp patch, transferred only Slack/Plane secrets plus the selected allowlist from `10.1.0.9`, and proved a K3 one-shot plus the one-tool MCP handshake.
 - [ ] Configure and start the restricted Slack gateway, then complete live text, image, duplicate, authorization, and failure-path acceptance checks.
@@ -230,3 +230,5 @@ Revision note: 2026-08-24 pre-activation doctor evidence changed the ledger from
 Revision note: 2026-08-24 removed the provider-incompatible zero-temperature override after live K3 evidence; retained the 28-test count with a stronger request-contract assertion.
 
 Revision note: 2026-08-24 added a guarded activation workflow for the externally blocked Slack steps and recorded live primary/fallback analyzer evidence; regression count increased to 29.
+
+Revision note: 2026-08-24 made standalone intake validation reuse Hermes' standard Slack token and changed the Slack native-tool list to explicit empty so only the enabled MCP loads without an upstream false warning; regression count increased to 30.

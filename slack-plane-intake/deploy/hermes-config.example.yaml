@@ -40,8 +40,8 @@ platforms:
       allow_bots: none
 
 platform_toolsets:
-  slack:
-    - slack-plane-intake
+  # An explicit empty native-tool list still loads the only enabled MCP server.
+  slack: []
 
 mcp_servers:
   slack-plane-intake:
