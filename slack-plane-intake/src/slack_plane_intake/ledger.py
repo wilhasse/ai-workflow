@@ -29,7 +29,12 @@ class IntakeLedger:
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=30)
         connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA journal_mode=WAL")
+        # The target Debian Python currently links SQLite 3.40.1, which is in
+        # the upstream WAL-reset defect range. Intake volume is low, and
+        # BEGIN IMMEDIATE already serializes claims, so rollback journaling is
+        # the safer durability choice until the host SQLite is patched.
+        connection.execute("PRAGMA journal_mode=DELETE")
+        connection.execute("PRAGMA synchronous=FULL")
         connection.execute("PRAGMA foreign_keys=ON")
         return connection
 

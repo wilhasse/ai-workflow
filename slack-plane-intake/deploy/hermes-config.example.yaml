@@ -1,3 +1,5 @@
+_config_version: 38
+
 model:
   default: kimi-k3
   provider: custom

@@ -64,5 +64,9 @@ fi
 link_tmp=/home/cslog/.hermes-agent-link
 ln -sfn -- "$release_dir" "$link_tmp"
 mv -Tf -- "$link_tmp" /home/cslog/hermes-agent
+mkdir -p -- /home/cslog/.local/bin
+cli_link_tmp=/home/cslog/.local/bin/.hermes-link
+ln -sfn -- "$release_dir/.venv/bin/hermes" "$cli_link_tmp"
+mv -Tf -- "$cli_link_tmp" /home/cslog/.local/bin/hermes
 printf 'installed Hermes %s\n' "$commit"
 REMOTE

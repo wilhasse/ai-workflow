@@ -13,6 +13,7 @@ def test_examples_are_redacted_and_restricted():
     assert "terminal" in config_example
     assert "kanban" in config_example
     assert "whatsapp" not in config_example.lower()
+    assert config_example.startswith("_config_version: 38\n")
 
 
 def test_hermes_patch_exposes_only_transport_message_id():
@@ -34,3 +35,4 @@ def test_target_installer_builds_venv_at_final_path():
 def test_hermes_installer_includes_slack_and_mcp_clients():
     installer = (ROOT / "scripts/install-hermes-godev.sh").read_text()
     assert '"$release_dir[slack,mcp]"' in installer
+    assert "/home/cslog/.local/bin/hermes" in installer

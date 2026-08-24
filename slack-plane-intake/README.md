@@ -30,7 +30,9 @@ clearly marked partial ticket containing the raw evidence and warnings.
 
 The source key `slack:<team>:<channel>:<message_ts>` and a hidden Plane marker
 make repeated delivery idempotent. Runtime state is stored under
-`~/.local/state/slack-plane-intake` by default.
+`~/.local/state/slack-plane-intake` by default. The SQLite ledger uses
+full-synchronous rollback journaling because the current target host's SQLite
+version is affected by an upstream WAL-reset defect.
 
 ## Local development
 

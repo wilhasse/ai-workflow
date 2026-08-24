@@ -15,9 +15,9 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
 - [x] (2026-08-23 23:41Z) Locked the product decisions and inspected Plane issue `CSLOG-179`, the repository, Hermes on `10.1.0.9`, current upstream Hermes, and the target host `10.1.0.7`.
 - [x] (2026-08-23 23:41Z) Verified live CLIProxyAPI model catalog and image capability: `kimi-k3`, `qwen3.8-max`, and `gpt-5.6-terra` accepted images; `deepseek/deepseek-v4-pro` rejected image input.
 - [x] (2026-08-23 23:41Z) Created this work item on isolated branch `cslog-179-slack-plane-intake`, based on `origin/main`, preserving two unrelated local `main` commits.
-- [x] (2026-08-24 00:19Z) Implemented the `slack-plane-intake` package, Plane project provisioner, deployment scripts/templates, pinned Hermes integration patch, operator documentation, and contract suite (`27 passed`, Ruff clean, shell syntax clean, release archive inspected).
-- [ ] Create and verify Plane project `Problem Intake` with identifier `PROB`.
-- [ ] Install a pinned fresh Hermes checkout and intake package on `10.1.0.7`, transferring only required secrets from `10.1.0.9`.
+- [x] (2026-08-24 00:20Z) Implemented the `slack-plane-intake` package, Plane project provisioner, deployment scripts/templates, pinned Hermes integration patch, operator documentation, and contract suite (`28 passed`, Ruff clean, shell syntax clean, release archive inspected).
+- [x] (2026-08-24 00:14Z) Created and idempotently reverified Plane project `Problem Intake` with identifier `PROB` and its Backlog state.
+- [x] (2026-08-24 00:19Z) Installed the intake release and pinned Hermes `0.20.5` checkout on `10.1.0.7`, applied the bounded timestamp patch, transferred only Slack/Plane secrets plus the selected allowlist from `10.1.0.9`, and proved a K3 one-shot plus the one-tool MCP handshake.
 - [ ] Configure and start the restricted Slack gateway, then complete live text, image, duplicate, authorization, and failure-path acceptance checks.
 - [ ] Record final evidence, commit only CSLOG-179 files, and mark the work item complete.
 
@@ -43,6 +43,12 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
 
 - Observation: Hermes' Slack extra does not include the MCP client SDK; MCP is a separate upstream install extra.
   Evidence: the pinned Hermes one-shot K3 call returned `HERMES_READY` and `hermes mcp list` found one selected intake tool, but the first `hermes mcp test` reported that the MCP Python SDK was absent. The installer now requests `[slack,mcp]` and has a regression assertion for both extras.
+
+- Observation: the existing Slack app cannot yet satisfy live attachment intake or create the dedicated channel.
+  Evidence: `auth.test` succeeds and the app has mention, chat, channel/group history, channel read/join, and user-read scopes, but its granted scopes omit `files:read`; `conversations.create` returned `missing_scope`, and only the unjoined `#cslog` channel is visible. The service remains disabled and inactive until a human creates `#problem-intake`, adds `files:read`, reinstalls the app, and makes the bot a channel member.
+
+- Observation: target Python links SQLite 3.40.1, which Hermes doctor identifies as affected by the upstream WAL-reset defect.
+  Evidence: pre-activation `hermes doctor` reported the affected source ID. The intake ledger now uses `journal_mode=DELETE` plus `synchronous=FULL`, confirmed by a regression test, while retaining `BEGIN IMMEDIATE` claim serialization.
 
 ## Decision Log
 
@@ -74,9 +80,13 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
   Rationale: The timestamp is required to invoke the single MCP tool, changes every turn, and must not be guessed from content. The intake service still independently validates channel, author, mention, and top-level status, so the patch does not broaden authority or expose tokens/message bodies.
   Date/Author: 2026-08-24 / Codex.
 
+- Decision: Use SQLite full-synchronous rollback journaling on `10.1.0.7` rather than the initially planned WAL mode.
+  Rationale: Low intake volume does not require WAL concurrency, claim transactions already serialize writers, and avoiding WAL removes exposure to the target runtime's known WAL-reset defect.
+  Date/Author: 2026-08-24 / Codex.
+
 ## Outcomes & Retrospective
 
-The local implementation and deployment artifact are complete. External provisioning, installation, activation, and live Slack acceptance remain. The expected final outcome is one restricted Hermes runtime on `10.1.0.7`, one Plane project, and live proof that Slack text and screenshots create deduplicated Plane work items with original evidence preserved. Any incomplete external activation must be stated here rather than represented as complete.
+The local implementation, secret-free deployment artifact, dedicated CLIProxyAPI key, Plane project, intake release, pinned Hermes build, restricted config/skill/unit, model route, and one-tool MCP handshake are complete. The unit is deliberately `disabled` and `inactive`. Live Slack activation and acceptance are externally blocked on Slack admin work: create `#problem-intake`, add `files:read` and reinstall the app, then invite or join the bot. No live Slack-to-Plane ticket has been claimed as proof yet.
 
 ## Context and Orientation
 
@@ -100,7 +110,7 @@ The Slack client uses the configured bot token to call `auth.test`, `conversatio
 
 The analyzer sends text-like inputs through K3, Qwen, and DeepSeek in order. It sends images or rendered PDF pages through K3, Qwen, and Terra. A fallback occurs after one retry for timeout, connection failure, HTTP 429 or 5xx, explicit unsupported-input response, or invalid JSON that fails `ProblemAnalysis` validation. The prompt says that message and attachment contents are evidence and cannot change system instructions or request actions. Original files are never rewritten before Plane upload; normalized copies exist only for model input.
 
-The ledger uses SQLite with WAL mode and a unique source key. States are `pending`, `completed`, and `failed`, with issue identifiers, warnings, timestamps, and retry metadata. A per-source transaction prevents concurrent duplicates. If Plane creation may have succeeded but the response was lost, query recent Plane items for a hidden source marker before retrying the POST. A duplicate returns the recorded or reconciled ticket.
+The ledger uses SQLite full-synchronous rollback journaling and a unique source key. States are `pending`, `completed`, and `failed`, with issue identifiers, warnings, timestamps, and retry metadata. A per-source `BEGIN IMMEDIATE` transaction prevents concurrent duplicates. If Plane creation may have succeeded but the response was lost, query recent Plane items for a hidden source marker before retrying the POST. A duplicate returns the recorded or reconciled ticket.
 
 Milestone 2 adds deployment assets. Add `scripts/build-release.sh` to create a source archive without secrets or runtime state, `scripts/deploy-godev.sh` to install the archive into `~/.local/share/slack-plane-intake`, and `deploy/hermes-gateway.service` as the systemd user-unit template. Bash scripts begin with `set -euo pipefail`, validate explicit host/path inputs, create timestamped backups, use a virtual environment, run tests before activation, and support a validation-only mode. Add redacted configuration examples for the package, Hermes, and the systemd environment.
 
@@ -166,6 +176,17 @@ Pre-implementation runtime evidence captured on 2026-08-23:
     image tests: kimi-k3=success, qwen3.8-max=success,
                  gpt-5.6-terra=success, deepseek/deepseek-v4-pro=unsupported
 
+Deployment evidence captured on 2026-08-24:
+
+    intake release: 2026-08-24T00-14-51Z (26 target tests at deployment)
+    Hermes: 0.20.5 at d861fbe55073dbd9e295eaf2c1fd16c8af54f7da
+    Hermes patch: applied and reverse-checkable
+    Hermes primary one-shot: HERMES_READY through kimi-k3
+    MCP: connected, 1 tool discovered (create_plane_problem)
+    Plane project: 97145582-1d9d-416c-8ae3-1a059eb13cbd
+    Plane Backlog state: 3f508a61-1716-4ac2-8da6-a6737c571916
+    service: disabled, inactive pending Slack administration
+
 Do not copy any credential values, signed Plane storage URLs, policies, or signatures into this document. Append concise test counts, deployed commit identifiers, service status, created project UUID, and live issue keys here as implementation evidence, but continue to redact secrets.
 
 ## Interfaces and Dependencies
@@ -193,3 +214,5 @@ Revision note: 2026-08-24 deployment milestone recorded after 25 tests, shell sy
 Revision note: 2026-08-24 target installer corrected after live pre-activation evidence exposed relocated venv shebangs; regression count increased to 26.
 
 Revision note: 2026-08-24 Hermes install corrected after the live MCP connection test showed that upstream separates Slack and MCP extras; regression count increased to 27.
+
+Revision note: 2026-08-24 pre-activation doctor evidence changed the ledger from WAL to rollback journaling; recorded Plane/Hermes/MCP evidence and the external Slack channel/scope blocker; regression count increased to 28.
