@@ -22,16 +22,21 @@ install_root=/home/cslog/.local/share/hermes-agent
 release_dir="$install_root/releases/$short_commit"
 incoming_dir="$install_root/incoming"
 remote_patch="$incoming_dir/hermes-slack-trigger-message-id.patch"
+remote_shortcut_patch="$incoming_dir/hermes-slack-problem-intake-shortcut.patch"
 
 ssh "$host" 'command -v git >/dev/null && command -v python3 >/dev/null && test "$(id -un)" = cslog'
 ssh "$host" "install -d -m 0700 '$incoming_dir' '$install_root/releases'"
 scp -q -- "$script_dir/../patches/hermes-slack-trigger-message-id.patch" "$host:$remote_patch"
+scp -q -- "$script_dir/../patches/hermes-slack-problem-intake-shortcut.patch" \
+  "$host:$remote_shortcut_patch"
 
-ssh "$host" bash -s -- "$commit" "$release_dir" "$remote_patch" <<'REMOTE'
+ssh "$host" bash -s -- \
+  "$commit" "$release_dir" "$remote_patch" "$remote_shortcut_patch" <<'REMOTE'
 set -euo pipefail
 commit=$1
 release_dir=$2
 patch_file=$3
+shortcut_patch_file=$4
 
 if [[ ! -d "$release_dir/.git" ]]; then
   if [[ -e "$release_dir" ]]; then
@@ -54,12 +59,21 @@ elif ! git -C "$release_dir" apply --reverse --check "$patch_file" 2>/dev/null; 
   echo "Hermes timestamp patch is neither applicable nor already applied" >&2
   exit 1
 fi
+if git -C "$release_dir" apply --check "$shortcut_patch_file" 2>/dev/null; then
+  git -C "$release_dir" apply "$shortcut_patch_file"
+elif ! git -C "$release_dir" apply --reverse --check "$shortcut_patch_file" 2>/dev/null; then
+  echo "Hermes shortcut patch is neither applicable nor already applied" >&2
+  exit 1
+fi
 
 if [[ ! -x "$release_dir/.venv/bin/python" ]]; then
   python3 -m venv "$release_dir/.venv"
 fi
 "$release_dir/.venv/bin/pip" install -e "$release_dir[slack,mcp]"
-"$release_dir/.venv/bin/python" -m py_compile "$release_dir/gateway/run.py"
+"$release_dir/.venv/bin/python" -m py_compile \
+  "$release_dir/gateway/run.py" \
+  "$release_dir/plugins/platforms/slack/adapter.py" \
+  "$release_dir/plugins/platforms/slack/problem_intake_shortcut.py"
 
 link_tmp=/home/cslog/.hermes-agent-link
 ln -sfn -- "$release_dir" "$link_tmp"

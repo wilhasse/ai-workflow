@@ -42,12 +42,28 @@ def test_hermes_installer_includes_slack_and_mcp_clients():
     installer = (ROOT / "scripts/install-hermes-godev.sh").read_text()
     assert '"$release_dir[slack,mcp]"' in installer
     assert "/home/cslog/.local/bin/hermes" in installer
+    assert "hermes-slack-problem-intake-shortcut.patch" in installer
+    assert "problem_intake_shortcut.py" in installer
+
+
+def test_hermes_shortcut_patch_is_private_and_bypasses_agent_loop():
+    patch = (ROOT / "patches/hermes-slack-problem-intake-shortcut.patch").read_text()
+    assert 'CALLBACK_ID = "create_agente_ticket"' in patch
+    assert "self._app.shortcut" in patch
+    assert "await ack()" in patch
+    assert "slack_plane_intake.shortcut_cli" in patch
+    assert '"response_type": "ephemeral"' in patch
+    assert "conversations_open" in patch
+    assert "SPI_SLACK_ALLOWED_USERS" in patch
+    assert "SLACK_BOT_TOKEN" not in patch
 
 
 def test_activation_is_guarded_by_slack_and_single_owner_checks():
     local = (ROOT / "scripts/activate-godev.sh").read_text()
     target = (ROOT / "scripts/activate-target.py").read_text()
     assert "reference Hermes gateway is still running" in local
+    assert "could not verify reference Hermes gateway" in local
+    assert "reference_status" in local
     assert "mcp test slack-plane-intake" in local
     assert "files:read" in target
     assert "conversations.open" in target

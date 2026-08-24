@@ -1,0 +1,287 @@
+diff --git a/plugins/platforms/slack/adapter.py b/plugins/platforms/slack/adapter.py
+index e017838..c36ec72 100644
+--- a/plugins/platforms/slack/adapter.py
++++ b/plugins/platforms/slack/adapter.py
+@@ -2128,6 +2128,20 @@ class SlackAdapter(BasePlatformAdapter):
+                 )
+                 await self._handle_slash_command(command)
+-
++
++            # CSLOG's explicit message shortcut bypasses the agent loop and
++            # invokes the restricted, idempotent Slack-to-Plane intake. The
++            # handler acknowledges before doing network work and reports only
++            # through an ephemeral response_url or the invoking user's DM.
++            from .problem_intake_shortcut import (
++                CALLBACK_ID as _problem_intake_callback_id,
++                handle_message_shortcut as _handle_problem_intake_shortcut,
++            )
++
++            @self._app.shortcut(_problem_intake_callback_id)
++            async def handle_problem_intake_shortcut(ack, body):
++                await ack()
++                await _handle_problem_intake_shortcut(self, body)
++
+             # Register Block Kit action handlers for approval buttons
+             for _action_id in (
+                 "hermes_approve_once",
+diff --git a/plugins/platforms/slack/problem_intake_shortcut.py b/plugins/platforms/slack/problem_intake_shortcut.py
+new file mode 100644
+index 0000000..f9d71ef
+--- /dev/null
++++ b/plugins/platforms/slack/problem_intake_shortcut.py
+@@ -0,0 +1,255 @@
++"""Restricted Slack message shortcut bridge for the CSLOG Plane intake."""
++
++from __future__ import annotations
++
++import asyncio
++import json
++import logging
++import os
++from pathlib import Path
++from typing import Any
++from urllib.parse import urlsplit
++
++import aiohttp
++
++
++logger = logging.getLogger(__name__)
++
++CALLBACK_ID = "create_agente_ticket"
++_MAX_PAYLOAD_BYTES = 2 * 1024 * 1024
++_MAX_OUTPUT_BYTES = 1024 * 1024
++
++
++def _identity(body: dict[str, Any], object_name: str) -> str:
++    value = body.get(object_name) or {}
++    return str(value.get("id") or "") if isinstance(value, dict) else ""
++
++
++def _allowed_users() -> set[str]:
++    return {
++        value.strip()
++        for value in os.environ.get("SPI_SLACK_ALLOWED_USERS", "").split(",")
++        if value.strip()
++    }
++
++
++def _shortcut_python() -> Path:
++    configured = os.environ.get("SPI_SLACK_SHORTCUT_PYTHON", "").strip()
++    if configured:
++        return Path(configured)
++    return Path.home() / ".local/share/slack-plane-intake/current/venv/bin/python"
++
++
++def _timeout_seconds() -> float:
++    try:
++        configured = float(os.environ.get("SPI_SLACK_SHORTCUT_TIMEOUT_SECONDS", "600"))
++    except ValueError:
++        return 600.0
++    return min(900.0, max(30.0, configured))
++
++
++def _response_data(response: Any) -> dict[str, Any]:
++    if isinstance(response, dict):
++        return response
++    data = getattr(response, "data", None)
++    return data if isinstance(data, dict) else {}
++
++
++def _safe_response_url(value: object) -> str:
++    url = str(value or "")
++    parsed = urlsplit(url)
++    host = (parsed.hostname or "").lower()
++    if (
++        parsed.scheme != "https"
++        or parsed.username
++        or parsed.password
++        or not (host == "slack.com" or host.endswith(".slack.com"))
++    ):
++        return ""
++    return url
++
++
++async def _send_private_response(adapter: Any, body: dict[str, Any], text: str) -> bool:
++    response_url = _safe_response_url(body.get("response_url"))
++    if response_url:
++        try:
++            async with aiohttp.ClientSession(trust_env=True) as session:
++                async with session.post(
++                    response_url,
++                    json={"response_type": "ephemeral", "text": text},
++                    timeout=aiohttp.ClientTimeout(total=10),
++                ) as response:
++                    if response.status == 200:
++                        return True
++                    logger.warning(
++                        "[Slack] Problem-intake shortcut response_url returned HTTP %s",
++                        response.status,
++                    )
++        except Exception as exc:
++            logger.warning(
++                "[Slack] Problem-intake shortcut response_url failed: %s",
++                type(exc).__name__,
++            )
++
++    user_id = _identity(body, "user")
++    channel_id = _identity(body, "channel")
++    team_id = _identity(body, "team")
++    if not user_id:
++        return False
++    try:
++        client = adapter._get_client(channel_id, team_id=team_id or None)
++        opened = await client.conversations_open(users=user_id)
++        dm_id = str((_response_data(opened).get("channel") or {}).get("id") or "")
++        if not dm_id:
++            return False
++        await client.chat_postMessage(channel=dm_id, text=text)
++        return True
++    except Exception as exc:
++        logger.error(
++            "[Slack] Problem-intake shortcut private DM fallback failed: %s",
++            type(exc).__name__,
++        )
++        return False
++
++
++def _warning_lines(result: dict[str, Any]) -> list[str]:
++    warnings = result.get("warnings") or []
++    if not isinstance(warnings, list):
++        return []
++    lines = []
++    for warning in warnings[:3]:
++        clean = " ".join(str(warning).split())[:500]
++        if clean:
++            lines.append(f"• {clean}")
++    return lines
++
++
++def _issue_link(result: dict[str, Any]) -> str:
++    key = str(result.get("issue_key") or "ticket")
++    url = str(result.get("issue_url") or "")
++    parsed = urlsplit(url)
++    if parsed.scheme in {"http", "https"} and parsed.netloc:
++        return f"<{url}|{key}>"
++    return key
++
++
++def _format_result(result: dict[str, Any]) -> str:
++    status = str(result.get("status") or "failed")
++    warnings = _warning_lines(result)
++    if status == "created":
++        text = f":white_check_mark: Ticket {_issue_link(result)} criado no Plane."
++    elif status == "existing":
++        text = (
++            f":information_source: Esta mensagem já está registrada como "
++            f"{_issue_link(result)}."
++        )
++    elif status == "partial":
++        text = f":warning: Ticket {_issue_link(result)} criado parcialmente no Plane."
++    else:
++        text = ":x: Não foi possível criar o ticket no Plane."
++
++    uploaded = result.get("attachments_uploaded")
++    if isinstance(uploaded, int) and uploaded > 0:
++        text += f"\nAnexos originais enviados: {uploaded}."
++    if warnings:
++        text += "\n\n" + "\n".join(warnings)
++    return text
++
++
++async def _run_intake(body: dict[str, Any]) -> dict[str, Any]:
++    python = _shortcut_python()
++    if (
++        not python.is_absolute()
++        or not python.is_file()
++        or not os.access(python, os.X_OK)
++    ):
++        return {
++            "status": "failed",
++            "warnings": ["Problem-intake shortcut runtime is unavailable"],
++        }
++
++    raw = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode()
++    if len(raw) > _MAX_PAYLOAD_BYTES:
++        return {
++            "status": "failed",
++            "warnings": ["Slack message shortcut payload is too large"],
++        }
++
++    process = await asyncio.create_subprocess_exec(
++        str(python),
++        "-m",
++        "slack_plane_intake.shortcut_cli",
++        stdin=asyncio.subprocess.PIPE,
++        stdout=asyncio.subprocess.PIPE,
++        stderr=asyncio.subprocess.PIPE,
++    )
++    try:
++        stdout, stderr = await asyncio.wait_for(
++            process.communicate(raw), timeout=_timeout_seconds()
++        )
++    except TimeoutError:
++        process.kill()
++        await process.wait()
++        return {
++            "status": "failed",
++            "warnings": ["Problem-intake shortcut timed out"],
++        }
++
++    if process.returncode:
++        logger.error(
++            "[Slack] Problem-intake shortcut subprocess exited %s (stderr_bytes=%d)",
++            process.returncode,
++            len(stderr),
++        )
++    if len(stdout) > _MAX_OUTPUT_BYTES:
++        return {
++            "status": "failed",
++            "warnings": ["Problem-intake shortcut returned too much data"],
++        }
++    try:
++        result = json.loads(stdout)
++    except (UnicodeDecodeError, json.JSONDecodeError):
++        return {
++            "status": "failed",
++            "warnings": ["Problem-intake shortcut returned an invalid result"],
++        }
++    if not isinstance(result, dict):
++        return {
++            "status": "failed",
++            "warnings": ["Problem-intake shortcut returned an invalid result"],
++        }
++    return result
++
++
++async def handle_message_shortcut(adapter: Any, body: dict[str, Any]) -> None:
++    """Authorize, process, and privately report one message shortcut."""
++    user_id = _identity(body, "user")
++    if not user_id or user_id not in _allowed_users():
++        await _send_private_response(
++            adapter,
++            body,
++            ":no_entry: Você não está autorizado a criar tickets por este atalho.",
++        )
++        logger.warning("[Slack] Rejected unauthorized problem-intake shortcut")
++        return
++
++    await _send_private_response(
++        adapter,
++        body,
++        ":hourglass_flowing_sand: Criando ticket no projeto AGENTE…",
++    )
++    try:
++        result = await _run_intake(body)
++    except Exception as exc:
++        logger.error(
++            "[Slack] Problem-intake shortcut failed: %s",
++            type(exc).__name__,
++            exc_info=True,
++        )
++        result = {
++            "status": "failed",
++            "warnings": ["Unexpected problem-intake shortcut failure"],
++        }
++    delivered = await _send_private_response(adapter, body, _format_result(result))
++    if not delivered:
++        logger.error("[Slack] Problem-intake shortcut result could not be delivered")

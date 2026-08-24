@@ -32,11 +32,35 @@ class ProblemIntakeService:
         await self.plane.close()
 
     async def create_from_slack(self, message_ts: str) -> IntakeResult:
-        message: SourceMessage | None = None
-        source_key = ""
         try:
             message = await self.slack.fetch_source_message(message_ts)
-            source_key = message.source_key
+        except IntakeError as exc:
+            return IntakeResult(status="failed", warnings=(str(exc),))
+        return await self._create_from_message(message)
+
+    async def create_from_slack_shortcut(
+        self,
+        *,
+        team_id: str,
+        channel_id: str,
+        invoking_user_id: str,
+        message_payload: dict,
+    ) -> IntakeResult:
+        """Create a ticket from one transport-authenticated Slack shortcut."""
+        try:
+            message = await self.slack.fetch_shortcut_source_message(
+                team_id=team_id,
+                channel_id=channel_id,
+                invoking_user_id=invoking_user_id,
+                message_payload=message_payload,
+            )
+        except IntakeError as exc:
+            return IntakeResult(status="failed", warnings=(str(exc),))
+        return await self._create_from_message(message)
+
+    async def _create_from_message(self, message: SourceMessage) -> IntakeResult:
+        source_key = message.source_key
+        try:
             claim = self.ledger.claim(source_key)
             if not claim.claimed and claim.existing:
                 return claim.existing
@@ -102,12 +126,10 @@ class ProblemIntakeService:
         except IntakeInProgress as exc:
             return IntakeResult(status="failed", warnings=(str(exc),))
         except IntakeError as exc:
-            if source_key:
-                self.ledger.fail(source_key, str(exc))
+            self.ledger.fail(source_key, str(exc))
             return IntakeResult(status="failed", warnings=(str(exc),))
         finally:
-            if message:
-                self._clean_downloads(message)
+            self._clean_downloads(message)
 
     @staticmethod
     def source_marker(source_key: str) -> str:
