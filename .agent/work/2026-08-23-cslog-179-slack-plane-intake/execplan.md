@@ -50,6 +50,9 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
 - Observation: target Python links SQLite 3.40.1, which Hermes doctor identifies as affected by the upstream WAL-reset defect.
   Evidence: pre-activation `hermes doctor` reported the affected source ID. The intake ledger now uses `journal_mode=DELETE` plus `synchronous=FULL`, confirmed by a regression test, while retaining `BEGIN IMMEDIATE` claim serialization.
 
+- Observation: CLIProxyAPI's `kimi-k3` route rejects an explicit zero temperature.
+  Evidence: the first live intake analyses fell back to Qwen; a bounded raw probe returned HTTP 400 with `invalid temperature: only 1 is allowed for this model`. The analyzer now omits the optional temperature field, allowing each provider's compatible default, and its request contract asserts the field stays absent.
+
 ## Decision Log
 
 - Decision: Install all new runtime components on `10.1.0.7`; treat `10.1.0.9` only as a source for selected configuration values.
@@ -216,3 +219,5 @@ Revision note: 2026-08-24 target installer corrected after live pre-activation e
 Revision note: 2026-08-24 Hermes install corrected after the live MCP connection test showed that upstream separates Slack and MCP extras; regression count increased to 27.
 
 Revision note: 2026-08-24 pre-activation doctor evidence changed the ledger from WAL to rollback journaling; recorded Plane/Hermes/MCP evidence and the external Slack channel/scope blocker; regression count increased to 28.
+
+Revision note: 2026-08-24 removed the provider-incompatible zero-temperature override after live K3 evidence; retained the 28-test count with a stronger request-contract assertion.

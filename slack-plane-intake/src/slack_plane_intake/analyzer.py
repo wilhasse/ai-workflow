@@ -100,7 +100,6 @@ class Analyzer:
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": content},
             ],
-            "temperature": 0,
             "max_tokens": 1600,
         }
         try:

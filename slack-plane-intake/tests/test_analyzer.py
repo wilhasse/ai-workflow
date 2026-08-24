@@ -59,6 +59,7 @@ async def test_text_chain_falls_back_from_k3_to_qwen(limits, source_message):
     assert result.analysis_kind == "text"
     assert route.call_count == 3
     assert route.calls[0].request.read()
+    assert "temperature" not in json.loads(route.calls[0].request.content)
 
 
 @respx.mock
