@@ -80,7 +80,7 @@ scripts/deploy-godev.sh --host 10.1.0.7
 scripts/install-hermes-godev.sh --host 10.1.0.7
 ```
 
-Hermes is pinned to commit
+Hermes is installed with its `slack` and `mcp` extras and pinned to commit
 `d861fbe55073dbd9e295eaf2c1fd16c8af54f7da`. The installer applies the small
 patch in `patches/hermes-slack-trigger-message-id.patch`; it exposes the
 transport-authenticated Slack message timestamp to the current model turn so

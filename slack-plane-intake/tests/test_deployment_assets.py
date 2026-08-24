@@ -29,3 +29,8 @@ def test_target_installer_builds_venv_at_final_path():
     venv = installer.index('python3 -m venv "$release_dir/venv"')
     assert move < venv
     assert 'python3 -m venv "$staging_dir/venv"' not in installer
+
+
+def test_hermes_installer_includes_slack_and_mcp_clients():
+    installer = (ROOT / "scripts/install-hermes-godev.sh").read_text()
+    assert '"$release_dir[slack,mcp]"' in installer

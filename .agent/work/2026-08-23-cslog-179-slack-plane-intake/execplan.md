@@ -15,7 +15,7 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
 - [x] (2026-08-23 23:41Z) Locked the product decisions and inspected Plane issue `CSLOG-179`, the repository, Hermes on `10.1.0.9`, current upstream Hermes, and the target host `10.1.0.7`.
 - [x] (2026-08-23 23:41Z) Verified live CLIProxyAPI model catalog and image capability: `kimi-k3`, `qwen3.8-max`, and `gpt-5.6-terra` accepted images; `deepseek/deepseek-v4-pro` rejected image input.
 - [x] (2026-08-23 23:41Z) Created this work item on isolated branch `cslog-179-slack-plane-intake`, based on `origin/main`, preserving two unrelated local `main` commits.
-- [x] (2026-08-24 00:14Z) Implemented the `slack-plane-intake` package, Plane project provisioner, deployment scripts/templates, pinned Hermes integration patch, operator documentation, and contract suite (`26 passed`, Ruff clean, shell syntax clean, release archive inspected).
+- [x] (2026-08-24 00:19Z) Implemented the `slack-plane-intake` package, Plane project provisioner, deployment scripts/templates, pinned Hermes integration patch, operator documentation, and contract suite (`27 passed`, Ruff clean, shell syntax clean, release archive inspected).
 - [ ] Create and verify Plane project `Problem Intake` with identifier `PROB`.
 - [ ] Install a pinned fresh Hermes checkout and intake package on `10.1.0.7`, transferring only required secrets from `10.1.0.9`.
 - [ ] Configure and start the restricted Slack gateway, then complete live text, image, duplicate, authorization, and failure-path acceptance checks.
@@ -40,6 +40,9 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
 
 - Observation: a Python virtual environment cannot be relocated after console scripts are generated because their shebangs retain the absolute creation path.
   Evidence: the first target release passed its tests in the staging directory, but `slack-plane-intake-provision` failed after the release directory was moved. The installer now moves source first, creates the venv at its final path, and has a regression test enforcing that order.
+
+- Observation: Hermes' Slack extra does not include the MCP client SDK; MCP is a separate upstream install extra.
+  Evidence: the pinned Hermes one-shot K3 call returned `HERMES_READY` and `hermes mcp list` found one selected intake tool, but the first `hermes mcp test` reported that the MCP Python SDK was absent. The installer now requests `[slack,mcp]` and has a regression assertion for both extras.
 
 ## Decision Log
 
@@ -188,3 +191,5 @@ Revision note: 2026-08-23 core package milestone recorded after 21 tests and Ruf
 Revision note: 2026-08-24 deployment milestone recorded after 25 tests, shell syntax checks, a successful application check of the pinned Hermes patch, and inspection of the secret-free release archive; documented the Slack timestamp integration gap and bounded patch.
 
 Revision note: 2026-08-24 target installer corrected after live pre-activation evidence exposed relocated venv shebangs; regression count increased to 26.
+
+Revision note: 2026-08-24 Hermes install corrected after the live MCP connection test showed that upstream separates Slack and MCP extras; regression count increased to 27.

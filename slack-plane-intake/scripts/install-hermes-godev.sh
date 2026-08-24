@@ -58,7 +58,7 @@ fi
 if [[ ! -x "$release_dir/.venv/bin/python" ]]; then
   python3 -m venv "$release_dir/.venv"
 fi
-"$release_dir/.venv/bin/pip" install -e "$release_dir[slack]"
+"$release_dir/.venv/bin/pip" install -e "$release_dir[slack,mcp]"
 "$release_dir/.venv/bin/python" -m py_compile "$release_dir/gateway/run.py"
 
 link_tmp=/home/cslog/.hermes-agent-link
