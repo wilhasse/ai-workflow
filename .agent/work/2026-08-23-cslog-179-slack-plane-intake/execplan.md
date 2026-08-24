@@ -15,7 +15,7 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
 - [x] (2026-08-23 23:41Z) Locked the product decisions and inspected Plane issue `CSLOG-179`, the repository, Hermes on `10.1.0.9`, current upstream Hermes, and the target host `10.1.0.7`.
 - [x] (2026-08-23 23:41Z) Verified live CLIProxyAPI model catalog and image capability: `kimi-k3`, `qwen3.8-max`, and `gpt-5.6-terra` accepted images; `deepseek/deepseek-v4-pro` rejected image input.
 - [x] (2026-08-23 23:41Z) Created this work item on isolated branch `cslog-179-slack-plane-intake`, based on `origin/main`, preserving two unrelated local `main` commits.
-- [x] (2026-08-24 00:08Z) Implemented the `slack-plane-intake` package, Plane project provisioner, deployment scripts/templates, pinned Hermes integration patch, operator documentation, and contract suite (`25 passed`, Ruff clean, shell syntax clean, release archive inspected).
+- [x] (2026-08-24 00:14Z) Implemented the `slack-plane-intake` package, Plane project provisioner, deployment scripts/templates, pinned Hermes integration patch, operator documentation, and contract suite (`26 passed`, Ruff clean, shell syntax clean, release archive inspected).
 - [ ] Create and verify Plane project `Problem Intake` with identifier `PROB`.
 - [ ] Install a pinned fresh Hermes checkout and intake package on `10.1.0.7`, transferring only required secrets from `10.1.0.9`.
 - [ ] Configure and start the restricted Slack gateway, then complete live text, image, duplicate, authorization, and failure-path acceptance checks.
@@ -37,6 +37,9 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
 
 - Observation: pinned Hermes carries the Slack triggering timestamp as trusted event metadata for replies and threading but, unlike Discord message IDs, does not expose it in the current model turn.
   Evidence: `plugins/platforms/slack/adapter.py` sets `MessageEvent.message_id=ts`, while `gateway/run.py` only injected `event.message_id` into model content for `Platform.DISCORD`. Without a bounded integration patch, the model could not supply the exact timestamp required by the restricted MCP contract.
+
+- Observation: a Python virtual environment cannot be relocated after console scripts are generated because their shebangs retain the absolute creation path.
+  Evidence: the first target release passed its tests in the staging directory, but `slack-plane-intake-provision` failed after the release directory was moved. The installer now moves source first, creates the venv at its final path, and has a regression test enforcing that order.
 
 ## Decision Log
 
@@ -183,3 +186,5 @@ Revision note: 2026-08-23 initial ExecPlan created from the user-approved CSLOG-
 Revision note: 2026-08-23 core package milestone recorded after 21 tests and Ruff checks passed; documented MCP 2.0 compatibility and removal of the redundant Slack bot-ID setting.
 
 Revision note: 2026-08-24 deployment milestone recorded after 25 tests, shell syntax checks, a successful application check of the pinned Hermes patch, and inspection of the secret-free release archive; documented the Slack timestamp integration gap and bounded patch.
+
+Revision note: 2026-08-24 target installer corrected after live pre-activation evidence exposed relocated venv shebangs; regression count increased to 26.

@@ -21,3 +21,11 @@ def test_hermes_patch_exposes_only_transport_message_id():
     assert "Platform.SLACK" in patch
     assert "SLACK_BOT_TOKEN" not in patch
     assert "raw_message" not in patch
+
+
+def test_target_installer_builds_venv_at_final_path():
+    installer = (ROOT / "scripts/install-release-target.sh").read_text()
+    move = installer.index('mv -- "$staging_dir" "$release_dir"')
+    venv = installer.index('python3 -m venv "$release_dir/venv"')
+    assert move < venv
+    assert 'python3 -m venv "$staging_dir/venv"' not in installer
