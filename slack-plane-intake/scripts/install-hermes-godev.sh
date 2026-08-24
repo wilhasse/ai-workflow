@@ -23,20 +23,25 @@ release_dir="$install_root/releases/$short_commit"
 incoming_dir="$install_root/incoming"
 remote_patch="$incoming_dir/hermes-slack-trigger-message-id.patch"
 remote_shortcut_patch="$incoming_dir/hermes-slack-problem-intake-shortcut.patch"
+remote_shortcut_users_patch="$incoming_dir/hermes-slack-shortcut-multi-user.patch"
 
 ssh "$host" 'command -v git >/dev/null && command -v python3 >/dev/null && test "$(id -un)" = cslog'
 ssh "$host" "install -d -m 0700 '$incoming_dir' '$install_root/releases'"
 scp -q -- "$script_dir/../patches/hermes-slack-trigger-message-id.patch" "$host:$remote_patch"
 scp -q -- "$script_dir/../patches/hermes-slack-problem-intake-shortcut.patch" \
   "$host:$remote_shortcut_patch"
+scp -q -- "$script_dir/../patches/hermes-slack-shortcut-multi-user.patch" \
+  "$host:$remote_shortcut_users_patch"
 
 ssh "$host" bash -s -- \
-  "$commit" "$release_dir" "$remote_patch" "$remote_shortcut_patch" <<'REMOTE'
+  "$commit" "$release_dir" "$remote_patch" "$remote_shortcut_patch" \
+  "$remote_shortcut_users_patch" <<'REMOTE'
 set -euo pipefail
 commit=$1
 release_dir=$2
 patch_file=$3
 shortcut_patch_file=$4
+shortcut_users_patch_file=$5
 
 if [[ ! -d "$release_dir/.git" ]]; then
   if [[ -e "$release_dir" ]]; then
@@ -63,6 +68,12 @@ if git -C "$release_dir" apply --check "$shortcut_patch_file" 2>/dev/null; then
   git -C "$release_dir" apply "$shortcut_patch_file"
 elif ! git -C "$release_dir" apply --reverse --check "$shortcut_patch_file" 2>/dev/null; then
   echo "Hermes shortcut patch is neither applicable nor already applied" >&2
+  exit 1
+fi
+if git -C "$release_dir" apply --check "$shortcut_users_patch_file" 2>/dev/null; then
+  git -C "$release_dir" apply "$shortcut_users_patch_file"
+elif ! git -C "$release_dir" apply --reverse --check "$shortcut_users_patch_file" 2>/dev/null; then
+  echo "Hermes shortcut user patch is neither applicable nor already applied" >&2
   exit 1
 fi
 

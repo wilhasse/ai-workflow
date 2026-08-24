@@ -148,7 +148,11 @@ For channel alerts, add an **On messages** shortcut to that same app:
 
 The patched Hermes adapter registers the callback on its existing Socket Mode
 connection, acknowledges it immediately, authorizes the invoking user against
-`SPI_SLACK_ALLOWED_USERS`, and invokes the intake CLI without an LLM turn. Its
+`SPI_SLACK_SHORTCUT_ALLOWED_USERS`, and invokes the intake CLI without an LLM
+turn. This shortcut-only allowlist may contain multiple Slack member IDs; keep
+`SPI_SLACK_ALLOWED_USERS` restricted to the single Hermes DM owner. If the
+shortcut variable is absent, it defaults to that DM owner for backward
+compatibility. Its
 progress and result are sent ephemerally through Slack's response URL, with the
 invoking user's Hermes DM as a private fallback. A monitoring bot is allowed to
 be the selected message's author; it is the human shortcut invocation that

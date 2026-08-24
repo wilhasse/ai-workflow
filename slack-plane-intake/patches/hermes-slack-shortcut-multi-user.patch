@@ -1,0 +1,13 @@
+diff --git a/plugins/platforms/slack/problem_intake_shortcut.py b/plugins/platforms/slack/problem_intake_shortcut.py
+--- a/plugins/platforms/slack/problem_intake_shortcut.py
++++ b/plugins/platforms/slack/problem_intake_shortcut.py
+@@ -28,6 +28,8 @@
+ def _allowed_users() -> set[str]:
++    configured = os.environ.get("SPI_SLACK_SHORTCUT_ALLOWED_USERS", "").strip()
++    raw = configured or os.environ.get("SPI_SLACK_ALLOWED_USERS", "")
+     return {
+         value.strip()
+-        for value in os.environ.get("SPI_SLACK_ALLOWED_USERS", "").split(",")
++        for value in raw.split(",")
+         if value.strip()
+     }

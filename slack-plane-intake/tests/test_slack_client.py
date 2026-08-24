@@ -12,7 +12,12 @@ from slack_plane_intake.slack_client import SlackClient
 def slack_client(tmp_path, limits):
     http = httpx.AsyncClient(base_url="https://slack.com/api/")
     return SlackClient(
-        SlackConfig("xoxb-secret", "DINTAKE", frozenset({"U1"})),
+        SlackConfig(
+            "xoxb-secret",
+            "DINTAKE",
+            frozenset({"U1"}),
+            frozenset({"U1", "U2"}),
+        ),
         limits,
         tmp_path,
         client=http,
@@ -185,6 +190,33 @@ async def test_message_shortcut_authorizes_invoker_and_accepts_bot_alert(
     assert "CONEXÃO RESTAURADA" in message.text
     assert "Base: GERAL" in message.text
     assert message.permalink == "https://slack.test/alert"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_message_shortcut_allows_user_without_granting_dm_intake(
+    tmp_path, limits
+):
+    ts = "1724440000.123456"
+    respx.get("https://slack.com/api/auth.test").mock(
+        return_value=httpx.Response(200, json={"ok": True, "team_id": "T1"})
+    )
+    respx.get("https://slack.com/api/chat.getPermalink").mock(
+        return_value=httpx.Response(
+            200, json={"ok": True, "permalink": "https://slack.test/alert"}
+        )
+    )
+
+    client = slack_client(tmp_path, limits)
+    message = await client.fetch_shortcut_source_message(
+        team_id="T1",
+        channel_id="CALERTS",
+        invoking_user_id="U2",
+        message_payload={"ts": ts, "bot_id": "BALERT", "text": "database alert"},
+    )
+    await client.close()
+
+    assert message.source_key == f"slack:T1:CALERTS:{ts}"
 
 
 @respx.mock

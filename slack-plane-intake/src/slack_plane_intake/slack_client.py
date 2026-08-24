@@ -168,7 +168,7 @@ class SlackClient:
         message may have been posted by a monitoring bot, so its author is
         recorded as provenance but is not used as the authorization principal.
         """
-        if invoking_user_id not in self.config.allowed_users:
+        if invoking_user_id not in self.config.shortcut_allowed_users:
             raise SourceValidationError(
                 "Slack user is not allowed to create problem tickets"
             )
