@@ -19,7 +19,8 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
 - [x] (2026-08-24 00:14Z) Created and idempotently reverified Plane project `Problem Intake` with identifier `PROB` and its Backlog state.
 - [x] (2026-08-24 00:19Z) Installed the intake release and pinned Hermes `0.20.5` checkout on `10.1.0.7`, applied the bounded timestamp patch, transferred only Slack/Plane secrets plus the selected allowlist from `10.1.0.9`, and proved a K3 one-shot plus the one-tool MCP handshake.
 - [x] (2026-08-24 01:31Z) Reworked source validation, Hermes policy, activation, tests, and documentation to bind intake to the existing one-to-one Hermes DM for the sole allowed user (`34 passed`, Ruff clean, shell syntax clean, release archive inspected).
-- [ ] (blocked 2026-08-24 01:32Z) Configure and start the restricted Slack gateway, then complete live text, image, duplicate, authorization, and failure-path acceptance checks. Remaining prerequisite: add `files:read` to the existing Hermes Slack app and reinstall it; the guarded activation currently exits 1 without binding the DM or starting the unit.
+- [x] (2026-08-24 02:20Z) Verified the reinstalled app now grants `files:read`, resolved and bound the fixed Hermes DM, deployed release `2026-08-24T02-19-47Z`, installed persistent systemd hardening, and started the restricted gateway with one live Socket Mode connection (`35 passed` on target).
+- [ ] (blocked 2026-08-24 02:20Z) Complete live text, image, duplicate, authorization, and failure-path acceptance checks. The gateway is ready; the next success-path event must be a new top-level DM authored by the allowed human user because bot-authored or replayed historical messages are intentionally rejected.
 - [ ] Record final evidence, commit only CSLOG-179 files, and mark the work item complete.
 
 ## Surprises & Discoveries
@@ -56,6 +57,9 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
 
 - Observation: `conversations.info` for a direct message would require the existing app to add `im:read`, although the app already resolves the correct conversation with `conversations.open` and can read its history and permalinks.
   Evidence: a content-free live probe returned the existing `D...` ID from `conversations.open`; `conversations.history` and `chat.getPermalink` succeeded, while `conversations.info` could not supply metadata under the current scopes. Activation and runtime therefore re-resolve the sole allowed user through `conversations.open` and require an exact configured-ID match, avoiding an unnecessary scope.
+
+- Observation: Hermes refreshes its generated base user-service unit during gateway startup.
+  Evidence: the first successful activation log reported an automatic unit refresh, and `systemctl --user cat` showed that base-unit-only `EnvironmentFile`, `UMask`, `NoNewPrivileges`, and `PrivateTmp` directives had been replaced. The deployment now installs those controls in `hermes-gateway.service.d/10-cslog-179-hardening.conf`; after restart, systemd reports `UMask=0077`, `PrivateTmp=yes`, `NoNewPrivileges=yes`, and the protected environment file while Hermes retains its generated base unit.
 
 ## Decision Log
 
@@ -97,7 +101,7 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
 
 ## Outcomes & Retrospective
 
-The local implementation, secret-free deployment artifact, dedicated CLIProxyAPI key, Plane project, intake release, pinned Hermes build, restricted config/skill/unit, model route, and one-tool MCP handshake are complete. The DM-capable release is deployed on `10.1.0.7`; the existing one-to-one conversation resolves to a stable `D...` ID, and content-free probes prove history and permalink access. The intake does not use `#cslog` or a new channel. The unit is deliberately `disabled` and `inactive`. Live Slack activation and acceptance remain externally blocked only on adding `files:read` and reinstalling the existing app. No live Slack-to-Plane ticket has been claimed as proof yet.
+The local implementation, secret-free deployment artifact, dedicated CLIProxyAPI key, Plane project, pinned Hermes build, restricted config/skill/tool surface, model route, and one-tool MCP handshake are complete. DM-capable release `2026-08-24T02-19-47Z` is deployed on `10.1.0.7`; the existing one-to-one conversation is bound, history/permalink/file scopes pass, persistent systemd hardening is effective, and the gateway is enabled and active with one Socket Mode connection. The intake does not use `#cslog` or a new channel. Completion now waits only for a new human-authored DM and the remaining live acceptance events; no live Slack-to-Plane ticket has been claimed as proof yet.
 
 ## Context and Orientation
 
@@ -189,7 +193,7 @@ Pre-implementation runtime evidence captured on 2026-08-23:
 
 Deployment evidence captured on 2026-08-24:
 
-    intake release: 2026-08-24T01-31-28Z (34 target tests at deployment)
+    intake release: 2026-08-24T02-19-47Z (35 target tests at deployment)
     Hermes: 0.20.5 at d861fbe55073dbd9e295eaf2c1fd16c8af54f7da
     Hermes patch: applied and reverse-checkable
     Hermes primary one-shot: HERMES_READY through kimi-k3
@@ -200,8 +204,10 @@ Deployment evidence captured on 2026-08-24:
     Plane project: 97145582-1d9d-416c-8ae3-1a059eb13cbd
     Plane Backlog state: 3f508a61-1716-4ac2-8da6-a6737c571916
     Slack DM: resolved for sole allowed user; history/permalink access=success
-    activation guard: refused only missing files:read; no DM binding saved
-    service: disabled, inactive pending Slack administration
+    Slack scopes: files:read, im:history, im:write=granted
+    activation guard: passed; fixed DM binding saved
+    systemd hardening: UMask=0077, PrivateTmp=yes, NoNewPrivileges=yes
+    service: enabled, active; Socket Mode connections=1
 
 Do not copy any credential values, signed Plane storage URLs, policies, or signatures into this document. Append concise test counts, deployed commit identifiers, service status, created project UUID, and live issue keys here as implementation evidence, but continue to redact secrets.
 
@@ -244,3 +250,5 @@ Revision note: 2026-08-24 refreshed the deployed release after the final configu
 Revision note: 2026-08-24 replaced the abandoned dedicated-channel activation with a fixed one-to-one Hermes DM selected from the sole allowed user, removed the redundant mention requirement, and expanded the regression suite to 34 tests following the user's privacy choice. A live minimal-scope probe then removed the unnecessary `conversations.info` dependency.
 
 Revision note: 2026-08-24 deployed DM release `2026-08-24T01-31-28Z`, recorded successful conversation resolution/history/permalink evidence, and marked the work item blocked after the guarded activation proved `files:read` is the sole remaining Slack-administration prerequisite.
+
+Revision note: 2026-08-24 resumed after the user reinstalled the app, passed the scope guard, activated the gateway, and moved persistent hardening into a systemd drop-in after live startup showed Hermes refreshes its base unit. Release `2026-08-24T02-19-47Z` passes 35 target tests; live ticket acceptance now waits for a new human-authored DM.

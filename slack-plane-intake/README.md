@@ -98,11 +98,19 @@ loading secrets through `~/.hermes/.env`:
 install -m 0600 deploy/hermes-config.example.yaml ~/.hermes/config.yaml
 install -m 0644 deploy/hermes-gateway.service \
   ~/.config/systemd/user/hermes-gateway.service
+install -d -m 0700 ~/.config/systemd/user/hermes-gateway.service.d
+install -m 0644 deploy/hermes-gateway-hardening.conf \
+  ~/.config/systemd/user/hermes-gateway.service.d/10-cslog-179-hardening.conf
 install -d -m 0700 ~/.hermes/skills/problem-intake
 install -m 0644 deploy/problem-intake/SKILL.md \
   ~/.hermes/skills/problem-intake/SKILL.md
 systemctl --user daemon-reload
 ```
+
+Hermes may refresh its generated base unit when it starts. The separate
+`10-cslog-179-hardening.conf` systemd drop-in persists the protected environment,
+private temporary directory, restrictive umask, and privilege restriction across
+those refreshes.
 
 Before starting the service, add the Slack bot scope `files:read` and reinstall
 the existing Hermes app. The guarded activation command resolves the existing

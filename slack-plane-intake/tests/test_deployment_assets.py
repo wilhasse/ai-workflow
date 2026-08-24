@@ -51,4 +51,15 @@ def test_activation_is_guarded_by_slack_and_single_owner_checks():
     assert "conversations.info" not in target
     assert "conversations.join" not in target
     assert "--channel-id" not in local
+    assert "hermes-gateway-hardening.conf" in local
+    assert "10-cslog-179-hardening.conf" in local
     assert "systemctl --user restart hermes-gateway.service" in local
+
+
+def test_gateway_hardening_is_a_persistent_systemd_dropin():
+    dropin = (ROOT / "deploy/hermes-gateway-hardening.conf").read_text()
+    assert dropin.startswith("[Service]\n")
+    assert "EnvironmentFile=/home/cslog/.hermes/.env" in dropin
+    assert "UMask=0077" in dropin
+    assert "NoNewPrivileges=true" in dropin
+    assert "PrivateTmp=true" in dropin
