@@ -21,7 +21,8 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
 - [x] (2026-08-24 01:31Z) Reworked source validation, Hermes policy, activation, tests, and documentation to bind intake to the existing one-to-one Hermes DM for the sole allowed user (`34 passed`, Ruff clean, shell syntax clean, release archive inspected).
 - [x] (2026-08-24 02:20Z) Verified the reinstalled app now grants `files:read`, resolved and bound the fixed Hermes DM, deployed release `2026-08-24T02-19-47Z`, installed persistent systemd hardening, and started the restricted gateway with one live Socket Mode connection (`35 passed` on target).
 - [x] (2026-08-24 02:27Z) Completed the first live authorized text-DM path: Hermes created `PROB-1` through `kimi-k3`; Plane retained the original alert and source IP, and the ledger recorded one completed attempt.
-- [ ] Complete live screenshot, authorization, thread, and failure-path acceptance checks, and prove a replay of the first event returns `PROB-1` without increasing the Plane item count.
+- [x] (2026-08-24 02:38Z) Deployed release `2026-08-24T02-36-22Z`, bound Hermes' home target to the same private DM, repaired `PROB-1` with its durable provenance ID, and proved replay returns `existing / PROB-1` while Plane stays at one item and the ledger stays at one attempt.
+- [ ] (blocked 2026-08-24 02:39Z) Complete live screenshot, authorization, thread, and failure-path acceptance checks. The next evidence requires a human-authored Slack event; begin with one harmless screenshot attached to a new top-level DM.
 - [ ] Record final evidence, commit only CSLOG-179 files, and mark the work item complete.
 
 ## Surprises & Discoveries
@@ -62,8 +63,8 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
 - Observation: Hermes refreshes its generated base user-service unit during gateway startup.
   Evidence: the first successful activation log reported an automatic unit refresh, and `systemctl --user cat` showed that base-unit-only `EnvironmentFile`, `UMask`, `NoNewPrivileges`, and `PrivateTmp` directives had been replaced. The deployment now installs those controls in `hermes-gateway.service.d/10-cslog-179-hardening.conf`; after restart, systemd reports `UMask=0077`, `PrivateTmp=yes`, `NoNewPrivileges=yes`, and the protected environment file while Hermes retains its generated base unit.
 
-- Observation: the first live DM succeeded after Hermes emitted a non-fatal `No home channel` onboarding message, but Hermes then restated `11` prior failures as `1` in its own prose.
-  Evidence: Slack showed both messages, while the ledger and Plane proved `PROB-1` was created once and the original Plane evidence retained `Falhas consecutivas anteriores: 11`. Activation now binds Hermes' home target to the same private DM, and the skill forbids restating source fields or changing numeric values.
+- Observation: the first live DM succeeded after Hermes emitted a non-fatal `No home channel` onboarding message. The pasted Slack transcript visually concatenated the source value `1` with the UI label `1 resposta`, making it appear as `11`; Hermes had not changed the value.
+  Evidence: an exact Slack API refetch returned `Falhas consecutivas anteriores: 1`, and Plane retained the same line. Activation now binds Hermes' home target to the same private DM to suppress repeated onboarding notices. The skill also avoids redundant model-written restatements and renders only the fixed tool result plus verbatim tool warnings.
 
 - Observation: Plane sanitizes HTML comments from saved work-item descriptions, so the initially hidden source marker did not survive in `PROB-1`.
   Evidence: a live GET found the original alert and source metadata but not the comment marker. The marker is now a validated visible provenance ID (`spi-source:<sha256>`) with a reconciliation regression test.
@@ -108,7 +109,7 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
 
 ## Outcomes & Retrospective
 
-The local implementation, secret-free deployment artifact, dedicated CLIProxyAPI key, Plane project, pinned Hermes build, restricted config/skill/tool surface, model route, and one-tool MCP handshake are complete. DM-capable release `2026-08-24T02-19-47Z` is deployed on `10.1.0.7`; the existing one-to-one conversation is bound, history/permalink/file scopes pass, persistent systemd hardening is effective, and the gateway is enabled and active with one Socket Mode connection. The intake does not use `#cslog` or a new channel. The first authorized text DM created `PROB-1` through K3 and preserved the original evidence. Follow-up hardening for the private home target, exact reply rendering, and Plane-visible provenance is locally verified with `38 passed`; deployment, duplicate proof, screenshot upload, and negative live scenarios remain.
+The local implementation, secret-free deployment artifact, dedicated CLIProxyAPI key, Plane project, pinned Hermes build, restricted config/skill/tool surface, model route, and one-tool MCP handshake are complete. Release `2026-08-24T02-36-22Z` is deployed on `10.1.0.7`; the existing one-to-one conversation is both the intake and home target, history/permalink/file scopes pass, persistent systemd hardening is effective, and the gateway is enabled and active with one Socket Mode connection. The intake does not use `#cslog` or a new channel. The first authorized text DM created `PROB-1` through K3 and preserved the exact original evidence. Its provenance ID now survives Plane sanitization, and direct replay returned the existing key with Plane count `1 -> 1` and ledger attempt count `1`. The target release passed `38` tests. Screenshot upload and negative live scenarios remain.
 
 ## Context and Orientation
 
@@ -200,7 +201,7 @@ Pre-implementation runtime evidence captured on 2026-08-23:
 
 Deployment evidence captured on 2026-08-24:
 
-    intake release: 2026-08-24T02-19-47Z (35 target tests at deployment)
+    intake release: 2026-08-24T02-36-22Z (38 target tests at deployment)
     Hermes: 0.20.5 at d861fbe55073dbd9e295eaf2c1fd16c8af54f7da
     Hermes patch: applied and reverse-checkable
     Hermes primary one-shot: HERMES_READY through kimi-k3
@@ -215,6 +216,9 @@ Deployment evidence captured on 2026-08-24:
     activation guard: passed; fixed DM binding saved
     systemd hardening: UMask=0077, PrivateTmp=yes, NoNewPrivileges=yes
     service: enabled, active; Socket Mode connections=1
+    first text DM: PROB-1, partial, model=kimi-k3, attachments=0
+    provenance repair: visible marker retained after Plane PATCH
+    exact replay: existing PROB-1; Plane count 1 -> 1; ledger attempts=1
 
 Do not copy any credential values, signed Plane storage URLs, policies, or signatures into this document. Append concise test counts, deployed commit identifiers, service status, created project UUID, and live issue keys here as implementation evidence, but continue to redact secrets.
 
@@ -245,6 +249,8 @@ Revision note: 2026-08-24 target installer corrected after live pre-activation e
 Revision note: 2026-08-24 Hermes install corrected after the live MCP connection test showed that upstream separates Slack and MCP extras; regression count increased to 27.
 
 Revision note: 2026-08-24 pre-activation doctor evidence changed the ledger from WAL to rollback journaling; recorded Plane/Hermes/MCP evidence and the external Slack channel/scope blocker; regression count increased to 28.
+
+Revision note: 2026-08-24 first live text intake created `PROB-1`; follow-up release bound the home target to the same DM, made the provenance ID Plane-visible, constrained acknowledgements to tool output, and proved exact-event idempotence with 38 target tests.
 
 Revision note: 2026-08-24 removed the provider-incompatible zero-temperature override after live K3 evidence; retained the 28-test count with a stronger request-contract assertion.
 
