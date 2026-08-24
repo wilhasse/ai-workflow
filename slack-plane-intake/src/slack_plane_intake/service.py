@@ -112,7 +112,7 @@ class ProblemIntakeService:
     @staticmethod
     def source_marker(source_key: str) -> str:
         digest = hashlib.sha256(source_key.encode("utf-8")).hexdigest()
-        return f"<!-- spi-source:{digest} -->"
+        return f"spi-source:{digest}"
 
     @staticmethod
     def _existing_result(work_item: PlaneWorkItem) -> IntakeResult:

@@ -52,6 +52,7 @@ def test_activation_resolves_and_saves_one_to_one_dm(
     saved = activation_module.read_env(env_path)
     assert saved["SPI_SLACK_CHANNEL_ID"] == "D12345"
     assert saved["SLACK_ALLOWED_CHANNELS"] == "D12345"
+    assert saved["SLACK_HOME_CHANNEL"] == "D12345"
     assert calls == [
         ("auth.test", {}),
         ("conversations.open", {"users": "U12345"}),

@@ -115,11 +115,13 @@ def main(argv: list[str] | None = None) -> int:
         env_path,
         {
             "SLACK_ALLOWED_CHANNELS": channel_id,
+            "SLACK_HOME_CHANNEL": channel_id,
             "SPI_SLACK_CHANNEL_ID": channel_id,
         },
     )
     print("slack_intake_mode=direct_message")
     print("slack_dm_channel_id=" + channel_id)
+    print("slack_home_channel_bound=true")
     print("allowed_user_count=1")
     print("files_read_scope=true")
     print("dm_history_scope=true")

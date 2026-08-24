@@ -30,7 +30,7 @@ Visual analysis falls back through `kimi-k3`, `qwen3.8-max`, then
 `gpt-5.6-terra`. If all analysis models fail, the service still creates a
 clearly marked partial ticket containing the raw evidence and warnings.
 
-The source key `slack:<team>:<channel>:<message_ts>` and a hidden Plane marker
+The source key `slack:<team>:<channel>:<message_ts>` and a visible, immutable Plane provenance ID
 make repeated delivery idempotent. Runtime state is stored under
 `~/.local/state/slack-plane-intake` by default. The SQLite ledger uses
 full-synchronous rollback journaling because the current target host's SQLite
@@ -121,6 +121,11 @@ validates config and MCP discovery, and only then starts the service:
 ```bash
 scripts/activate-godev.sh
 ```
+
+Activation also sets `SLACK_HOME_CHANNEL` to this same one-to-one DM. This keeps
+Hermes system notices private to the existing conversation and suppresses its
+repeated "No home channel" onboarding message; it does not add another channel
+or make the DM visible to other workspace members.
 
 Afterward, inspect `systemctl --user is-active hermes-gateway.service` and
 `journalctl --user -u hermes-gateway.service -n 100 --no-pager` before live

@@ -31,6 +31,9 @@ def analysis():
     )
 
 
+SOURCE_MARKER = "spi-source:" + "a" * 64
+
+
 @respx.mock
 @pytest.mark.asyncio
 async def test_create_problem_escapes_evidence_and_builds_key(source_message):
@@ -41,14 +44,42 @@ async def test_create_problem_escapes_evidence_and_builds_key(source_message):
     item = await client.create_problem(
         source_message.model_copy(update={"text": "<script>alert(1)</script>"}),
         analysis(),
-        "<!-- spi-source:abc -->",
+        SOURCE_MARKER,
     )
     await client.close()
     body = route.calls[0].request.content.decode()
     assert "<script>" not in body
     assert "&lt;script&gt;" in body
+    assert SOURCE_MARKER in body
+    assert "Workspace Slack" in body
+    assert "<!-- spi-source:" not in body
     assert item.key == "PROB-7"
     assert item.url.endswith("/ws/browse/PROB-7")
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_reconciliation_finds_visible_source_marker():
+    base = "https://plane.test/api/v1/workspaces/ws/projects/P1/work-items/"
+    respx.get(base).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "id": "I7",
+                        "sequence_id": 7,
+                        "description_html": (f"<p><code>{SOURCE_MARKER}</code></p>"),
+                    }
+                ]
+            },
+        )
+    )
+    client = PlaneClient(plane_config())
+    item = await client.find_by_source_marker(SOURCE_MARKER)
+    await client.close()
+    assert item is not None
+    assert item.key == "PROB-7"
 
 
 @respx.mock

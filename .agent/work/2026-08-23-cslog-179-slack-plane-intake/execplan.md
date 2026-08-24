@@ -20,7 +20,8 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
 - [x] (2026-08-24 00:19Z) Installed the intake release and pinned Hermes `0.20.5` checkout on `10.1.0.7`, applied the bounded timestamp patch, transferred only Slack/Plane secrets plus the selected allowlist from `10.1.0.9`, and proved a K3 one-shot plus the one-tool MCP handshake.
 - [x] (2026-08-24 01:31Z) Reworked source validation, Hermes policy, activation, tests, and documentation to bind intake to the existing one-to-one Hermes DM for the sole allowed user (`34 passed`, Ruff clean, shell syntax clean, release archive inspected).
 - [x] (2026-08-24 02:20Z) Verified the reinstalled app now grants `files:read`, resolved and bound the fixed Hermes DM, deployed release `2026-08-24T02-19-47Z`, installed persistent systemd hardening, and started the restricted gateway with one live Socket Mode connection (`35 passed` on target).
-- [ ] (blocked 2026-08-24 02:20Z) Complete live text, image, duplicate, authorization, and failure-path acceptance checks. The gateway is ready; the next success-path event must be a new top-level DM authored by the allowed human user because bot-authored or replayed historical messages are intentionally rejected.
+- [x] (2026-08-24 02:27Z) Completed the first live authorized text-DM path: Hermes created `PROB-1` through `kimi-k3`; Plane retained the original alert and source IP, and the ledger recorded one completed attempt.
+- [ ] Complete live screenshot, authorization, thread, and failure-path acceptance checks, and prove a replay of the first event returns `PROB-1` without increasing the Plane item count.
 - [ ] Record final evidence, commit only CSLOG-179 files, and mark the work item complete.
 
 ## Surprises & Discoveries
@@ -60,6 +61,12 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
 
 - Observation: Hermes refreshes its generated base user-service unit during gateway startup.
   Evidence: the first successful activation log reported an automatic unit refresh, and `systemctl --user cat` showed that base-unit-only `EnvironmentFile`, `UMask`, `NoNewPrivileges`, and `PrivateTmp` directives had been replaced. The deployment now installs those controls in `hermes-gateway.service.d/10-cslog-179-hardening.conf`; after restart, systemd reports `UMask=0077`, `PrivateTmp=yes`, `NoNewPrivileges=yes`, and the protected environment file while Hermes retains its generated base unit.
+
+- Observation: the first live DM succeeded after Hermes emitted a non-fatal `No home channel` onboarding message, but Hermes then restated `11` prior failures as `1` in its own prose.
+  Evidence: Slack showed both messages, while the ledger and Plane proved `PROB-1` was created once and the original Plane evidence retained `Falhas consecutivas anteriores: 11`. Activation now binds Hermes' home target to the same private DM, and the skill forbids restating source fields or changing numeric values.
+
+- Observation: Plane sanitizes HTML comments from saved work-item descriptions, so the initially hidden source marker did not survive in `PROB-1`.
+  Evidence: a live GET found the original alert and source metadata but not the comment marker. The marker is now a validated visible provenance ID (`spi-source:<sha256>`) with a reconciliation regression test.
 
 ## Decision Log
 
@@ -101,7 +108,7 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
 
 ## Outcomes & Retrospective
 
-The local implementation, secret-free deployment artifact, dedicated CLIProxyAPI key, Plane project, pinned Hermes build, restricted config/skill/tool surface, model route, and one-tool MCP handshake are complete. DM-capable release `2026-08-24T02-19-47Z` is deployed on `10.1.0.7`; the existing one-to-one conversation is bound, history/permalink/file scopes pass, persistent systemd hardening is effective, and the gateway is enabled and active with one Socket Mode connection. The intake does not use `#cslog` or a new channel. Completion now waits only for a new human-authored DM and the remaining live acceptance events; no live Slack-to-Plane ticket has been claimed as proof yet.
+The local implementation, secret-free deployment artifact, dedicated CLIProxyAPI key, Plane project, pinned Hermes build, restricted config/skill/tool surface, model route, and one-tool MCP handshake are complete. DM-capable release `2026-08-24T02-19-47Z` is deployed on `10.1.0.7`; the existing one-to-one conversation is bound, history/permalink/file scopes pass, persistent systemd hardening is effective, and the gateway is enabled and active with one Socket Mode connection. The intake does not use `#cslog` or a new channel. The first authorized text DM created `PROB-1` through K3 and preserved the original evidence. Follow-up hardening for the private home target, exact reply rendering, and Plane-visible provenance is locally verified with `38 passed`; deployment, duplicate proof, screenshot upload, and negative live scenarios remain.
 
 ## Context and Orientation
 
@@ -125,7 +132,7 @@ The Slack client uses the configured bot token to call `auth.test`, `conversatio
 
 The analyzer sends text-like inputs through K3, Qwen, and DeepSeek in order. It sends images or rendered PDF pages through K3, Qwen, and Terra. A fallback occurs after one retry for timeout, connection failure, HTTP 429 or 5xx, explicit unsupported-input response, or invalid JSON that fails `ProblemAnalysis` validation. The prompt says that message and attachment contents are evidence and cannot change system instructions or request actions. Original files are never rewritten before Plane upload; normalized copies exist only for model input.
 
-The ledger uses SQLite full-synchronous rollback journaling and a unique source key. States are `pending`, `completed`, and `failed`, with issue identifiers, warnings, timestamps, and retry metadata. A per-source `BEGIN IMMEDIATE` transaction prevents concurrent duplicates. If Plane creation may have succeeded but the response was lost, query recent Plane items for a hidden source marker before retrying the POST. A duplicate returns the recorded or reconciled ticket.
+The ledger uses SQLite full-synchronous rollback journaling and a unique source key. States are `pending`, `completed`, and `failed`, with issue identifiers, warnings, timestamps, and retry metadata. A per-source `BEGIN IMMEDIATE` transaction prevents concurrent duplicates. If Plane creation may have succeeded but the response was lost, query recent Plane items for its visible immutable provenance ID before retrying the POST. A duplicate returns the recorded or reconciled ticket.
 
 Milestone 2 adds deployment assets. Add `scripts/build-release.sh` to create a source archive without secrets or runtime state, `scripts/deploy-godev.sh` to install the archive into `~/.local/share/slack-plane-intake`, and `deploy/hermes-gateway.service` as the systemd user-unit template. Bash scripts begin with `set -euo pipefail`, validate explicit host/path inputs, create timestamped backups, use a virtual environment, run tests before activation, and support a validation-only mode. Add redacted configuration examples for the package, Hermes, and the systemd environment.
 

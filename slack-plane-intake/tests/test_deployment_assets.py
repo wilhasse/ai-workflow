@@ -54,6 +54,15 @@ def test_activation_is_guarded_by_slack_and_single_owner_checks():
     assert "hermes-gateway-hardening.conf" in local
     assert "10-cslog-179-hardening.conf" in local
     assert "systemctl --user restart hermes-gateway.service" in local
+    assert '"SLACK_HOME_CHANNEL": channel_id' in target
+    assert "deploy/problem-intake/SKILL.md" in local
+
+
+def test_problem_intake_reply_does_not_restate_source_fields():
+    skill = (ROOT / "deploy/problem-intake/SKILL.md").read_text()
+    assert "Do not summarize or restate fields" in skill
+    assert "warnings verbatim" in skill
+    assert "alter numeric values" in skill
 
 
 def test_gateway_hardening_is_a_persistent_systemd_dropin():

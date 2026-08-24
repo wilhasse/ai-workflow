@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import re
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -278,11 +279,12 @@ class PlaneClient:
             + "</li>"
             for attachment in message.attachments
         )
-        safe_marker = source_marker if source_marker.startswith("<!--") else ""
+        if not re.fullmatch(r"spi-source:[0-9a-f]{64}", source_marker):
+            raise ValueError("invalid source marker")
+        safe_marker = html.escape(source_marker)
         model = analysis.model_used or "unavailable"
         return "".join(
             [
-                safe_marker,
                 "<h2>Resumo</h2><p>",
                 html.escape(analysis.summary),
                 "</p>",
@@ -294,11 +296,13 @@ class PlaneClient:
                 "</pre>",
                 "<h2>Proveniência</h2><ul>",
                 f'<li>Fonte: <a href="{html.escape(message.permalink, quote=True)}">Slack</a></li>',
+                f"<li>Workspace Slack: {html.escape(message.team_id)}</li>",
                 f"<li>Canal: {html.escape(message.channel_id)}</li>",
                 f"<li>Autor: {html.escape(message.author_name)} ({html.escape(message.author_id)})</li>",
                 f"<li>Data UTC: {html.escape(message.posted_at.isoformat())}</li>",
                 f"<li>Modelo: {html.escape(model)}</li>",
                 f"<li>Tipo de análise: {html.escape(analysis.analysis_kind)}</li>",
+                f"<li>ID de origem: <code>{safe_marker}</code></li>",
                 "</ul>",
                 "<h2>Anexos originais</h2><ul>",
                 attachment_rows,

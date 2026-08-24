@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -37,6 +38,12 @@ def service(tmp_path, source_message):
     plane.upload_originals.return_value = UploadReport()
     ledger = IntakeLedger(tmp_path / "ledger.sqlite3")
     return ProblemIntakeService(slack, analyzer, plane, ledger), analyzer, plane
+
+
+def test_source_marker_is_plane_visible_and_stable():
+    marker = ProblemIntakeService.source_marker("slack:T1:D1:1.2")
+    assert re.fullmatch(r"spi-source:[0-9a-f]{64}", marker)
+    assert marker == ProblemIntakeService.source_marker("slack:T1:D1:1.2")
 
 
 @pytest.mark.asyncio
