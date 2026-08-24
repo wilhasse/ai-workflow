@@ -19,7 +19,7 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
 - [x] (2026-08-24 00:14Z) Created and idempotently reverified Plane project `Problem Intake` with identifier `PROB` and its Backlog state.
 - [x] (2026-08-24 00:19Z) Installed the intake release and pinned Hermes `0.20.5` checkout on `10.1.0.7`, applied the bounded timestamp patch, transferred only Slack/Plane secrets plus the selected allowlist from `10.1.0.9`, and proved a K3 one-shot plus the one-tool MCP handshake.
 - [x] (2026-08-24 01:31Z) Reworked source validation, Hermes policy, activation, tests, and documentation to bind intake to the existing one-to-one Hermes DM for the sole allowed user (`34 passed`, Ruff clean, shell syntax clean, release archive inspected).
-- [ ] Configure and start the restricted Slack gateway, then complete live text, image, duplicate, authorization, and failure-path acceptance checks.
+- [ ] (blocked 2026-08-24 01:32Z) Configure and start the restricted Slack gateway, then complete live text, image, duplicate, authorization, and failure-path acceptance checks. Remaining prerequisite: add `files:read` to the existing Hermes Slack app and reinstall it; the guarded activation currently exits 1 without binding the DM or starting the unit.
 - [ ] Record final evidence, commit only CSLOG-179 files, and mark the work item complete.
 
 ## Surprises & Discoveries
@@ -97,7 +97,7 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
 
 ## Outcomes & Retrospective
 
-The local implementation, secret-free deployment artifact, dedicated CLIProxyAPI key, Plane project, intake release, pinned Hermes build, restricted config/skill/unit, model route, and one-tool MCP handshake are complete. The intake is now designed for the existing one-to-one Hermes DM, not `#cslog` or a new channel. The unit is deliberately `disabled` and `inactive`. Live Slack activation and acceptance remain externally blocked only on adding `files:read` and reinstalling the existing app. No live Slack-to-Plane ticket has been claimed as proof yet.
+The local implementation, secret-free deployment artifact, dedicated CLIProxyAPI key, Plane project, intake release, pinned Hermes build, restricted config/skill/unit, model route, and one-tool MCP handshake are complete. The DM-capable release is deployed on `10.1.0.7`; the existing one-to-one conversation resolves to a stable `D...` ID, and content-free probes prove history and permalink access. The intake does not use `#cslog` or a new channel. The unit is deliberately `disabled` and `inactive`. Live Slack activation and acceptance remain externally blocked only on adding `files:read` and reinstalling the existing app. No live Slack-to-Plane ticket has been claimed as proof yet.
 
 ## Context and Orientation
 
@@ -189,7 +189,7 @@ Pre-implementation runtime evidence captured on 2026-08-23:
 
 Deployment evidence captured on 2026-08-24:
 
-    intake release: 2026-08-24T00-31-13Z (30 target tests at deployment)
+    intake release: 2026-08-24T01-31-28Z (34 target tests at deployment)
     Hermes: 0.20.5 at d861fbe55073dbd9e295eaf2c1fd16c8af54f7da
     Hermes patch: applied and reverse-checkable
     Hermes primary one-shot: HERMES_READY through kimi-k3
@@ -199,13 +199,15 @@ Deployment evidence captured on 2026-08-24:
                    Terra vision third=success
     Plane project: 97145582-1d9d-416c-8ae3-1a059eb13cbd
     Plane Backlog state: 3f508a61-1716-4ac2-8da6-a6737c571916
+    Slack DM: resolved for sole allowed user; history/permalink access=success
+    activation guard: refused only missing files:read; no DM binding saved
     service: disabled, inactive pending Slack administration
 
 Do not copy any credential values, signed Plane storage URLs, policies, or signatures into this document. Append concise test counts, deployed commit identifiers, service status, created project UUID, and live issue keys here as implementation evidence, but continue to redact secrets.
 
 ## Interfaces and Dependencies
 
-`slack_plane_intake.config.load_config()` returns an immutable `AppConfig` containing Slack, CLIProxyAPI, Plane, limits, paths, and model chains. Required environment names use the `SPI_` prefix: `SPI_SLACK_BOT_TOKEN`, `SPI_SLACK_CHANNEL_ID`, `SPI_SLACK_ALLOWED_USERS`, `SPI_CLIPROXY_BASE_URL`, `SPI_CLIPROXY_API_KEY`, `SPI_TEXT_MODELS`, `SPI_VISION_MODELS`, `SPI_PLANE_BASE_URL`, `SPI_PLANE_API_KEY`, `SPI_PLANE_WORKSPACE`, `SPI_PLANE_PROJECT_ID`, `SPI_PLANE_STATE_ID`, `SPI_STATE_DB`, and `SPI_WORK_DIR`. The bot ID is intentionally discovered through Slack `auth.test` and is not a configuration value.
+`slack_plane_intake.config.load_config()` returns an immutable `AppConfig` containing Slack, CLIProxyAPI, Plane, limits, paths, and model chains. Required environment names use the `SPI_` prefix: `SPI_SLACK_BOT_TOKEN`, `SPI_SLACK_CHANNEL_ID`, `SPI_SLACK_ALLOWED_USERS`, `SPI_CLIPROXY_BASE_URL`, `SPI_CLIPROXY_API_KEY`, `SPI_TEXT_MODELS`, `SPI_VISION_MODELS`, `SPI_PLANE_BASE_URL`, `SPI_PLANE_API_KEY`, `SPI_PLANE_WORKSPACE`, `SPI_PLANE_PROJECT_ID`, `SPI_PLANE_STATE_ID`, `SPI_STATE_DB`, and `SPI_WORK_DIR`. DM intake requires exactly one allowed human user ID; a bot user ID is not configured or derived because mentions are irrelevant in a one-to-one DM.
 
 `SlackClient.fetch_source_message(message_ts: str) -> SourceMessage` hides Slack authentication, fixed one-to-one DM validation, exact-message lookup, allowlists, permalink retrieval, downloads, safety limits, and hashing.
 
@@ -240,3 +242,5 @@ Revision note: 2026-08-24 made standalone intake validation reuse Hermes' standa
 Revision note: 2026-08-24 refreshed the deployed release after the final configuration polish, confirmed all 30 tests on the target, and checked the work-item and attachment sequence against Plane's current API contract.
 
 Revision note: 2026-08-24 replaced the abandoned dedicated-channel activation with a fixed one-to-one Hermes DM selected from the sole allowed user, removed the redundant mention requirement, and expanded the regression suite to 34 tests following the user's privacy choice. A live minimal-scope probe then removed the unnecessary `conversations.info` dependency.
+
+Revision note: 2026-08-24 deployed DM release `2026-08-24T01-31-28Z`, recorded successful conversation resolution/history/permalink evidence, and marked the work item blocked after the guarded activation proved `files:read` is the sole remaining Slack-administration prerequisite.
