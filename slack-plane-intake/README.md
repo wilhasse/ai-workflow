@@ -30,8 +30,8 @@ Visual analysis falls back through `kimi-k3`, `qwen3.8-max`, then
 `gpt-5.6-terra`. If all analysis models fail, the service still creates a
 clearly marked partial ticket containing the raw evidence and warnings.
 
-The source key `slack:<team>:<channel>:<message_ts>` and a visible, immutable Plane provenance ID
-make repeated delivery idempotent. Runtime state is stored under
+The source key `slack:<team>:<channel>:<message_ts>` and a visible, immutable
+Plane provenance ID make repeated delivery idempotent. Runtime state is stored under
 `~/.local/state/slack-plane-intake` by default. The SQLite ledger uses
 full-synchronous rollback journaling because the current target host's SQLite
 version is affected by an upstream WAL-reset defect.
@@ -63,15 +63,18 @@ prints tokens or API keys.
 ## Plane provisioning
 
 The project helper is idempotent. With `SPI_PLANE_API_KEY`,
-`SPI_PLANE_BASE_URL`, and `SPI_PLANE_WORKSPACE` loaded, run:
+`SPI_PLANE_BASE_URL`, `SPI_PLANE_WORKSPACE`, `SPI_PLANE_PROJECT_NAME`, and
+`SPI_PLANE_PROJECT_IDENTIFIER` loaded, run:
 
 ```bash
 .venv/bin/slack-plane-intake-provision plane-project
 ```
 
-It finds or creates `Problem Intake` with identifier `PROB`, finds its Backlog
-state, and prints only the resulting IDs. Put `project_id` and `state_id` into
-`SPI_PLANE_PROJECT_ID` and `SPI_PLANE_STATE_ID` before activating Hermes.
+It finds or creates `AGENTE` with identifier `AGENTE` in the `cslog` workspace
+at `https://plane.cslog.com.br`, finds its Backlog state, and prints only the
+resulting IDs. Put `project_id` and `state_id` into `SPI_PLANE_PROJECT_ID` and
+`SPI_PLANE_STATE_ID` before activating Hermes. Existing ledger entries retain
+their historical ticket URLs; only new Slack messages use the new project.
 
 ## Deployment to godev
 

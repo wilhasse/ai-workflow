@@ -27,8 +27,8 @@ def ensure_plane_project(
     base_url: str,
     api_key: str,
     workspace: str,
-    name: str = "Problem Intake",
-    identifier: str = "PROB",
+    name: str = "AGENTE",
+    identifier: str = "AGENTE",
     client: httpx.Client | None = None,
 ) -> dict[str, str]:
     owns_client = client is None
@@ -106,11 +106,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         result = ensure_plane_project(
-            base_url=os.environ.get(
-                "SPI_PLANE_BASE_URL", "https://plane.supersaber.dev.br"
-            ),
+            base_url=os.environ.get("SPI_PLANE_BASE_URL", "https://plane.cslog.com.br"),
             api_key=os.environ["SPI_PLANE_API_KEY"],
-            workspace=os.environ.get("SPI_PLANE_WORKSPACE", "supersaber"),
+            workspace=os.environ.get("SPI_PLANE_WORKSPACE", "cslog"),
+            name=os.environ.get("SPI_PLANE_PROJECT_NAME", "AGENTE"),
+            identifier=os.environ.get("SPI_PLANE_PROJECT_IDENTIFIER", "AGENTE"),
         )
     except (ConfigurationError, ExternalServiceError) as exc:
         print(f"provisioning error: {exc}", file=sys.stderr)
