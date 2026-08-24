@@ -1,0 +1,24 @@
+[Unit]
+Description=Plane AGENTE to Codex automation worker
+After=network-online.target codex-control-service.service
+Wants=network-online.target codex-control-service.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/ai-workflow/plane-codex-worker
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PCW_PLANE_PROJECT_ID=688b0196-af21-49f0-83eb-7b849a9145a8
+Environment=PCW_PLANE_PROJECT_IDENTIFIER=AGENTE
+Environment=PCW_CODEX_SOCKET=%h/ai-workflow/runtime/codex-control/control.sock
+Environment=PCW_CODEX_CWD=%h
+Environment=PCW_AGENT_BOARD_URL=https://10.1.0.10/?view=agent-board
+ExecStart=%h/ai-workflow/plane-codex-worker/.venv/bin/plane-codex-worker run
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+UMask=0077
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target
