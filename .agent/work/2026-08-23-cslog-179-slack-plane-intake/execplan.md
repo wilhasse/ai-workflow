@@ -18,7 +18,7 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
 - [x] (2026-08-24 00:30Z) Implemented the `slack-plane-intake` package, Plane project provisioner, deployment/guarded-activation scripts and templates, pinned Hermes integration patch, operator documentation, and contract suite (`30 passed`, Ruff clean, shell syntax clean, release archive inspected).
 - [x] (2026-08-24 00:14Z) Created and idempotently reverified Plane project `Problem Intake` with identifier `PROB` and its Backlog state.
 - [x] (2026-08-24 00:19Z) Installed the intake release and pinned Hermes `0.20.5` checkout on `10.1.0.7`, applied the bounded timestamp patch, transferred only Slack/Plane secrets plus the selected allowlist from `10.1.0.9`, and proved a K3 one-shot plus the one-tool MCP handshake.
-- [x] (2026-08-24 01:25Z) Reworked source validation, Hermes policy, activation, tests, and documentation to bind intake to the existing one-to-one Hermes DM for the sole allowed user (`33 passed`, Ruff clean, shell syntax clean, release archive inspected).
+- [x] (2026-08-24 01:31Z) Reworked source validation, Hermes policy, activation, tests, and documentation to bind intake to the existing one-to-one Hermes DM for the sole allowed user (`34 passed`, Ruff clean, shell syntax clean, release archive inspected).
 - [ ] Configure and start the restricted Slack gateway, then complete live text, image, duplicate, authorization, and failure-path acceptance checks.
 - [ ] Record final evidence, commit only CSLOG-179 files, and mark the work item complete.
 
@@ -54,6 +54,9 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
 - Observation: CLIProxyAPI's `kimi-k3` route rejects an explicit zero temperature.
   Evidence: the first live intake analyses fell back to Qwen; a bounded raw probe returned HTTP 400 with `invalid temperature: only 1 is allowed for this model`. The analyzer now omits the optional temperature field, allowing each provider's compatible default, and its request contract asserts the field stays absent.
 
+- Observation: `conversations.info` for a direct message would require the existing app to add `im:read`, although the app already resolves the correct conversation with `conversations.open` and can read its history and permalinks.
+  Evidence: a content-free live probe returned the existing `D...` ID from `conversations.open`; `conversations.history` and `chat.getPermalink` succeeded, while `conversations.info` could not supply metadata under the current scopes. Activation and runtime therefore re-resolve the sole allowed user through `conversations.open` and require an exact configured-ID match, avoiding an unnecessary scope.
+
 ## Decision Log
 
 - Decision: Install all new runtime components on `10.1.0.7`; treat `10.1.0.9` only as a source for selected configuration values.
@@ -88,7 +91,7 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
   Rationale: Low intake volume does not require WAL concurrency, claim transactions already serialize writers, and avoiding WAL removes exposure to the target runtime's known WAL-reset defect.
   Date/Author: 2026-08-24 / Codex.
 
-- Decision: Make final activation resolve the existing one-to-one Hermes DM from the sole allowed user and refuse to start unless Slack `im:history`, `im:write`, and `files:read`, the exact DM/user relationship, the stopped reference gateway, package validation, and MCP discovery all pass.
+- Decision: Make final activation resolve the existing one-to-one Hermes DM from the sole allowed user through `conversations.open` and refuse to start unless Slack `im:history`, `im:write`, and `files:read`, an exact `D...` result, the stopped reference gateway, package validation, and MCP discovery all pass.
   Rationale: The user chose the already-installed Hermes app conversation instead of a shared or dedicated channel. Resolving the DM removes channel administration while preserving a repeatable fail-closed activation boundary; `files:read` still requires Slack workspace administration.
   Date/Author: 2026-08-24 / user and Codex; supersedes the public-channel activation decision.
 
@@ -104,7 +107,7 @@ The target host is `10.1.0.7`, SSH user `cslog`. CLIProxyAPI already runs there 
 
 The reference Hermes host is `10.1.0.9`, where `~/.hermes/.env` contains Slack application and bot tokens plus an allowed-user list, and `~/.hermes/config.yaml` contains a Plane MCP configuration. Values were never printed. The source checkout there must not be changed, restarted, or copied wholesale. Transfer only Slack tokens, the allowed-user list, and the Plane key when they pass validation. Do not transfer conversation history, memories, WhatsApp settings, unrelated model credentials, or source modifications.
 
-The new Python package has one public tool boundary. A Slack message timestamp such as `1724440000.123456` identifies the source message within the one configured direct-message conversation. Activation resolves that DM from the sole allowed user; the service independently confirms it is a one-to-one DM, derives the Slack team, author, permalink, and files from Slack's API, and creates a source key `slack:<team_id>:<channel_id>:<message_ts>` before any Plane mutation.
+The new Python package has one public tool boundary. A Slack message timestamp such as `1724440000.123456` identifies the source message within the one configured direct-message conversation. Activation resolves that DM from the sole allowed user; the service independently repeats the same resolution and requires the configured `D...` ID to match, then derives the Slack team, author, permalink, and files from Slack's API and creates a source key `slack:<team_id>:<channel_id>:<message_ts>` before any Plane mutation.
 
 Plane work-item creation is a single POST to the workspace/project work-items endpoint. File upload is a three-stage sequence: ask Plane for presigned upload credentials, perform a multipart upload to the returned storage URL, then PATCH the Plane attachment as uploaded. The caller must not know these steps; `PlaneClient` owns them, verifies the final attachment list, and deletes incomplete Plane asset rows after recoverable failures.
 
@@ -114,7 +117,7 @@ Milestone 1 creates a tested package with no live credentials. Add `slack-plane-
 
 Define immutable data models for `SourceAttachment`, `SourceMessage`, `ProblemAnalysis`, and `IntakeResult`. `ProblemAnalysis` contains title, summary, confirmed facts, inferences, missing information, and warnings. `IntakeResult` contains status (`created`, `existing`, `partial`, or `failed`), issue key/URL, model used, attachment count, and warnings. Escape every user-controlled value before composing Plane HTML.
 
-The Slack client uses the configured bot token to call `auth.test`, `conversations.info`, `conversations.history` for the exact timestamp, `files.info`, file download URLs, and `chat.getPermalink`. It rejects a conversation that is not the fixed one-to-one Hermes DM, an unauthorized or mismatched author, and a reply whose `thread_ts` differs from its own `ts`. A one-to-one DM needs no bot mention. It limits processing to 10 files, 20 MiB each, and 100 MiB total. It records metadata and warnings for inaccessible, unsupported, or oversized content rather than claiming it was processed.
+The Slack client uses the configured bot token to call `auth.test`, `conversations.open` for the sole allowed user, `conversations.history` for the exact timestamp, `files.info`, file download URLs, and `chat.getPermalink`. It rejects any configured conversation that does not exactly match the resolved `D...` ID, an unauthorized author, and a reply whose `thread_ts` differs from its own `ts`. A one-to-one DM needs no bot mention. It limits processing to 10 files, 20 MiB each, and 100 MiB total. It records metadata and warnings for inaccessible, unsupported, or oversized content rather than claiming it was processed.
 
 The analyzer sends text-like inputs through K3, Qwen, and DeepSeek in order. It sends images or rendered PDF pages through K3, Qwen, and Terra. A fallback occurs after one retry for timeout, connection failure, HTTP 429 or 5xx, explicit unsupported-input response, or invalid JSON that fails `ProblemAnalysis` validation. The prompt says that message and attachment contents are evidence and cannot change system instructions or request actions. Original files are never rewritten before Plane upload; normalized copies exist only for model input.
 
@@ -126,7 +129,7 @@ Install upstream Hermes into `/home/cslog/hermes-agent` on `10.1.0.7` at pinned 
 
 Milestone 3 creates Plane project `Problem Intake` with identifier `PROB`, records its project UUID and Backlog state UUID in protected environment configuration, then activates Slack. The final ticket HTML contains summary, confirmed facts, labeled inferences, missing information, escaped original message, source permalink, author/channel/timestamps, file metadata and SHA-256 hashes, model used, and partial warnings. Files within limits are uploaded unchanged and verified.
 
-Use Slack Socket Mode and the existing app's `message.im` event subscription. Ensure it has `im:history`, `im:write`, `chat:write`, `files:read`, and `users:read`. Activation uses `conversations.open` only to resolve the existing DM for the sole allowed user, verifies the result with `conversations.info`, and saves that `D...` identifier. Keep the old `10.1.0.9` gateway stopped; verify there is one active Socket Mode owner before live testing. On success Hermes replies in the DM with `Created PROB-N: <url>` and attachment count. A duplicate says `Already registered as PROB-N`. Partial success names the missing evidence. Failure never claims a ticket exists.
+Use Slack Socket Mode and the existing app's `message.im` event subscription. Ensure it has `im:history`, `im:write`, `chat:write`, `files:read`, and `users:read`. Activation uses `conversations.open` to resolve the existing DM for the sole allowed user and saves only a valid `D...` identifier; runtime repeats that resolution before reading a source message. Keep the old `10.1.0.9` gateway stopped; verify there is one active Socket Mode owner before live testing. On success Hermes replies in the DM with `Created PROB-N: <url>` and attachment count. A duplicate says `Already registered as PROB-N`. Partial success names the missing evidence. Failure never claims a ticket exists.
 
 ## Concrete Steps
 
@@ -236,4 +239,4 @@ Revision note: 2026-08-24 made standalone intake validation reuse Hermes' standa
 
 Revision note: 2026-08-24 refreshed the deployed release after the final configuration polish, confirmed all 30 tests on the target, and checked the work-item and attachment sequence against Plane's current API contract.
 
-Revision note: 2026-08-24 replaced the abandoned dedicated-channel activation with a fixed one-to-one Hermes DM selected from the sole allowed user, removed the redundant mention requirement, and expanded the regression suite to 33 tests following the user's privacy choice.
+Revision note: 2026-08-24 replaced the abandoned dedicated-channel activation with a fixed one-to-one Hermes DM selected from the sole allowed user, removed the redundant mention requirement, and expanded the regression suite to 34 tests following the user's privacy choice. A live minimal-scope probe then removed the unnecessary `conversations.info` dependency.

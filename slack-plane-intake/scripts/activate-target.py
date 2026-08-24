@@ -111,22 +111,6 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    info, _ = slack_call(token, "conversations.info", {"channel": channel_id})
-    channel = info.get("channel") or {}
-    if not info.get("ok") or not channel.get("is_im") or channel.get("is_mpim"):
-        print(
-            "activation error: resolved conversation is not a one-to-one Slack DM",
-            file=sys.stderr,
-        )
-        return 1
-    conversation_user = str(channel.get("user", ""))
-    if conversation_user and conversation_user != allowed_user:
-        print(
-            "activation error: Slack DM user does not match the allowlist",
-            file=sys.stderr,
-        )
-        return 1
-
     update_env(
         env_path,
         {

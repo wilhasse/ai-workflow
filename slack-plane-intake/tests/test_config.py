@@ -40,6 +40,12 @@ def test_standard_hermes_slack_token_is_an_accepted_alias(required_env):
     assert load_config(required_env).slack.bot_token == token
 
 
+def test_dm_intake_requires_exactly_one_allowed_user(required_env):
+    required_env["SPI_SLACK_ALLOWED_USERS"] = "U1,U2"
+    with pytest.raises(ConfigurationError, match="exactly one"):
+        load_config(required_env)
+
+
 def test_rejects_credentials_embedded_in_base_url(required_env):
     required_env["SPI_PLANE_BASE_URL"] = "https://user:pass@plane.example"
     with pytest.raises(ConfigurationError, match="must not contain credentials"):

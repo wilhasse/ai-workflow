@@ -45,11 +45,6 @@ def test_activation_resolves_and_saves_one_to_one_dm(
             return {"ok": True}, "files:read,im:history,im:write"
         if method == "conversations.open":
             return {"ok": True, "channel": {"id": "D12345"}}, ""
-        if method == "conversations.info":
-            return {
-                "ok": True,
-                "channel": {"id": "D12345", "is_im": True, "user": "U12345"},
-            }, ""
         raise AssertionError(method)
 
     monkeypatch.setattr(activation_module, "slack_call", slack_call)
@@ -60,7 +55,6 @@ def test_activation_resolves_and_saves_one_to_one_dm(
     assert calls == [
         ("auth.test", {}),
         ("conversations.open", {"users": "U12345"}),
-        ("conversations.info", {"channel": "D12345"}),
     ]
 
 

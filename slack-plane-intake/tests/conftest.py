@@ -13,7 +13,7 @@ def required_env(tmp_path):
     return {
         "SPI_SLACK_BOT_TOKEN": "xoxb-test-secret",
         "SPI_SLACK_CHANNEL_ID": "DINTAKE",
-        "SPI_SLACK_ALLOWED_USERS": "U1,U2",
+        "SPI_SLACK_ALLOWED_USERS": "U1",
         "SPI_CLIPROXY_API_KEY": "model-secret",
         "SPI_PLANE_API_KEY": "plane-secret",
         "SPI_PLANE_PROJECT_ID": "project-uuid",

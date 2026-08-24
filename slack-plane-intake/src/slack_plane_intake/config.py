@@ -130,8 +130,10 @@ def load_config(environ: Mapping[str, str] | None = None) -> AppConfig:
         )
 
     allowed_users = frozenset(_csv(allowed_users_raw))
-    if not allowed_users:
-        raise ConfigurationError("SPI_SLACK_ALLOWED_USERS must contain at least one ID")
+    if len(allowed_users) != 1:
+        raise ConfigurationError(
+            "SPI_SLACK_ALLOWED_USERS must contain exactly one Slack user ID for DM intake"
+        )
 
     text_models = _csv(
         env.get(

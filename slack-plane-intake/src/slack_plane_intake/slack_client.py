@@ -42,9 +42,14 @@ class SlackClient:
         if self._owns_client:
             await self.client.aclose()
 
-    async def _api(self, method: str, **params: str) -> dict:
+    async def _api(
+        self, method: str, *, request_method: str = "GET", **params: str
+    ) -> dict:
         try:
-            response = await self.client.get(method, params=params)
+            if request_method == "POST":
+                response = await self.client.post(method, data=params)
+            else:
+                response = await self.client.get(method, params=params)
             response.raise_for_status()
             payload = response.json()
         except (httpx.HTTPError, ValueError) as exc:
@@ -65,17 +70,21 @@ class SlackClient:
         if not team_id:
             raise ExternalServiceError("Slack auth.test did not return a team ID")
 
-        conversation = (
-            await self._api("conversations.info", channel=self.config.channel_id)
-        ).get("channel", {})
-        if not conversation.get("is_im") or conversation.get("is_mpim"):
-            raise SourceValidationError(
-                "Configured Slack intake conversation is not a one-to-one Hermes DM"
+        allowed_user = next(iter(self.config.allowed_users))
+        resolved_dm = (
+            await self._api(
+                "conversations.open",
+                request_method="POST",
+                users=allowed_user,
             )
-        dm_user_id = str(conversation.get("user", ""))
-        if dm_user_id and dm_user_id not in self.config.allowed_users:
+        ).get("channel", {})
+        resolved_channel_id = str(resolved_dm.get("id", ""))
+        if (
+            not re.fullmatch(r"D[A-Z0-9]+", resolved_channel_id)
+            or resolved_channel_id != self.config.channel_id
+        ):
             raise SourceValidationError(
-                "Configured Slack DM user is not allowed to create problem tickets"
+                "Configured Slack intake conversation does not match the authorized Hermes DM"
             )
 
         history = await self._api(
@@ -103,10 +112,6 @@ class SlackClient:
         if author_id not in self.config.allowed_users:
             raise SourceValidationError(
                 "Slack author is not allowed to create problem tickets"
-            )
-        if dm_user_id and author_id != dm_user_id:
-            raise SourceValidationError(
-                "Slack message author does not match the configured DM user"
             )
         if message.get("subtype") or message.get("bot_id"):
             raise SourceValidationError(

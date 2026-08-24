@@ -48,7 +48,7 @@ def test_activation_is_guarded_by_slack_and_single_owner_checks():
     assert "mcp test slack-plane-intake" in local
     assert "files:read" in target
     assert "conversations.open" in target
-    assert 'channel.get("is_im")' in target
+    assert "conversations.info" not in target
     assert "conversations.join" not in target
     assert "--channel-id" not in local
     assert "systemctl --user restart hermes-gateway.service" in local

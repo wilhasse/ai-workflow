@@ -25,13 +25,10 @@ def mock_common(message):
             200, json={"ok": True, "team_id": "T1", "user_id": "UBOT"}
         )
     )
-    respx.get("https://slack.com/api/conversations.info").mock(
+    respx.post("https://slack.com/api/conversations.open").mock(
         return_value=httpx.Response(
             200,
-            json={
-                "ok": True,
-                "channel": {"id": "DINTAKE", "is_im": True, "user": "U1"},
-            },
+            json={"ok": True, "channel": {"id": "DINTAKE"}},
         )
     )
     respx.get("https://slack.com/api/conversations.history").mock(
@@ -133,15 +130,13 @@ async def test_accepts_dm_without_bot_mention(tmp_path, limits):
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_rejects_non_dm_configured_conversation(tmp_path, limits):
+async def test_rejects_non_matching_configured_conversation(tmp_path, limits):
     ts = "1724440000.123456"
     mock_common({"ts": ts, "user": "U1", "text": "problem"})
-    respx.get("https://slack.com/api/conversations.info").mock(
-        return_value=httpx.Response(
-            200, json={"ok": True, "channel": {"id": "CGENERAL"}}
-        )
+    respx.post("https://slack.com/api/conversations.open").mock(
+        return_value=httpx.Response(200, json={"ok": True, "channel": {"id": "DOTHER"}})
     )
     client = slack_client(tmp_path, limits)
-    with pytest.raises(SourceValidationError, match="not a one-to-one Hermes DM"):
+    with pytest.raises(SourceValidationError, match="does not match"):
         await client.fetch_source_message(ts)
     await client.close()
