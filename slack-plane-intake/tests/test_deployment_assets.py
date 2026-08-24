@@ -16,6 +16,9 @@ def test_examples_are_redacted_and_restricted():
     assert "whatsapp" not in config_example.lower()
     assert "disable_dms: false" in config_example
     assert "D_REDACTED" in env_example
+    assert "SPI_PLANE_BASE_URL=https://plane.cslog.com.br" in env_example
+    assert "SPI_PLANE_WORKSPACE=cslog" in env_example
+    assert "SPI_PLANE_PROJECT_IDENTIFIER=AGENTE" in env_example
     assert config_example.startswith("_config_version: 38\n")
 
 
@@ -63,6 +66,8 @@ def test_problem_intake_reply_does_not_restate_source_fields():
     assert "Do not summarize or restate fields" in skill
     assert "warnings verbatim" in skill
     assert "alter numeric values" in skill
+    assert "PROB-N" not in skill
+    assert "issue_key" in skill
 
 
 def test_gateway_hardening_is_a_persistent_systemd_dropin():

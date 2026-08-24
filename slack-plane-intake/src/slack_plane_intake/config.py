@@ -180,12 +180,14 @@ def load_config(environ: Mapping[str, str] | None = None) -> AppConfig:
         plane=PlaneConfig(
             base_url=_safe_base_url(
                 "SPI_PLANE_BASE_URL",
-                env.get("SPI_PLANE_BASE_URL", "https://plane.supersaber.dev.br"),
+                env.get("SPI_PLANE_BASE_URL", "https://plane.cslog.com.br"),
             ),
             api_key=plane_key,
-            workspace=env.get("SPI_PLANE_WORKSPACE", "supersaber").strip(),
+            workspace=env.get("SPI_PLANE_WORKSPACE", "cslog").strip(),
             project_id=plane_project,
-            project_identifier=env.get("SPI_PLANE_PROJECT_IDENTIFIER", "PROB").strip(),
+            project_identifier=env.get(
+                "SPI_PLANE_PROJECT_IDENTIFIER", "AGENTE"
+            ).strip(),
             state_id=plane_state,
         ),
         limits=LimitConfig(

@@ -27,6 +27,9 @@ def test_load_config_uses_decided_model_routes(required_env):
         "qwen3.8-max",
         "gpt-5.6-terra",
     )
+    assert config.plane.base_url == "https://plane.cslog.com.br"
+    assert config.plane.workspace == "cslog"
+    assert config.plane.project_identifier == "AGENTE"
     summary = config.redacted_summary()
     rendered = repr(summary)
     assert "model-secret" not in rendered

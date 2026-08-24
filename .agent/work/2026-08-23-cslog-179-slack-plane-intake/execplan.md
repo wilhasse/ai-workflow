@@ -24,6 +24,9 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
 - [x] (2026-08-24 02:38Z) Deployed release `2026-08-24T02-36-22Z`, bound Hermes' home target to the same private DM, repaired `PROB-1` with its durable provenance ID, and proved replay returns `existing / PROB-1` while Plane stays at one item and the ledger stays at one attempt.
 - [x] (2026-08-24 03:21Z) Accepted the current production scope at the user's direction after the live text path, exact-event idempotence, local/target test suites, and active hardened runtime passed. Human-authored screenshot and negative Slack scenarios are deferred operational checks and are not claimed as passed.
 - [x] (2026-08-24 03:21Z) Recorded final evidence, limited the publication history to CSLOG-179, and marked the work item complete for production handoff.
+- [x] (2026-08-24 11:01Z) Created idempotent Plane project `AGENTE` with identifier `AGENTE` in workspace `cslog` at `https://plane.cslog.com.br`, using the existing protected Codex Plane MCP credential; discovered and validated its Backlog state.
+- [x] (2026-08-24 11:02Z) Deployed release `2026-08-24T10-59-00Z`, atomically changed the protected target configuration, installed the identifier-neutral Hermes acknowledgement skill, and restarted the guarded gateway. Both local and target suites pass `38` tests, the service is active with hardening effective, and the AGENTE work-item endpoint is authenticated and empty.
+- [ ] (blocked 2026-08-24 11:02Z) Send one new human-authored top-level Slack DM after the cutover and verify it creates `AGENTE-1`. Historical completed ledger entries `PROB-1` and `PROB-2` remain intentionally bound to their original URLs and must not be replayed as new AGENTE tickets.
 
 ## Surprises & Discoveries
 
@@ -69,6 +72,9 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
 - Observation: Plane sanitizes HTML comments from saved work-item descriptions, so the initially hidden source marker did not survive in `PROB-1`.
   Evidence: a live GET found the original alert and source metadata but not the comment marker. The marker is now a validated visible provenance ID (`spi-source:<sha256>`) with a reconciliation regression test.
 
+- Observation: after creating `AGENTE`, the Plane project-detail endpoint returned it immediately while the first-page project listing used by the initial cutover guard did not contain it.
+  Evidence: two guarded configuration attempts restored the old `.env` and left Hermes on `plane.supersaber.dev.br`; direct GET of project `688b0196-af21-49f0-83eb-7b849a9145a8` returned HTTP 200 with name and identifier `AGENTE`. The corrected guard validates the exact project-detail and state endpoints before activation.
+
 ## Decision Log
 
 - Decision: Install all new runtime components on `10.1.0.7`; treat `10.1.0.9` only as a source for selected configuration values.
@@ -111,9 +117,15 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
   Rationale: The user declared the running release production and requested main-branch publication. This records the evidence boundary accurately without presenting deferred scenarios as successful.
   Date/Author: 2026-08-24 / user and Codex.
 
+- Decision: Route all new intake tickets to project and identifier `AGENTE` in workspace `cslog` at `https://plane.cslog.com.br`, using the API credential already protected in the local Codex Plane MCP configuration.
+  Rationale: The user selected the replacement Plane deployment and project. The SQLite ledger remains unchanged so completed `PROB-1` and `PROB-2` deliveries stay idempotent and preserve their historical links; only new source keys use AGENTE.
+  Date/Author: 2026-08-24 / user and Codex.
+
 ## Outcomes & Retrospective
 
 The implementation is complete for the production scope accepted on 2026-08-24. Release `2026-08-24T02-36-22Z` is deployed on `10.1.0.7`; the existing one-to-one conversation is both the intake and home target, history/permalink/file scopes pass, persistent systemd hardening is effective, and the gateway is enabled and active with one Socket Mode connection. The intake does not use `#cslog` or a new channel. The first authorized text DM created `PROB-1` through K3 and preserved the exact original evidence. Its provenance ID survives Plane sanitization, and direct replay returned the existing key with Plane count `1 -> 1` and ledger attempt count `1`. Both local and target release suites pass `38` tests. Human-authored screenshot upload, unauthorized-user, thread-reply, and forced live failure scenarios were deferred at production handoff; their contract paths are automated, but no live success is claimed for those deferred checks.
+
+The post-production Plane migration is configured and running in release `2026-08-24T10-59-00Z`. The AGENTE project and Backlog state exist, its API endpoints validate from both the development host and `10.1.0.7`, the target environment remains mode `0600`, and the active Hermes process has the new configuration after a guarded restart. The AGENTE project currently has zero tickets. A fresh human Slack DM is still required for terminal proof that the event-driven path creates `AGENTE-1`; this is not inferred from configuration health alone.
 
 ## Context and Orientation
 
@@ -224,6 +236,17 @@ Deployment evidence captured on 2026-08-24:
     provenance repair: visible marker retained after Plane PATCH
     exact replay: existing PROB-1; Plane count 1 -> 1; ledger attempts=1
 
+Plane migration evidence captured on 2026-08-24:
+
+    intake release: 2026-08-24T10-59-00Z (38 local and target tests)
+    Plane base/workspace: https://plane.cslog.com.br / cslog
+    Plane project: AGENTE / 688b0196-af21-49f0-83eb-7b849a9145a8
+    Plane Backlog state: ec43ec7d-5110-451b-8afe-f13f51c3661c
+    AGENTE work-item endpoint: authenticated; item count=0
+    preserved ledger: PROB-1 and PROB-2 completed, one attempt each
+    target environment: mode 0600; pre-cutover rollback backup retained
+    service: active; UMask=0077, PrivateTmp=yes, NoNewPrivileges=yes
+
 Do not copy any credential values, signed Plane storage URLs, policies, or signatures into this document. Append concise test counts, deployed commit identifiers, service status, created project UUID, and live issue keys here as implementation evidence, but continue to redact secrets.
 
 ## Interfaces and Dependencies
@@ -271,3 +294,5 @@ Revision note: 2026-08-24 deployed DM release `2026-08-24T01-31-28Z`, recorded s
 Revision note: 2026-08-24 resumed after the user reinstalled the app, passed the scope guard, activated the gateway, and moved persistent hardening into a systemd drop-in after live startup showed Hermes refreshes its base unit. Release `2026-08-24T02-19-47Z` passes 35 target tests; live ticket acceptance now waits for a new human-authored DM.
 
 Revision note: 2026-08-24 closed the work item for the user-accepted production scope after release `2026-08-24T02-36-22Z` passed 38 tests locally and on the target, the hardened service remained active, and `PROB-1` plus its duplicate proof remained the live end-to-end evidence. Deferred human Slack scenarios are preserved as explicit limitations rather than reported as passed.
+
+Revision note: 2026-08-24 migrated the production destination to `plane.cslog.com.br / cslog / AGENTE`, made provisioning defaults and Hermes replies identifier-neutral, retained completed PROB ledger rows, and recorded the guarded rollback/retry evidence. Runtime validation is complete; a new human Slack event remains the acceptance boundary for the first AGENTE ticket.
