@@ -22,8 +22,8 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
 - [x] (2026-08-24 02:20Z) Verified the reinstalled app now grants `files:read`, resolved and bound the fixed Hermes DM, deployed release `2026-08-24T02-19-47Z`, installed persistent systemd hardening, and started the restricted gateway with one live Socket Mode connection (`35 passed` on target).
 - [x] (2026-08-24 02:27Z) Completed the first live authorized text-DM path: Hermes created `PROB-1` through `kimi-k3`; Plane retained the original alert and source IP, and the ledger recorded one completed attempt.
 - [x] (2026-08-24 02:38Z) Deployed release `2026-08-24T02-36-22Z`, bound Hermes' home target to the same private DM, repaired `PROB-1` with its durable provenance ID, and proved replay returns `existing / PROB-1` while Plane stays at one item and the ledger stays at one attempt.
-- [ ] (blocked 2026-08-24 02:39Z) Complete live screenshot, authorization, thread, and failure-path acceptance checks. The next evidence requires a human-authored Slack event; begin with one harmless screenshot attached to a new top-level DM.
-- [ ] Record final evidence, commit only CSLOG-179 files, and mark the work item complete.
+- [x] (2026-08-24 03:21Z) Accepted the current production scope at the user's direction after the live text path, exact-event idempotence, local/target test suites, and active hardened runtime passed. Human-authored screenshot and negative Slack scenarios are deferred operational checks and are not claimed as passed.
+- [x] (2026-08-24 03:21Z) Recorded final evidence, limited the publication history to CSLOG-179, and marked the work item complete for production handoff.
 
 ## Surprises & Discoveries
 
@@ -107,9 +107,13 @@ Version one processes Slack only. It does not use Hermes Kanban, reaction trigge
   Rationale: The user chose the already-installed Hermes app conversation instead of a shared or dedicated channel. Resolving the DM removes channel administration while preserving a repeatable fail-closed activation boundary; `files:read` still requires Slack workspace administration.
   Date/Author: 2026-08-24 / user and Codex; supersedes the public-channel activation decision.
 
+- Decision: Publish the implementation as production after the live text and duplicate paths, 38 local and target tests, active systemd service, and effective hardening, while explicitly deferring the remaining human-authored screenshot and negative Slack scenarios.
+  Rationale: The user declared the running release production and requested main-branch publication. This records the evidence boundary accurately without presenting deferred scenarios as successful.
+  Date/Author: 2026-08-24 / user and Codex.
+
 ## Outcomes & Retrospective
 
-The local implementation, secret-free deployment artifact, dedicated CLIProxyAPI key, Plane project, pinned Hermes build, restricted config/skill/tool surface, model route, and one-tool MCP handshake are complete. Release `2026-08-24T02-36-22Z` is deployed on `10.1.0.7`; the existing one-to-one conversation is both the intake and home target, history/permalink/file scopes pass, persistent systemd hardening is effective, and the gateway is enabled and active with one Socket Mode connection. The intake does not use `#cslog` or a new channel. The first authorized text DM created `PROB-1` through K3 and preserved the exact original evidence. Its provenance ID now survives Plane sanitization, and direct replay returned the existing key with Plane count `1 -> 1` and ledger attempt count `1`. The target release passed `38` tests. Screenshot upload and negative live scenarios remain.
+The implementation is complete for the production scope accepted on 2026-08-24. Release `2026-08-24T02-36-22Z` is deployed on `10.1.0.7`; the existing one-to-one conversation is both the intake and home target, history/permalink/file scopes pass, persistent systemd hardening is effective, and the gateway is enabled and active with one Socket Mode connection. The intake does not use `#cslog` or a new channel. The first authorized text DM created `PROB-1` through K3 and preserved the exact original evidence. Its provenance ID survives Plane sanitization, and direct replay returned the existing key with Plane count `1 -> 1` and ledger attempt count `1`. Both local and target release suites pass `38` tests. Human-authored screenshot upload, unauthorized-user, thread-reply, and forced live failure scenarios were deferred at production handoff; their contract paths are automated, but no live success is claimed for those deferred checks.
 
 ## Context and Orientation
 
@@ -265,3 +269,5 @@ Revision note: 2026-08-24 replaced the abandoned dedicated-channel activation wi
 Revision note: 2026-08-24 deployed DM release `2026-08-24T01-31-28Z`, recorded successful conversation resolution/history/permalink evidence, and marked the work item blocked after the guarded activation proved `files:read` is the sole remaining Slack-administration prerequisite.
 
 Revision note: 2026-08-24 resumed after the user reinstalled the app, passed the scope guard, activated the gateway, and moved persistent hardening into a systemd drop-in after live startup showed Hermes refreshes its base unit. Release `2026-08-24T02-19-47Z` passes 35 target tests; live ticket acceptance now waits for a new human-authored DM.
+
+Revision note: 2026-08-24 closed the work item for the user-accepted production scope after release `2026-08-24T02-36-22Z` passed 38 tests locally and on the target, the hardened service remained active, and `PROB-1` plus its duplicate proof remained the live end-to-end evidence. Deferred human Slack scenarios are preserved as explicit limitations rather than reported as passed.
