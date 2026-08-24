@@ -185,7 +185,7 @@ Pre-implementation runtime evidence captured on 2026-08-23:
 
 Deployment evidence captured on 2026-08-24:
 
-    intake release: 2026-08-24T00-14-51Z (26 target tests at deployment)
+    intake release: 2026-08-24T00-31-13Z (30 target tests at deployment)
     Hermes: 0.20.5 at d861fbe55073dbd9e295eaf2c1fd16c8af54f7da
     Hermes patch: applied and reverse-checkable
     Hermes primary one-shot: HERMES_READY through kimi-k3
@@ -232,3 +232,5 @@ Revision note: 2026-08-24 removed the provider-incompatible zero-temperature ove
 Revision note: 2026-08-24 added a guarded activation workflow for the externally blocked Slack steps and recorded live primary/fallback analyzer evidence; regression count increased to 29.
 
 Revision note: 2026-08-24 made standalone intake validation reuse Hermes' standard Slack token and changed the Slack native-tool list to explicit empty so only the enabled MCP loads without an upstream false warning; regression count increased to 30.
+
+Revision note: 2026-08-24 refreshed the deployed release after the final configuration polish, confirmed all 30 tests on the target, and checked the work-item and attachment sequence against Plane's current API contract.
