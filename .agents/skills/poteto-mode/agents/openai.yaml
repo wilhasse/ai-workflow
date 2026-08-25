@@ -1,0 +1,7 @@
+interface:
+  display_name: "Poteto Mode"
+  short_description: "Rigorous, evidence-checked engineering playbooks"
+  default_prompt: "Use $poteto-mode to complete this engineering task with a matched playbook and executable verification."
+
+policy:
+  allow_implicit_invocation: true

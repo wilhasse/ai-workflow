@@ -64,6 +64,24 @@ npm test
 
 [Architecture and API →](codex-control-service/README.md)
 
+### Codex Poteto Mode
+
+The repository includes a Codex-native adaptation of pstack's rigorous engineering workflows.
+
+For repository-scoped use, clone this repository and launch Codex anywhere inside it. Codex discovers `.agents/skills/poteto-mode/` automatically. For user-wide installation, ask Codex:
+
+```text
+$skill-installer install the poteto-mode skill from https://github.com/wilhasse/ai-workflow/tree/main/.agents/skills/poteto-mode
+```
+
+Run `/skills` to confirm discovery, then invoke it explicitly:
+
+```text
+$poteto-mode investigate this failure, reproduce it, fix the root cause, and verify the real path
+```
+
+The adaptation retains the original MIT attribution and replaces Cursor-specific commands, model routing, and agent assumptions with Codex-native workflow guidance.
+
 ---
 
 ### 🔄 tmux Session Service
