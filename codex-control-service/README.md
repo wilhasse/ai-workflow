@@ -78,11 +78,13 @@ Nginx exposes a dedicated root-path WebSocket listener at
 `wss://10.1.0.10:4501`. Port `4501` is bound only to the host's `10.1.0.10`
 interface. TLS terminates at Nginx, which forwards the bearer header through a
 private compatibility proxy to the capability-token-protected app-server. The
-proxy recognizes authenticated `codex-tui` connections and removes client-local
-`runtimeWorkspaceRoots` from thread start, resume, and fork requests. This lets
-Windows clients use a Linux app-server while leaving explicit paths from other
-app-server clients untouched. The existing dashboard listeners on ports 80 and
-443 are unchanged.
+proxy recognizes authenticated `codex-tui` connections, removes client-local
+`runtimeWorkspaceRoots` from thread start, resume, and fork requests, and maps
+Linux app-server paths to a reversible Windows absolute-path namespace. Paths
+sent back by the TUI on later turns are restored before they reach app-server.
+This lets Windows clients use a Linux app-server while leaving Linux TUI and
+other app-server clients untouched. The existing dashboard listeners on ports
+80 and 443 are unchanged.
 
 After installing the user services, rebuild only the proxy:
 

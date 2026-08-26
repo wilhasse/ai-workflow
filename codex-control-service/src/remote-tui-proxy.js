@@ -7,6 +7,108 @@ const REMOTE_THREAD_METHODS = new Set([
   'thread/fork',
 ])
 
+const REMOTE_POSIX_PATH_PREFIX = 'C:\\__codex_remote_posix__'
+
+const SCALAR_PATH_FIELDS = new Set([
+  'composerIcon',
+  'cwd',
+  'destinationPath',
+  'filePath',
+  'iconLarge',
+  'iconSmall',
+  'installedRoot',
+  'localPluginPath',
+  'logo',
+  'logoDark',
+  'marketplacePath',
+  'path',
+  'pluginPath',
+  'sourcePath',
+])
+
+const ARRAY_PATH_FIELDS = new Set([
+  'changedPaths',
+  'cwds',
+  'extraRoots',
+  'files',
+  'runtimeWorkspaceRoots',
+  'screenshots',
+  'upgradedRoots',
+])
+
+const isWindowsAbsolutePath = (value) => (
+  typeof value === 'string' && (
+    /^[a-zA-Z]:[\\/]/.test(value) ||
+    value.startsWith('\\\\')
+  )
+)
+
+const remotePosixPathToWindows = (value) => {
+  if (typeof value !== 'string' || !value.startsWith('/')) return value
+  return `${REMOTE_POSIX_PATH_PREFIX}${value.replaceAll('/', '\\')}`
+}
+
+const remoteWindowsPathToPosix = (value) => {
+  if (typeof value !== 'string') return value
+  const prefix = value.slice(0, REMOTE_POSIX_PATH_PREFIX.length)
+  if (prefix.toLowerCase() !== REMOTE_POSIX_PATH_PREFIX.toLowerCase()) return value
+  const suffix = value.slice(REMOTE_POSIX_PATH_PREFIX.length)
+  if (suffix !== '' && !suffix.startsWith('\\') && !suffix.startsWith('/')) return value
+  const normalized = suffix.replaceAll('\\', '/')
+  return normalized === '' ? '/' : normalized
+}
+
+const rewritePathFields = (value, rewritePath) => {
+  if (Array.isArray(value)) {
+    let changed = false
+    const rewritten = value.map((item) => {
+      const result = rewritePathFields(item, rewritePath)
+      changed ||= result.changed
+      return result.value
+    })
+    return { value: changed ? rewritten : value, changed }
+  }
+  if (!value || typeof value !== 'object') return { value, changed: false }
+
+  let changed = false
+  const rewritten = { ...value }
+  for (const [key, fieldValue] of Object.entries(value)) {
+    if (SCALAR_PATH_FIELDS.has(key) && typeof fieldValue === 'string') {
+      const nextValue = rewritePath(fieldValue)
+      if (nextValue !== fieldValue) {
+        rewritten[key] = nextValue
+        changed = true
+      }
+      continue
+    }
+    if (ARRAY_PATH_FIELDS.has(key) && Array.isArray(fieldValue)) {
+      const nextValue = fieldValue.map((item) => (
+        typeof item === 'string' ? rewritePath(item) : item
+      ))
+      if (nextValue.some((item, index) => item !== fieldValue[index])) {
+        rewritten[key] = nextValue
+        changed = true
+      }
+      continue
+    }
+    const nested = rewritePathFields(fieldValue, rewritePath)
+    if (nested.changed) {
+      rewritten[key] = nested.value
+      changed = true
+    }
+  }
+  return { value: changed ? rewritten : value, changed }
+}
+
+const requestUsesWindowsPaths = (message) => {
+  let usesWindowsPaths = false
+  rewritePathFields(message, (value) => {
+    usesWindowsPaths ||= isWindowsAbsolutePath(value)
+    return value
+  })
+  return usesWindowsPaths
+}
+
 const sendUpgradeError = (socket, statusCode, statusText) => {
   if (socket.destroyed) return
   socket.end(
@@ -45,17 +147,43 @@ export const rewriteRemoteTuiRequest = (data, isBinary, connectionState) => {
     connectionState.isCodexTui = message.params?.clientInfo?.name === 'codex-tui'
     return data
   }
+  if (!connectionState.isCodexTui) return data
+
+  if (!connectionState.clientPathStyle && requestUsesWindowsPaths(message.params)) {
+    connectionState.clientPathStyle = 'windows'
+  }
+
+  const rewrittenMessage = rewritePathFields(message, remoteWindowsPathToPosix)
+  let rewritten = rewrittenMessage.value
+  let changed = rewrittenMessage.changed
+
   if (
-    !connectionState.isCodexTui ||
-    !REMOTE_THREAD_METHODS.has(message?.method) ||
-    !Object.hasOwn(message.params || {}, 'runtimeWorkspaceRoots')
+    REMOTE_THREAD_METHODS.has(message?.method) &&
+    Object.hasOwn(rewritten.params || {}, 'runtimeWorkspaceRoots')
   ) {
+    const params = { ...rewritten.params }
+    delete params.runtimeWorkspaceRoots
+    rewritten = { ...rewritten, params }
+    changed = true
+  }
+
+  return changed ? JSON.stringify(rewritten) : data
+}
+
+export const rewriteRemoteTuiResponse = (data, isBinary, connectionState) => {
+  if (isBinary || !connectionState.isCodexTui || connectionState.clientPathStyle !== 'windows') {
     return data
   }
 
-  const params = { ...message.params }
-  delete params.runtimeWorkspaceRoots
-  return JSON.stringify({ ...message, params })
+  let message
+  try {
+    message = JSON.parse(data.toString('utf8'))
+  } catch {
+    return data
+  }
+
+  const rewritten = rewritePathFields(message, remotePosixPathToWindows)
+  return rewritten.changed ? JSON.stringify(rewritten.value) : data
 }
 
 export const createRemoteTuiProxy = ({
@@ -121,7 +249,8 @@ export const createRemoteTuiProxy = ({
         })
         upstream.on('message', (data, isBinary) => {
           if (downstream.readyState === WebSocket.OPEN) {
-            downstream.send(data, { binary: isBinary })
+            const payload = rewriteRemoteTuiResponse(data, isBinary, connectionState)
+            downstream.send(payload, { binary: isBinary })
           }
         })
         downstream.on('close', (code, reason) => closePeer(upstream, code, reason))

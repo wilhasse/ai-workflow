@@ -3,7 +3,11 @@ import http from 'node:http'
 import { once } from 'node:events'
 import test from 'node:test'
 import WebSocket, { WebSocketServer } from 'ws'
-import { createRemoteTuiProxy, rewriteRemoteTuiRequest } from '../src/remote-tui-proxy.js'
+import {
+  createRemoteTuiProxy,
+  rewriteRemoteTuiRequest,
+  rewriteRemoteTuiResponse,
+} from '../src/remote-tui-proxy.js'
 
 const jsonMessage = (message) => Buffer.from(JSON.stringify(message))
 
@@ -40,6 +44,70 @@ test('rewrites only Codex TUI thread lifecycle workspace roots', () => {
   assert.equal(rewriteRemoteTuiRequest(turn, false, state), turn)
 })
 
+test('maps Linux response paths for Windows TUI clients and restores them on turns', () => {
+  const state = { isCodexTui: false }
+  rewriteRemoteTuiRequest(jsonMessage({
+    method: 'initialize',
+    id: 1,
+    params: { clientInfo: { name: 'codex-tui' } },
+  }), false, state)
+  rewriteRemoteTuiRequest(jsonMessage({
+    method: 'thread/start',
+    id: 2,
+    params: { runtimeWorkspaceRoots: ['C:\\Users\\cslog\\workspace'] },
+  }), false, state)
+
+  const rewrittenResponse = rewriteRemoteTuiResponse(jsonMessage({
+    id: 2,
+    result: {
+      thread: { cwd: '/home/cslog', path: '/home/cslog/.codex/thread.jsonl' },
+      cwd: '/home/cslog',
+      runtimeWorkspaceRoots: ['/home/cslog', '/srv/project'],
+    },
+  }), false, state)
+  assert.deepEqual(JSON.parse(rewrittenResponse), {
+    id: 2,
+    result: {
+      thread: {
+        cwd: 'C:\\__codex_remote_posix__\\home\\cslog',
+        path: 'C:\\__codex_remote_posix__\\home\\cslog\\.codex\\thread.jsonl',
+      },
+      cwd: 'C:\\__codex_remote_posix__\\home\\cslog',
+      runtimeWorkspaceRoots: [
+        'C:\\__codex_remote_posix__\\home\\cslog',
+        'C:\\__codex_remote_posix__\\srv\\project',
+      ],
+    },
+  })
+
+  const rewrittenTurn = rewriteRemoteTuiRequest(jsonMessage({
+    method: 'turn/start',
+    id: 3,
+    params: {
+      cwd: 'C:\\__codex_remote_posix__\\home\\cslog',
+      runtimeWorkspaceRoots: ['C:\\__codex_remote_posix__\\srv\\project'],
+    },
+  }), false, state)
+  assert.deepEqual(JSON.parse(rewrittenTurn), {
+    method: 'turn/start',
+    id: 3,
+    params: {
+      cwd: '/home/cslog',
+      runtimeWorkspaceRoots: ['/srv/project'],
+    },
+  })
+})
+
+test('preserves Linux response paths for non-Windows TUI clients', () => {
+  const state = { isCodexTui: true }
+  const response = jsonMessage({
+    id: 2,
+    result: { cwd: '/home/cslog', runtimeWorkspaceRoots: ['/home/cslog'] },
+  })
+
+  assert.equal(rewriteRemoteTuiResponse(response, false, state), response)
+})
+
 test('preserves workspace roots for non-TUI app-server clients', () => {
   const state = { isCodexTui: false }
   rewriteRemoteTuiRequest(jsonMessage({
@@ -71,7 +139,12 @@ test('forwards authentication and normalized TUI requests to the app server', as
     webSocket.on('message', (data) => {
       const message = JSON.parse(data.toString('utf8'))
       received.push(message)
-      webSocket.send(JSON.stringify({ id: message.id, result: {} }))
+      webSocket.send(JSON.stringify({
+        id: message.id,
+        result: message.method === 'thread/start'
+          ? { cwd: '/home/cslog', runtimeWorkspaceRoots: ['/home/cslog'] }
+          : {},
+      }))
     })
   })
   upstreamHttp.listen(0, '127.0.0.1')
@@ -110,7 +183,7 @@ test('forwards authentication and normalized TUI requests to the app server', as
       ephemeral: true,
     },
   }))
-  await once(client, 'message')
+  const [threadStartResponse] = await once(client, 'message')
 
   assert.equal(authorization, 'Bearer test-token')
   assert.deepEqual(received, [
@@ -125,6 +198,13 @@ test('forwards authentication and normalized TUI requests to the app server', as
       params: { ephemeral: true },
     },
   ])
+  assert.deepEqual(JSON.parse(threadStartResponse.toString('utf8')), {
+    id: 2,
+    result: {
+      cwd: 'C:\\__codex_remote_posix__\\home\\cslog',
+      runtimeWorkspaceRoots: ['C:\\__codex_remote_posix__\\home\\cslog'],
+    },
+  })
 
   client.close()
   await once(client, 'close')
