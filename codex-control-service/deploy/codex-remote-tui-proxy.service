@@ -1,0 +1,19 @@
+[Unit]
+Description=Codex remote TUI compatibility proxy
+After=network-online.target codex-app-server.service
+Wants=network-online.target codex-app-server.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/ai-workflow/codex-control-service
+Environment=CODEX_REMOTE_PROXY_HOST=192.168.160.1
+Environment=CODEX_REMOTE_PROXY_PORT=4502
+Environment=CODEX_REMOTE_PROXY_UPSTREAM_URL=ws://192.168.160.1:4500
+ExecStart=/usr/bin/node %h/ai-workflow/codex-control-service/src/remote-tui-proxy-server.js
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+MemoryHigh=128M
+
+[Install]
+WantedBy=default.target

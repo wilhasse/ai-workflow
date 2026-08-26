@@ -76,9 +76,13 @@ layer and the shared app-server; these are not hard kill limits.
 
 Nginx exposes a dedicated root-path WebSocket listener at
 `wss://10.1.0.10:4501`. Port `4501` is bound only to the host's `10.1.0.10`
-interface. TLS terminates at Nginx, which forwards the bearer header to the
-capability-token-protected app-server over the private Docker bridge. The
-existing dashboard listeners on ports 80 and 443 are unchanged.
+interface. TLS terminates at Nginx, which forwards the bearer header through a
+private compatibility proxy to the capability-token-protected app-server. The
+proxy recognizes authenticated `codex-tui` connections and removes client-local
+`runtimeWorkspaceRoots` from thread start, resume, and fork requests. This lets
+Windows clients use a Linux app-server while leaving explicit paths from other
+app-server clients untouched. The existing dashboard listeners on ports 80 and
+443 are unchanged.
 
 After installing the user services, rebuild only the proxy:
 
