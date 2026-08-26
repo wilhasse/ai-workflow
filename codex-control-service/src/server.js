@@ -7,6 +7,8 @@ import { createHttpServer } from './http-server.js'
 
 const config = loadConfig()
 const client = new AppServerClient({
+  url: config.appServerUrl,
+  tokenFile: config.appServerTokenFile,
   bin: config.codexBin,
   args: config.codexArgs,
   cwd: config.defaultCwd,

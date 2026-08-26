@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
+import { promises as fs } from 'node:fs'
 import readline from 'node:readline'
+import WebSocket from 'ws'
 
 const safeMessage = (error) => error instanceof Error ? error.message : String(error)
 
@@ -9,10 +11,13 @@ export class AppServerClient extends EventEmitter {
     super()
     this.bin = options.bin || 'codex'
     this.args = options.args || ['app-server']
+    this.url = options.url || ''
+    this.tokenFile = options.tokenFile || ''
     this.cwd = options.cwd
     this.env = options.env || process.env
     this.requestTimeoutMs = options.requestTimeoutMs || 30000
     this.child = null
+    this.socket = null
     this.ready = false
     this.startPromise = null
     this.nextId = 1
@@ -25,6 +30,7 @@ export class AppServerClient extends EventEmitter {
     return {
       ready: this.ready,
       pid: this.child?.pid || null,
+      transport: this.url ? 'websocket' : 'stdio',
       lastError: this.lastError,
     }
   }
@@ -32,7 +38,7 @@ export class AppServerClient extends EventEmitter {
   async start() {
     if (this.ready) return
     if (this.startPromise) return this.startPromise
-    this.startPromise = this.#startProcess()
+    this.startPromise = this.#startTransport()
     try {
       await this.startPromise
     } finally {
@@ -40,8 +46,32 @@ export class AppServerClient extends EventEmitter {
     }
   }
 
-  async #startProcess() {
+  async #startTransport() {
     this.lastError = ''
+    try {
+      if (this.url) await this.#startWebSocket()
+      else this.#startProcess()
+      await this.#requestDirect('initialize', {
+        clientInfo: {
+          name: 'ai_workflow_agent_board',
+          title: 'AI Workflow Agent Board',
+          version: '0.1.0',
+        },
+        capabilities: {
+          experimentalApi: false,
+        },
+      })
+      this.notify('initialized', {})
+      this.ready = true
+      this.emit('ready')
+    } catch (error) {
+      this.lastError = safeMessage(error)
+      await this.stop()
+      throw error
+    }
+  }
+
+  #startProcess() {
     const child = spawn(this.bin, this.args, {
       cwd: this.cwd,
       env: this.env,
@@ -62,20 +92,52 @@ export class AppServerClient extends EventEmitter {
     child.once('exit', (code, signal) => {
       this.#handleExit(new Error(`codex app-server exited (${signal || code})`))
     })
+  }
 
-    await this.#requestDirect('initialize', {
-      clientInfo: {
-        name: 'ai_workflow_agent_board',
-        title: 'AI Workflow Agent Board',
-        version: '0.1.0',
-      },
-      capabilities: {
-        experimentalApi: false,
-      },
+  async #startWebSocket() {
+    const token = (await fs.readFile(this.tokenFile, 'utf8')).trim()
+    if (!token) throw new Error('Codex app-server token file is empty')
+    const socket = new WebSocket(this.url, {
+      headers: { Authorization: `Bearer ${token}` },
     })
-    this.notify('initialized', {})
-    this.ready = true
-    this.emit('ready')
+    this.socket = socket
+    await new Promise((resolve, reject) => {
+      const cleanup = () => {
+        socket.off('open', handleOpen)
+        socket.off('error', handleError)
+        socket.off('close', handleClose)
+      }
+      const handleOpen = () => {
+        cleanup()
+        resolve()
+      }
+      const handleError = (error) => {
+        cleanup()
+        reject(error)
+      }
+      const handleClose = (code, reason) => {
+        cleanup()
+        reject(new Error(`codex app-server websocket closed (${code}: ${reason.toString('utf8')})`))
+      }
+      socket.once('open', handleOpen)
+      socket.once('error', handleError)
+      socket.once('close', handleClose)
+    })
+    socket.on('message', (data, isBinary) => {
+      if (isBinary) {
+        this.emit('protocolError', new Error('app-server emitted a binary WebSocket message'))
+        return
+      }
+      this.#handleLine(data.toString('utf8'))
+    })
+    socket.on('error', (error) => {
+      if (this.socket !== socket) return
+      socket.terminate()
+      this.#handleExit(error)
+    })
+    socket.on('close', (code, reason) => {
+      this.#handleExit(new Error(`codex app-server websocket closed (${code}: ${reason.toString('utf8')})`))
+    })
   }
 
   #handleLine(line) {
@@ -111,8 +173,15 @@ export class AppServerClient extends EventEmitter {
   }
 
   #write(message) {
-    if (!this.child?.stdin?.writable) throw new Error('codex app-server is not writable')
-    this.child.stdin.write(`${JSON.stringify(message)}\n`)
+    if (this.socket?.readyState === WebSocket.OPEN) {
+      this.socket.send(JSON.stringify(message))
+      return
+    }
+    if (this.child?.stdin?.writable) {
+      this.child.stdin.write(`${JSON.stringify(message)}\n`)
+      return
+    }
+    throw new Error('codex app-server is not writable')
   }
 
   #requestDirect(method, params = {}, timeoutMs = this.requestTimeoutMs) {
@@ -151,10 +220,11 @@ export class AppServerClient extends EventEmitter {
   }
 
   #handleExit(error) {
-    if (this.child === null && !this.ready) return
+    if (this.child === null && this.socket === null && !this.ready) return
     this.lastError = safeMessage(error)
     this.ready = false
     this.child = null
+    this.socket = null
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer)
       pending.reject(error)
@@ -165,12 +235,23 @@ export class AppServerClient extends EventEmitter {
 
   async stop() {
     const child = this.child
+    const socket = this.socket
     this.ready = false
     this.child = null
-    if (!child) return
-    child.stdin.end()
-    child.kill('SIGTERM')
-    child.stdout.destroy()
-    child.stderr.destroy()
+    this.socket = null
+    const error = new Error('codex app-server client stopped')
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer)
+      pending.reject(error)
+    }
+    this.pending.clear()
+    if (socket?.readyState === WebSocket.OPEN) socket.close(1000)
+    else if (socket && socket.readyState !== WebSocket.CLOSED) socket.terminate()
+    if (child) {
+      child.stdin.end()
+      child.kill('SIGTERM')
+      child.stdout.destroy()
+      child.stderr.destroy()
+    }
   }
 }

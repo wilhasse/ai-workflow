@@ -1,8 +1,9 @@
 # Codex Control Service
 
 This host-side Node 20 service is the application layer between the AI Workflow
-dashboard and the open-source Codex harness. It supervises one local
-`codex app-server` process over JSON-RPC/stdio and exposes a small HTTP + SSE API.
+dashboard and the open-source Codex harness. It connects to one shared,
+authenticated `codex app-server` over JSON-RPC/WebSocket and exposes a small
+HTTP + SSE API.
 The browser never receives Codex credentials, provider URLs, or arbitrary model
 configuration.
 
@@ -48,20 +49,62 @@ Install the checked-in systemd user unit from the repository:
 ./deploy/install-user-service.sh
 ```
 
-The unit uses the current user's `~/.local/bin/codex`, `~/.codex` state, and
-provider configuration without copying or modifying them. Its launcher sources
-`~/.codex/provider-env` when that file exists so credentials exported there are
-available to custom providers even though systemd does not load interactive
-shell startup files. Keep that file outside the repository and readable only by
-the user. Set `CODEX_CONTROL_PROVIDER_ENV_FILE` in a systemd drop-in to use a
+The installer provisions two user units. `codex-app-server.service` owns the
+shared harness process and listens with capability-token authentication only on
+the host gateway of the private Compose network. `codex-control-service.service`
+connects to that endpoint and continues exposing the Board API only through its
+Unix socket. Both use the current user's `~/.codex` state. The app-server
+launcher sources `~/.codex/provider-env` when that file exists so custom-provider
+credentials are available even though systemd does not load interactive shell
+startup files. Keep that file outside the repository and readable only by the
+user. Set `CODEX_APP_SERVER_PROVIDER_ENV_FILE` in a systemd drop-in to use a
 different private file.
+
+`./deploy/install-user-service.sh` also creates, without overwriting, a private
+capability token and an internal CA/server certificate under
+`runtime/codex-remote/`. The token, CA private key, and server private key remain
+untracked and mode `0600`.
 
 Override other settings by adding a systemd drop-in for
 `codex-control-service.service`; useful variables include
 `CODEX_CONTROL_DEFAULT_CWD`, `CODEX_CONTROL_ALLOWED_ROOTS` (comma-separated),
 `CODEX_CONTROL_REQUEST_TIMEOUT_MS`, and `CODEX_CONTROL_COMPARISON_TIMEOUT_MS`.
-The unit also sets a soft `MemoryHigh=768M` boundary so app-server's reclaimable
-startup file cache does not become permanent overhead; it is not a hard kill limit.
+The units set separate soft memory boundaries for the small Node application
+layer and the shared app-server; these are not hard kill limits.
+
+## No-tunnel remote CLI
+
+Nginx exposes a dedicated root-path WebSocket listener at
+`wss://10.1.0.10:4501`. Port `4501` is bound only to the host's `10.1.0.10`
+interface. TLS terminates at Nginx, which forwards the bearer header to the
+capability-token-protected app-server over the private Docker bridge. The
+existing dashboard listeners on ports 80 and 443 are unchanged.
+
+After installing the user services, rebuild only the proxy:
+
+```bash
+docker compose up -d --build nginx
+```
+
+Each client must trust the private CA and possess the bearer token. From Windows
+PowerShell, copy only the public CA certificate and token over SSH; never copy
+`ca.key` or `server.key`:
+
+```powershell
+New-Item -ItemType Directory -Force "$HOME\.codex\remote-godev4" | Out-Null
+scp cslog@10.1.0.10:/home/cslog/ai-workflow/runtime/codex-remote/tls/ca.crt "$HOME\.codex\remote-godev4\ca.crt"
+scp cslog@10.1.0.10:/home/cslog/ai-workflow/runtime/codex-remote/app-server-token "$HOME\.codex\remote-godev4\app-server-token"
+Import-Certificate -FilePath "$HOME\.codex\remote-godev4\ca.crt" -CertStoreLocation Cert:\CurrentUser\Root
+$env:CODEX_REMOTE_TOKEN = (Get-Content "$HOME\.codex\remote-godev4\app-server-token" -Raw).Trim()
+codex --remote wss://10.1.0.10:4501 --remote-auth-token-env CODEX_REMOTE_TOKEN
+```
+
+Verify the CA SHA-256 fingerprint printed by
+`deploy/provision-remote-secrets.sh` before trusting it on a new machine. Remove
+the environment variable after the session with
+`Remove-Item Env:CODEX_REMOTE_TOKEN`. Multiple clients can connect and create
+independent threads concurrently; coordinate a single writer when two clients
+open the same thread.
 
 ## HTTP surface
 

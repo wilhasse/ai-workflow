@@ -8,6 +8,7 @@ services:
     ports:
       - "80:80"
       - "443:443"
+      - "10.1.0.10:4501:4501"
     networks:
       - ai-workflow-network
     depends_on:
@@ -17,6 +18,7 @@ services:
       - agent-history-service
     volumes:
       - /home/cslog/ai-workflow/runtime/codex-control:/run/codex-control:ro
+      - /home/cslog/ai-workflow/runtime/codex-remote/tls:/run/codex-remote-tls:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1/health"]
@@ -162,6 +164,10 @@ services:
 networks:
   ai-workflow-network:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 192.168.160.0/20
+          gateway: 192.168.160.1
 
 volumes:
   tmux-session-data:

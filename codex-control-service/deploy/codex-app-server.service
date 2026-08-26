@@ -1,0 +1,20 @@
+[Unit]
+Description=Shared authenticated Codex app-server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h
+Environment=CODEX_APP_SERVER_BIN=%h/.local/bin/codex
+Environment=CODEX_APP_SERVER_LISTEN=ws://192.168.160.1:4500
+Environment=CODEX_APP_SERVER_TOKEN_FILE=%h/ai-workflow/runtime/codex-remote/app-server-token
+ExecStart=%h/ai-workflow/codex-control-service/deploy/run-app-server-service.sh
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+UMask=0077
+MemoryHigh=1536M
+
+[Install]
+WantedBy=default.target

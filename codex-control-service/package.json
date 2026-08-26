@@ -9,6 +9,9 @@
     "dev": "node --watch src/server.js",
     "test": "node --test test/*.test.js"
   },
+  "dependencies": {
+    "ws": "8.18.3"
+  },
   "engines": {
     "node": ">=20"
   }

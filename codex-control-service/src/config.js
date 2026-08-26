@@ -20,6 +20,10 @@ export const loadConfig = (env = process.env) => {
     host: env.CODEX_CONTROL_HOST || '127.0.0.1',
     port: positiveInteger(env.CODEX_CONTROL_PORT, 5006),
     socketPath: env.CODEX_CONTROL_SOCKET ? path.resolve(env.CODEX_CONTROL_SOCKET) : '',
+    appServerUrl: env.CODEX_CONTROL_APP_SERVER_URL || '',
+    appServerTokenFile: env.CODEX_CONTROL_APP_SERVER_TOKEN_FILE
+      ? path.resolve(env.CODEX_CONTROL_APP_SERVER_TOKEN_FILE)
+      : '',
     codexBin: env.CODEX_CONTROL_CODEX_BIN || 'codex',
     codexArgs: splitList(env.CODEX_CONTROL_CODEX_ARGS).length
       ? splitList(env.CODEX_CONTROL_CODEX_ARGS)

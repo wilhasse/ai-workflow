@@ -67,5 +67,6 @@ coverage/
 tmux-session-service/data/sessions.json
 tmux-session-service/data/users.json
 runtime/codex-control/*.sock
+runtime/codex-remote/
 
 .omx/
