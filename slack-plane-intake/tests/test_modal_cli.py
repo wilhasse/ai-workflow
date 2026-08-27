@@ -20,6 +20,7 @@ class ProjectClientStub:
     configs: ClassVar[list] = []
     projects = (
         PlaneProject(id="project-uuid", identifier="AGENTE", name="AGENTE"),
+        PlaneProject(id="project-delta", identifier="DELTA", name="DELTA"),
         PlaneProject(id="project-olos", identifier="OLOS", name="OLOS"),
     )
 
@@ -103,9 +104,10 @@ async def test_modal_adds_messages_then_submits_one_bundle(monkeypatch, required
     assert second["mode"] == "collector"
     assert len(second["messages"]) == 2
     assert second["initial_message_ts"] == "1724440001.000001"
-    assert second["initial_project_id"] == "project-uuid"
+    assert second["initial_project_id"] == "project-delta"
     assert [project["label"] for project in second["projects"]] == [
         "AGENTE",
+        "DELTA",
         "OLOS",
     ]
     assert result["issue_key"] == "OLOS-1"

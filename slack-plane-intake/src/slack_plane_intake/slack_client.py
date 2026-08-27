@@ -6,6 +6,7 @@ import hashlib
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -19,6 +20,9 @@ _SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 _MESSAGE_TS = re.compile(r"\d{9,}\.(?:\d{1,6})")
 _TEAM_ID = re.compile(r"T[A-Z0-9]+")
 _CHANNEL_ID = re.compile(r"[CDG][A-Z0-9]+")
+_HISTORY_WINDOW_SECONDS = 15 * 60
+_HISTORY_CANDIDATE_LIMIT = 100
+_HISTORY_SELECTION_LIMIT = 10
 
 
 @dataclass
@@ -109,7 +113,7 @@ class SlackClient:
         invoking_user_id: str,
         selected_message_payload: dict,
     ) -> tuple[dict, ...]:
-        """Fetch up to ten messages ending at the selected message as the user."""
+        """Fetch the ten closest messages in a 15-minute window as the user."""
         if (
             not self.config.history_user_id
             or invoking_user_id != self.config.history_user_id
@@ -125,6 +129,7 @@ class SlackClient:
         selected_ts = str(selected_message_payload.get("ts", ""))
         if not _MESSAGE_TS.fullmatch(selected_ts):
             raise SourceValidationError("Slack message timestamp is invalid")
+        selected_time = Decimal(selected_ts)
 
         auth = await self._user_api("auth.test")
         self._validate_history_identity(
@@ -135,9 +140,10 @@ class SlackClient:
         history = await self._user_api(
             "conversations.history",
             channel=channel_id,
-            latest=selected_ts,
+            oldest=str(selected_time - _HISTORY_WINDOW_SECONDS),
+            latest=str(selected_time + _HISTORY_WINDOW_SECONDS),
             inclusive="true",
-            limit="10",
+            limit=str(_HISTORY_CANDIDATE_LIMIT),
         )
         candidates: dict[str, dict] = {}
         for value in history.get("messages") or ():
@@ -146,16 +152,24 @@ class SlackClient:
             message_ts = str(value.get("ts", ""))
             if not _MESSAGE_TS.fullmatch(message_ts):
                 continue
+            if abs(Decimal(message_ts) - selected_time) > _HISTORY_WINDOW_SECONDS:
+                continue
             if not str(value.get("text") or "").strip() and not value.get("files"):
                 continue
             candidates[message_ts] = value
         candidates[selected_ts] = selected_message_payload
-        ordered = tuple(candidates[value] for value in sorted(candidates, key=float))
+        selected_timestamps = sorted(
+            candidates,
+            key=lambda value: (abs(Decimal(value) - selected_time), Decimal(value)),
+        )[:_HISTORY_SELECTION_LIMIT]
+        ordered = tuple(
+            candidates[value] for value in sorted(selected_timestamps, key=Decimal)
+        )
         if not ordered:
             raise SourceValidationError("Slack DM history did not contain messages")
         preview_names: dict[str, str] = {}
         decorated = []
-        for value in ordered[-10:]:
+        for value in ordered:
             message = dict(value)
             author_id = str(message.get("user") or "")
             if author_id.startswith(("U", "W")):

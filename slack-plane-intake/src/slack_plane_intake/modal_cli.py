@@ -33,6 +33,7 @@ from .slack_client import SlackClient
 
 _MAX_PAYLOAD_BYTES = 2 * 1024 * 1024
 _MAX_PROJECT_OPTIONS = 100
+_DEFAULT_PROJECT_IDENTIFIER = "DELTA"
 _DISPLAY_TIMEZONE = ZoneInfo("America/Sao_Paulo")
 
 
@@ -82,7 +83,17 @@ def _preview(
         raise ExternalServiceError(
             "Plane returned too many projects for the Slack project selector"
         )
-    if initial_project_id not in {project.id for project in projects}:
+    default_project = next(
+        (
+            project
+            for project in projects
+            if project.identifier.casefold() == _DEFAULT_PROJECT_IDENTIFIER.casefold()
+        ),
+        None,
+    )
+    if default_project is not None:
+        initial_project_id = default_project.id
+    elif initial_project_id not in {project.id for project in projects}:
         initial_project_id = projects[0].id
     messages = []
     for index, draft_message in enumerate(snapshot.messages, start=1):

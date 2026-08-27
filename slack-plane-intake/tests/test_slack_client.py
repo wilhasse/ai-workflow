@@ -388,6 +388,11 @@ async def test_history_picker_reads_bounded_dm_window_as_invoking_user(
                 "ok": True,
                 "messages": [
                     {
+                        "ts": "1724440100.000001",
+                        "user": "U1",
+                        "text": "follow-up after selected",
+                    },
+                    {
                         "ts": "1724440002.000001",
                         "user": "U1",
                         "text": "last from API",
@@ -401,6 +406,11 @@ async def test_history_picker_reads_bounded_dm_window_as_invoking_user(
                         "ts": "1724440000.000001",
                         "user": "U2",
                         "text": "problem",
+                    },
+                    {
+                        "ts": "1724439000.000001",
+                        "user": "U2",
+                        "text": "outside the window",
                     },
                 ],
             },
@@ -462,17 +472,20 @@ async def test_history_picker_reads_bounded_dm_window_as_invoking_user(
         "1724440000.000001",
         "1724440001.000001",
         "1724440002.000001",
+        "1724440100.000001",
     ]
-    assert messages[-1]["text"] == "authoritative selected message"
+    assert messages[2]["text"] == "authoritative selected message"
     assert [message["username"] for message in messages] == [
         "Benatti",
         "Benatti",
         "Willian",
+        "Willian",
     ]
     assert auth.call_count == 2
     assert users.call_count == 2
-    assert history.calls[0].request.url.params["limit"] == "10"
-    assert history.calls[0].request.url.params["latest"] == "1724440002.000001"
+    assert history.calls[0].request.url.params["limit"] == "100"
+    assert history.calls[0].request.url.params["oldest"] == "1724439102.000001"
+    assert history.calls[0].request.url.params["latest"] == "1724440902.000001"
     assert history.calls[0].request.headers["Authorization"] == ("Bearer xoxp-history")
 
 

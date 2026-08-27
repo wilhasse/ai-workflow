@@ -125,15 +125,13 @@ def _ready_view(result: dict[str, Any]) -> dict[str, Any]:
     history_mode = result.get("mode") == "history"
     if history_mode:
         initial_message_ts = str(result.get("initial_message_ts") or "")
-        initial_options = [
-            option for option in options if option["value"] == initial_message_ts
-        ]
-        if len(initial_options) != 1:
+        if not any(option["value"] == initial_message_ts for option in options):
             raise ValueError("history modal anchor is missing from the draft")
+        initial_options = options
         instructions = (
-            f"*Últimas {count} mensagens até a mensagem escolhida.*\n"
-            "Apenas a mensagem escolhida começa marcada. Marque as outras "
-            "mensagens que pertencem ao mesmo pedido."
+            f"*{count} mensagem(ns) próximas, em uma janela de 15 minutos.*\n"
+            "Todas começam marcadas. Desmarque apenas as mensagens que não "
+            "pertencem ao mesmo pedido."
         )
         close_text = "Cancelar"
     else:

@@ -38,9 +38,10 @@ def ready_result() -> dict:
         "user_id": "U1",
         "channel_id": "D1",
         "initial_message_ts": "1724440001.000001",
-        "initial_project_id": "P-AGENTE",
+        "initial_project_id": "P-DELTA",
         "projects": [
             {"id": "P-AGENTE", "label": "AGENTE"},
+            {"id": "P-DELTA", "label": "DELTA"},
             {"id": "P-OLOS", "label": "OLOS"},
         ],
         "messages": [
@@ -76,9 +77,10 @@ def test_collector_modal_selects_all_and_metadata_contains_no_message_text(bridg
     assert view["title"]["text"] == "Ticket Plane"
     assert message_element["initial_options"] == message_element["options"]
     assert project_element["type"] == "static_select"
-    assert project_element["initial_option"]["value"] == "P-AGENTE"
+    assert project_element["initial_option"]["value"] == "P-DELTA"
     assert [option["value"] for option in project_element["options"]] == [
         "P-AGENTE",
+        "P-DELTA",
         "P-OLOS",
     ]
     assert "first" not in view["private_metadata"]
@@ -86,19 +88,20 @@ def test_collector_modal_selects_all_and_metadata_contains_no_message_text(bridg
     assert "P-OLOS" not in view["private_metadata"]
 
 
-def test_history_picker_modal_is_a_single_action_selection(bridge):
+def test_history_picker_modal_selects_all_nearby_messages(bridge):
     result = ready_result()
     result["mode"] = "history"
 
     view = bridge._ready_view(result)
 
     assert view["close"]["text"] == "Cancelar"
-    assert "Últimas 2 mensagens" in view["blocks"][0]["text"]["text"]
+    assert "janela de 15 minutos" in view["blocks"][0]["text"]["text"]
     element = view["blocks"][2]["element"]
     assert [option["value"] for option in element["initial_options"]] == [
-        "1724440001.000001"
+        "1724440000.000001",
+        "1724440001.000001",
     ]
-    assert "Apenas a mensagem escolhida" in view["blocks"][0]["text"]["text"]
+    assert "Todas começam marcadas" in view["blocks"][0]["text"]["text"]
 
 
 def test_history_picker_rejects_a_missing_anchor(bridge):

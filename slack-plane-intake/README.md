@@ -10,7 +10,8 @@ when Slack permits file access, and deduplicates retries.
 The authorization boundary remains deliberately narrow: Slack only, one
 authorized shortcut allowlist and one one-to-one Hermes intake DM. The shortcut
 lists only Plane projects in which the invoking Plane user is a member, with
-`AGENTE` as the configured default. The app does not passively consume generic channels. Channel intake
+`DELTA` selected by default when available and the configured project as the
+fallback. The app does not passively consume generic channels. Channel intake
 occurs only when the authorized user explicitly selects a message shortcut. It
 does not read a whole thread, use reactions as triggers, use Hermes Kanban, or
 process WhatsApp.
@@ -25,12 +26,13 @@ message's attachments. Original bytes are SHA-256 hashed and uploaded unchanged.
 
 Text analysis falls back in this order:
 
-1. `kimi-k3`
-2. `qwen3.8-max`
-3. `deepseek/deepseek-v4-pro`
+1. `deepseek-v4-flash-0731`
+2. `kimi-k3`
+3. `qwen3.8-max`
+4. `deepseek/deepseek-v4-pro`
 
-Visual analysis falls back through `kimi-k3`, `qwen3.8-max`, then
-`gpt-5.6-terra`. If all analysis models fail, the service still creates a
+Visual analysis falls back through `gpt-5.6-terra`, `kimi-k3`, then
+`qwen3.8-max`. If all analysis models fail, the service still creates a
 clearly marked partial ticket containing the raw evidence and warnings.
 
 The source key `slack:<team>:<channel>:<message_ts>` and a visible, immutable
@@ -161,12 +163,12 @@ backward compatibility.
 
 To create one ticket from several messages in the same conversation:
 
-1. Run `Create Plane ticket` on the last message in the request burst.
-2. The modal loads up to the last 10 messages ending at that message.
-3. Only the message used to open the shortcut starts selected. Each option shows
-   its São Paulo date/time and Slack author; select the other related text and
-   screenshot messages, choose the destination in the searchable **Projeto
-   Plane** selector, then choose **Criar ticket**.
+1. Run `Create Plane ticket` on any message in the request burst.
+2. The modal loads at most the 10 closest messages within 15 minutes before or
+   after that message.
+3. All nearby messages start selected. Each option shows its São Paulo date/time
+   and Slack author; deselect unrelated messages, confirm `DELTA` or choose
+   another destination in **Projeto Plane**, then choose **Criar ticket**.
 
 The project list is loaded with the authenticated invoking user's Plane token.
 On submission, the selected project is fetched again with that same token before
@@ -186,10 +188,11 @@ SPI_SLACK_HISTORY_USER_TOKEN=xoxp-redacted
 
 This is an intentional permission expansion: the user token can read private
 conversations visible to that user. The implementation binds the token to that
-exact Slack user, verifies the workspace and user through `auth.test`, retrieves
-only one bounded 10-message window ending at the explicitly selected message,
-and never uses that token for another shortcut user. Activation validates the
-token identity and both required user scopes before restarting Hermes.
+exact Slack user, verifies the workspace and user through `auth.test`, queries
+only one bounded 15-minute window around the explicitly selected message, keeps
+at most the 10 closest eligible messages, and never uses that token for another
+shortcut user. Activation validates the token identity and both required user
+scopes before restarting Hermes.
 
 For multiple users, store each person's Slack User OAuth token together with
 their own Plane personal API key in a rootless service-owned file rather than in
@@ -207,10 +210,10 @@ SPI_USER_CREDENTIALS_FILE=/home/cslog/.hermes/slack-plane-users.json
 Each JSON key must be a member of `SPI_SLACK_SHORTCUT_ALLOWED_USERS`. Its
 `slack_user_token` must belong to that exact Slack user and include
 `im:history` plus `files:read`; `plane_api_key` must be that person's Plane
-personal API key with access to the AGENTE default project and any other project
-they need in the selector. Activation validates Slack identity/workspace/scopes,
-the Plane current-user response, and AGENTE read access before restarting Hermes.
-At submission time the workflow selects both
+personal API key with access to the configured AGENTE project, the default
+`DELTA` project, and any other project they need in the selector. Activation
+validates Slack identity/workspace/scopes, the Plane current-user response, and
+AGENTE read access before restarting Hermes. At submission time the workflow selects both
 credentials exclusively by the authenticated Slack invoking-user ID. Users not
 present in this registry retain the existing collector/global-Plane fallback.
 
@@ -236,8 +239,8 @@ as partial with an explicit warning.
 
 Live acceptance requires invoking the shortcut once on the last message of a DM
 burst containing at least two texts and one screenshot. The modal must show the
-bounded history with date/time and author labels, initially select only the
-message that opened the shortcut, default the project selector to AGENTE, and
+bounded 15-minute history with date/time and author labels, initially select all
+nearby messages, default the project selector to DELTA when available, and
 create exactly one ticket in the chosen project containing every selected
 message's provenance and original attachment. A token/user mismatch and
 an unauthorized-user attempt must fail before any DM history is returned.
