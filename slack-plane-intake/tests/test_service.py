@@ -10,6 +10,7 @@ from slack_plane_intake.ledger import IntakeLedger
 from slack_plane_intake.models import (
     PlaneWorkItem,
     ProblemAnalysis,
+    SourceMessage,
     UploadReport,
 )
 from slack_plane_intake.service import ProblemIntakeService
@@ -121,3 +122,34 @@ async def test_shortcut_uses_same_idempotent_workflow(tmp_path, source_message):
     assert second.status == "existing"
     assert analyzer.analyze.await_count == 1
     assert plane.create_problem.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_shortcut_bundle_uses_one_aggregate_idempotent_workflow(
+    tmp_path, source_message
+):
+    second = source_message.messages[0].model_copy(
+        update={"message_ts": "1724440001.123456", "text": "screenshot follows"}
+    )
+    bundle = SourceMessage(
+        team_id=source_message.team_id,
+        channel_id=source_message.channel_id,
+        messages=(*source_message.messages, second),
+    )
+    intake, analyzer, plane = service(tmp_path, bundle)
+    intake.slack.fetch_shortcut_source_messages.return_value = bundle
+
+    result = await intake.create_from_slack_shortcut_messages(
+        team_id="T1",
+        channel_id="DINTAKE",
+        invoking_user_id="U1",
+        message_payloads=(
+            {"ts": source_message.message_ts},
+            {"ts": second.message_ts},
+        ),
+    )
+
+    assert result.status == "created"
+    intake.slack.fetch_shortcut_source_messages.assert_awaited_once()
+    analyzer.analyze.assert_awaited_once_with(bundle)
+    plane.create_problem.assert_awaited_once()

@@ -58,6 +58,26 @@ class ProblemIntakeService:
             return IntakeResult(status="failed", warnings=(str(exc),))
         return await self._create_from_message(message)
 
+    async def create_from_slack_shortcut_messages(
+        self,
+        *,
+        team_id: str,
+        channel_id: str,
+        invoking_user_id: str,
+        message_payloads: tuple[dict, ...],
+    ) -> IntakeResult:
+        """Create one ticket from an ordered bundle of shortcut messages."""
+        try:
+            message = await self.slack.fetch_shortcut_source_messages(
+                team_id=team_id,
+                channel_id=channel_id,
+                invoking_user_id=invoking_user_id,
+                message_payloads=message_payloads,
+            )
+        except IntakeError as exc:
+            return IntakeResult(status="failed", warnings=(str(exc),))
+        return await self._create_from_message(message)
+
     async def _create_from_message(self, message: SourceMessage) -> IntakeResult:
         source_key = message.source_key
         try:

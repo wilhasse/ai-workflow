@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -33,13 +34,18 @@ async def test_valid_shortcut_calls_service_with_transport_identifiers(monkeypat
         issue_key="AGENTE-1",
         issue_url="https://plane.test/cslog/browse/AGENTE-1",
     )
-    monkeypatch.setattr("slack_plane_intake.shortcut_cli.load_config", lambda: object())
+    scoped = object()
+    config = SimpleNamespace(for_shortcut_user=lambda user_id: scoped)
+    monkeypatch.setattr("slack_plane_intake.shortcut_cli.load_config", lambda: config)
+    received_configs = []
 
     result = await process_shortcut(
-        shortcut_body(), service_factory=lambda _config: service
+        shortcut_body(),
+        service_factory=lambda received: received_configs.append(received) or service,
     )
 
     assert result.issue_key == "AGENTE-1"
+    assert received_configs == [scoped]
     service.create_from_slack_shortcut.assert_awaited_once()
     call = service.create_from_slack_shortcut.await_args.kwargs
     assert call["team_id"] == "T1"

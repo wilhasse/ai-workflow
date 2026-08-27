@@ -84,7 +84,7 @@ async def test_text_chain_uses_deepseek_as_third_model(limits, source_message):
 async def test_visual_chain_uses_terra_not_deepseek(tmp_path, limits, source_message):
     image_path = tmp_path / "screen.png"
     Image.new("RGB", (20, 20), "red").save(image_path)
-    visual_message = source_message.model_copy(
+    visual_part = source_message.messages[0].model_copy(
         update={
             "attachments": (
                 SourceAttachment(
@@ -98,6 +98,7 @@ async def test_visual_chain_uses_terra_not_deepseek(tmp_path, limits, source_mes
             )
         }
     )
+    visual_message = source_message.model_copy(update={"messages": (visual_part,)})
     route = respx.post("https://models.test/v1/chat/completions")
     route.side_effect = [
         httpx.Response(500),

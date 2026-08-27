@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import httpx
 import pytest
 import respx
@@ -258,3 +260,345 @@ async def test_message_shortcut_keeps_processing_without_permalink(tmp_path, lim
 
     assert message.permalink == ""
     assert message.author_id == "B2"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_message_bundle_is_chronological_and_shares_attachment_limits(
+    tmp_path, limits
+):
+    limited = replace(limits, max_files=1)
+    respx.get("https://slack.com/api/auth.test").mock(
+        return_value=httpx.Response(200, json={"ok": True, "team_id": "T1"})
+    )
+    respx.get("https://slack.com/api/chat.getPermalink").mock(
+        return_value=httpx.Response(
+            200, json={"ok": True, "permalink": "https://slack.test/message"}
+        )
+    )
+    files_info = respx.get("https://slack.com/api/files.info").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "file": {
+                    "id": "F1",
+                    "name": "one.png",
+                    "mimetype": "image/png",
+                    "size": 1,
+                    "url_private_download": "https://files.slack.com/F1",
+                },
+            },
+        )
+    )
+    respx.get("https://files.slack.com/F1").mock(
+        return_value=httpx.Response(200, content=b"1")
+    )
+    client = SlackClient(
+        SlackConfig(
+            "xoxb-secret",
+            "DINTAKE",
+            frozenset({"U1"}),
+            frozenset({"U1"}),
+        ),
+        limited,
+        tmp_path,
+        client=httpx.AsyncClient(base_url="https://slack.com/api/"),
+    )
+
+    message = await client.fetch_shortcut_source_messages(
+        team_id="T1",
+        channel_id="D1",
+        invoking_user_id="U1",
+        message_payloads=(
+            {
+                "ts": "1724440001.000001",
+                "bot_id": "B1",
+                "text": "second",
+                "files": [{"id": "F2", "name": "two.png"}],
+            },
+            {
+                "ts": "1724440000.000001",
+                "bot_id": "B1",
+                "text": "first",
+                "files": [{"id": "F1"}],
+            },
+        ),
+    )
+    await client.close()
+
+    assert [part.message_ts for part in message.messages] == [
+        "1724440000.000001",
+        "1724440001.000001",
+    ]
+    assert len(message.attachments) == 2
+    assert sum(attachment.available for attachment in message.attachments) == 1
+    assert any(
+        attachment.warning == "file-count limit exceeded"
+        for attachment in message.attachments
+    )
+    assert files_info.call_count == 1
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_message_bundle_rejects_duplicate_before_source_processing(
+    tmp_path, limits
+):
+    respx.get("https://slack.com/api/auth.test").mock(
+        return_value=httpx.Response(200, json={"ok": True, "team_id": "T1"})
+    )
+    client = slack_client(tmp_path, limits)
+    payload = {
+        "ts": "1724440000.000001",
+        "bot_id": "B1",
+        "text": "duplicate",
+    }
+
+    with pytest.raises(SourceValidationError, match="duplicate"):
+        await client.fetch_shortcut_source_messages(
+            team_id="T1",
+            channel_id="D1",
+            invoking_user_id="U1",
+            message_payloads=(payload, payload),
+        )
+    await client.close()
+
+    assert len(respx.calls) == 1
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_history_picker_reads_bounded_dm_window_as_invoking_user(
+    tmp_path, limits
+):
+    auth = respx.get("https://slack.com/api/auth.test").mock(
+        side_effect=[
+            httpx.Response(200, json={"ok": True, "team_id": "T1"}),
+            httpx.Response(
+                200,
+                json={"ok": True, "team_id": "T1", "user_id": "U1"},
+            ),
+        ]
+    )
+    history = respx.get("https://slack.com/api/conversations.history").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "messages": [
+                    {
+                        "ts": "1724440002.000001",
+                        "user": "U1",
+                        "text": "last from API",
+                    },
+                    {
+                        "ts": "1724440001.000001",
+                        "user": "U2",
+                        "text": "details",
+                    },
+                    {
+                        "ts": "1724440000.000001",
+                        "user": "U2",
+                        "text": "problem",
+                    },
+                ],
+            },
+        )
+    )
+    users = respx.get("https://slack.com/api/users.info").mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "user": {"profile": {"display_name": "Benatti"}},
+                },
+            ),
+            httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "user": {"profile": {"display_name": "Willian"}},
+                },
+            ),
+        ]
+    )
+    bot_http = httpx.AsyncClient(base_url="https://slack.com/api/")
+    user_http = httpx.AsyncClient(
+        base_url="https://slack.com/api/",
+        headers={"Authorization": "Bearer xoxp-history"},
+    )
+    client = SlackClient(
+        SlackConfig(
+            "xoxb-secret",
+            "DINTAKE",
+            frozenset({"U1"}),
+            frozenset({"U1"}),
+            "U1",
+            "xoxp-history",
+        ),
+        limits,
+        tmp_path,
+        client=bot_http,
+        user_client=user_http,
+    )
+
+    messages = await client.fetch_shortcut_history_payloads(
+        team_id="T1",
+        channel_id="DPEER",
+        invoking_user_id="U1",
+        selected_message_payload={
+            "ts": "1724440002.000001",
+            "user": "U1",
+            "text": "authoritative selected message",
+        },
+    )
+    await client.close()
+    await bot_http.aclose()
+    await user_http.aclose()
+
+    assert [message["ts"] for message in messages] == [
+        "1724440000.000001",
+        "1724440001.000001",
+        "1724440002.000001",
+    ]
+    assert messages[-1]["text"] == "authoritative selected message"
+    assert [message["username"] for message in messages] == [
+        "Benatti",
+        "Benatti",
+        "Willian",
+    ]
+    assert auth.call_count == 2
+    assert users.call_count == 2
+    assert history.calls[0].request.url.params["limit"] == "10"
+    assert history.calls[0].request.url.params["latest"] == "1724440002.000001"
+    assert history.calls[0].request.headers["Authorization"] == ("Bearer xoxp-history")
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_history_picker_never_uses_another_users_token(tmp_path, limits):
+    bot_http = httpx.AsyncClient(base_url="https://slack.com/api/")
+    user_http = httpx.AsyncClient(base_url="https://slack.com/api/")
+    client = SlackClient(
+        SlackConfig(
+            "xoxb-secret",
+            "DINTAKE",
+            frozenset({"U1"}),
+            frozenset({"U1", "U2"}),
+            "U1",
+            "xoxp-history",
+        ),
+        limits,
+        tmp_path,
+        client=bot_http,
+        user_client=user_http,
+    )
+
+    with pytest.raises(SourceValidationError, match="not configured for this user"):
+        await client.fetch_shortcut_history_payloads(
+            team_id="T1",
+            channel_id="DPEER",
+            invoking_user_id="U2",
+            selected_message_payload={
+                "ts": "1724440002.000001",
+                "text": "selected",
+            },
+        )
+    await client.close()
+    await bot_http.aclose()
+    await user_http.aclose()
+
+    assert not respx.calls
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_history_picker_uses_bound_user_token_for_dm_screenshot(tmp_path, limits):
+    respx.get("https://slack.com/api/auth.test").mock(
+        side_effect=[
+            httpx.Response(200, json={"ok": True, "team_id": "T1"}),
+            httpx.Response(
+                200,
+                json={"ok": True, "team_id": "T1", "user_id": "U1"},
+            ),
+        ]
+    )
+    permalink = respx.get("https://slack.com/api/chat.getPermalink").mock(
+        return_value=httpx.Response(
+            200, json={"ok": True, "permalink": "https://slack.test/dm"}
+        )
+    )
+    respx.get("https://slack.com/api/users.info").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "user": {"profile": {"display_name": "Requester"}},
+            },
+        )
+    )
+    file_info = respx.get("https://slack.com/api/files.info").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "file": {
+                    "id": "F1",
+                    "name": "screen.png",
+                    "mimetype": "image/png",
+                    "size": 3,
+                    "url_private_download": "https://files.slack.com/F1",
+                },
+            },
+        )
+    )
+    download = respx.get("https://files.slack.com/F1").mock(
+        return_value=httpx.Response(200, content=b"png")
+    )
+    bot_http = httpx.AsyncClient(
+        base_url="https://slack.com/api/",
+        headers={"Authorization": "Bearer xoxb-secret"},
+    )
+    user_http = httpx.AsyncClient(
+        base_url="https://slack.com/api/",
+        headers={"Authorization": "Bearer xoxp-history"},
+    )
+    client = SlackClient(
+        SlackConfig(
+            "xoxb-secret",
+            "DINTAKE",
+            frozenset({"U1"}),
+            frozenset({"U1"}),
+            "U1",
+            "xoxp-history",
+        ),
+        limits,
+        tmp_path,
+        client=bot_http,
+        user_client=user_http,
+    )
+
+    message = await client.fetch_shortcut_source_messages(
+        team_id="T1",
+        channel_id="DPEER",
+        invoking_user_id="U1",
+        message_payloads=(
+            {
+                "ts": "1724440000.000001",
+                "user": "U2",
+                "text": "screenshot",
+                "files": [{"id": "F1"}],
+            },
+        ),
+    )
+    await client.close()
+    await bot_http.aclose()
+    await user_http.aclose()
+
+    assert message.attachments[0].local_path.read_bytes() == b"png"
+    for route in (permalink, file_info, download):
+        assert route.calls[0].request.headers["Authorization"] == (
+            "Bearer xoxp-history"
+        )

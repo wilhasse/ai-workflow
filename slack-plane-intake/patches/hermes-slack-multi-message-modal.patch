@@ -1,0 +1,30 @@
+diff --git a/plugins/platforms/slack/adapter.py b/plugins/platforms/slack/adapter.py
+--- a/plugins/platforms/slack/adapter.py
++++ b/plugins/platforms/slack/adapter.py
+@@ -2133,8 +2133,10 @@ class SlackAdapter(BasePlatformAdapter):
+             # handler acknowledges before doing network work and reports only
+             # through an ephemeral response_url or the invoking user's DM.
+-            from .problem_intake_shortcut import (
++            from .problem_intake_modal import (
+                 CALLBACK_ID as _problem_intake_callback_id,
++                MODAL_CALLBACK_ID as _problem_intake_modal_callback_id,
+                 handle_message_shortcut as _handle_problem_intake_shortcut,
++                handle_modal_submission as _handle_problem_intake_modal_submission,
+             )
+ 
+             @self._app.shortcut(_problem_intake_callback_id)
+@@ -2143,6 +2145,14 @@ class SlackAdapter(BasePlatformAdapter):
+                 await ack()
+                 await _handle_problem_intake_shortcut(self, body)
+ 
++            @self._app.view(_problem_intake_modal_callback_id)
++            async def handle_problem_intake_modal_submission(ack, body):
++                await _handle_problem_intake_modal_submission(
++                    ack,
++                    self,
++                    body,
++                )
++
+             # Register Block Kit action handlers for approval buttons
+             for _action_id in (
+                 "hermes_approve_once",

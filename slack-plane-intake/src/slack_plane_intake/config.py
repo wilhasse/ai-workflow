@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import os
+import re
+import stat
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
+from types import MappingProxyType
 from urllib.parse import urlsplit
 
 from .errors import ConfigurationError
@@ -17,6 +21,8 @@ class SlackConfig:
     channel_id: str
     allowed_users: frozenset[str]
     shortcut_allowed_users: frozenset[str]
+    history_user_id: str = ""
+    history_user_token: str = ""
 
 
 @dataclass(frozen=True)
@@ -39,6 +45,12 @@ class PlaneConfig:
 
 
 @dataclass(frozen=True)
+class ShortcutUserCredential:
+    slack_user_token: str = field(repr=False)
+    plane_api_key: str = field(repr=False)
+
+
+@dataclass(frozen=True)
 class LimitConfig:
     max_files: int
     max_file_bytes: int
@@ -55,12 +67,32 @@ class AppConfig:
     limits: LimitConfig
     state_db: Path
     work_dir: Path
+    shortcut_user_credentials: Mapping[str, ShortcutUserCredential] = field(
+        default_factory=dict, repr=False
+    )
+
+    def for_shortcut_user(self, user_id: str) -> AppConfig:
+        credential = self.shortcut_user_credentials.get(user_id)
+        if credential is None:
+            return self
+        return replace(
+            self,
+            slack=replace(
+                self.slack,
+                history_user_id=user_id,
+                history_user_token=credential.slack_user_token,
+            ),
+            plane=replace(self.plane, api_key=credential.plane_api_key),
+        )
 
     def redacted_summary(self) -> dict[str, object]:
         return {
             "slack_dm_channel_id": self.slack.channel_id,
             "slack_allowed_users": len(self.slack.allowed_users),
             "slack_shortcut_allowed_users": len(self.slack.shortcut_allowed_users),
+            "slack_history_picker_enabled": bool(self.slack.history_user_token),
+            "slack_history_user_id": self.slack.history_user_id or None,
+            "shortcut_personal_credential_count": len(self.shortcut_user_credentials),
             "cliproxy_base_url": self.models.base_url,
             "text_models": list(self.models.text_models),
             "vision_models": list(self.models.vision_models),
@@ -114,6 +146,71 @@ def _safe_base_url(name: str, value: str) -> str:
     return value.rstrip("/")
 
 
+def _load_shortcut_user_credentials(
+    env: Mapping[str, str], shortcut_allowed_users: frozenset[str]
+) -> Mapping[str, ShortcutUserCredential]:
+    raw_path = env.get("SPI_USER_CREDENTIALS_FILE", "").strip()
+    if not raw_path:
+        return MappingProxyType({})
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        raise ConfigurationError("SPI_USER_CREDENTIALS_FILE must be an absolute path")
+    try:
+        metadata = path.stat()
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ConfigurationError("SPI_USER_CREDENTIALS_FILE must be a regular file")
+        if metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) & 0o077:
+            raise ConfigurationError(
+                "SPI_USER_CREDENTIALS_FILE must be owned by the service user "
+                "and have mode 0600"
+            )
+        if metadata.st_size > 64 * 1024:
+            raise ConfigurationError("SPI_USER_CREDENTIALS_FILE is too large")
+        payload = json.loads(path.read_text())
+    except ConfigurationError:
+        raise
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ConfigurationError(
+            "SPI_USER_CREDENTIALS_FILE could not be read as valid JSON"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise ConfigurationError("SPI_USER_CREDENTIALS_FILE must contain an object")
+
+    credentials: dict[str, ShortcutUserCredential] = {}
+    for user_id, value in payload.items():
+        if (
+            not isinstance(user_id, str)
+            or not re.fullmatch(r"U[A-Z0-9]+", user_id)
+            or user_id not in shortcut_allowed_users
+        ):
+            raise ConfigurationError(
+                "SPI_USER_CREDENTIALS_FILE contains an unauthorized Slack user"
+            )
+        if not isinstance(value, dict) or set(value) != {
+            "slack_user_token",
+            "plane_api_key",
+        }:
+            raise ConfigurationError(
+                "Each user credential must contain only slack_user_token "
+                "and plane_api_key"
+            )
+        slack_user_token = value.get("slack_user_token")
+        plane_api_key = value.get("plane_api_key")
+        if not isinstance(slack_user_token, str) or not slack_user_token.startswith(
+            "xoxp-"
+        ):
+            raise ConfigurationError(
+                "Each shortcut Slack credential must be a user token"
+            )
+        if not isinstance(plane_api_key, str) or not plane_api_key.strip():
+            raise ConfigurationError("Each shortcut user must have a Plane API key")
+        credentials[user_id] = ShortcutUserCredential(
+            slack_user_token=slack_user_token,
+            plane_api_key=plane_api_key.strip(),
+        )
+    return MappingProxyType(credentials)
+
+
 def load_config(environ: Mapping[str, str] | None = None) -> AppConfig:
     env = os.environ if environ is None else environ
     missing: list[str] = []
@@ -145,6 +242,24 @@ def load_config(environ: Mapping[str, str] | None = None) -> AppConfig:
         raise ConfigurationError(
             "SPI_SLACK_SHORTCUT_ALLOWED_USERS must contain at least one Slack user ID"
         )
+    history_user_id = env.get("SPI_SLACK_HISTORY_USER_ID", "").strip()
+    history_user_token = env.get("SPI_SLACK_HISTORY_USER_TOKEN", "").strip()
+    if bool(history_user_id) != bool(history_user_token):
+        raise ConfigurationError(
+            "SPI_SLACK_HISTORY_USER_ID and SPI_SLACK_HISTORY_USER_TOKEN "
+            "must be configured together"
+        )
+    if history_user_id and history_user_id not in shortcut_allowed_users:
+        raise ConfigurationError(
+            "SPI_SLACK_HISTORY_USER_ID must be in SPI_SLACK_SHORTCUT_ALLOWED_USERS"
+        )
+    if history_user_token and not history_user_token.startswith("xoxp-"):
+        raise ConfigurationError(
+            "SPI_SLACK_HISTORY_USER_TOKEN must be a Slack user token"
+        )
+    shortcut_user_credentials = _load_shortcut_user_credentials(
+        env, shortcut_allowed_users
+    )
 
     text_models = _csv(
         env.get(
@@ -182,6 +297,8 @@ def load_config(environ: Mapping[str, str] | None = None) -> AppConfig:
             slack_channel,
             allowed_users,
             shortcut_allowed_users,
+            history_user_id,
+            history_user_token,
         ),
         models=ModelConfig(
             base_url=_safe_base_url(
@@ -217,4 +334,5 @@ def load_config(environ: Mapping[str, str] | None = None) -> AppConfig:
         ),
         state_db=state_db.expanduser().resolve(),
         work_dir=work_dir.expanduser().resolve(),
+        shortcut_user_credentials=shortcut_user_credentials,
     )

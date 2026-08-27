@@ -6,6 +6,7 @@ import hashlib
 import html
 import re
 from collections.abc import Iterable
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
@@ -13,10 +14,12 @@ import httpx
 from .config import PlaneConfig
 from .errors import ExternalServiceError
 from .models import (
+    PlaneProject,
     PlaneWorkItem,
     ProblemAnalysis,
     SourceAttachment,
     SourceMessage,
+    SourceMessagePart,
     UploadReport,
 )
 
@@ -51,6 +54,106 @@ class PlaneClient:
             f"/api/v1/workspaces/{self.config.workspace}/projects/"
             f"{self.config.project_id}/work-items/"
         )
+
+    @property
+    def projects_path(self) -> str:
+        return f"/api/v1/workspaces/{self.config.workspace}/projects/"
+
+    async def list_projects(self) -> tuple[PlaneProject, ...]:
+        """Return projects in which the current Plane user can create work items."""
+        try:
+            response = await self.client.get(self.projects_path)
+            response.raise_for_status()
+            body = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise ExternalServiceError("Plane project listing failed") from exc
+
+        projects: list[PlaneProject] = []
+        for item in self._result_items(body):
+            if item.get("is_member") is False:
+                continue
+            try:
+                projects.append(
+                    PlaneProject(
+                        id=str(item["id"]),
+                        identifier=str(item["identifier"]).strip(),
+                        name=str(item["name"]).strip(),
+                    )
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+
+        configured_id = self.config.project_id
+        return tuple(
+            sorted(
+                projects,
+                key=lambda project: (
+                    project.id != configured_id,
+                    project.identifier.casefold(),
+                    project.name.casefold(),
+                ),
+            )
+        )
+
+    async def resolve_project_config(self, project_id: str) -> PlaneConfig:
+        """Revalidate one project and choose a safe initial workflow state."""
+        projects = await self.list_projects()
+        project = next((item for item in projects if item.id == project_id), None)
+        if project is None:
+            raise ExternalServiceError(
+                "The selected Plane project is not available to this user"
+            )
+
+        states_path = f"{self.projects_path}{project.id}/states/"
+        try:
+            response = await self.client.get(states_path)
+            response.raise_for_status()
+            body = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise ExternalServiceError("Plane project state listing failed") from exc
+
+        states = tuple(
+            item
+            for item in self._result_items(body)
+            if item.get("id") and isinstance(item.get("id"), str)
+        )
+        if not states:
+            raise ExternalServiceError(
+                "The selected Plane project has no available workflow state"
+            )
+
+        configured_state = next(
+            (
+                item
+                for item in states
+                if project.id == self.config.project_id
+                and item["id"] == self.config.state_id
+            ),
+            None,
+        )
+        state = (
+            configured_state
+            or next((item for item in states if item.get("default") is True), None)
+            or next((item for item in states if item.get("group") == "backlog"), None)
+            or next((item for item in states if item.get("group") == "unstarted"), None)
+            or states[0]
+        )
+        return replace(
+            self.config,
+            project_id=project.id,
+            project_identifier=project.identifier,
+            state_id=str(state["id"]),
+        )
+
+    @staticmethod
+    def _result_items(body: object) -> tuple[dict, ...]:
+        if isinstance(body, list):
+            values = body
+        elif isinstance(body, dict):
+            values = body.get("results") or body.get("data") or ()
+        else:
+            values = ()
+        return tuple(item for item in values if isinstance(item, dict))
 
     async def create_problem(
         self,
@@ -97,12 +200,7 @@ class PlaneClient:
         except (httpx.HTTPError, ValueError) as exc:
             raise ExternalServiceError("Plane reconciliation request failed") from exc
 
-        if isinstance(body, list):
-            candidates = body
-        elif isinstance(body, dict):
-            candidates = body.get("results") or body.get("data") or []
-        else:
-            candidates = []
+        candidates = self._result_items(body)
 
         for candidate in candidates:
             if not isinstance(candidate, dict) or not candidate.get("id"):
@@ -276,18 +374,49 @@ class PlaneClient:
                 else ""
             )
             + (f" — {html.escape(attachment.warning)}" if attachment.warning else "")
+            + " — Origem: "
+            + html.escape(part.author_name)
+            + " em "
+            + html.escape(part.posted_at.isoformat())
             + "</li>"
-            for attachment in message.attachments
+            for part in message.messages
+            for attachment in part.attachments
         )
         if not re.fullmatch(r"spi-source:[0-9a-f]{64}", source_marker):
             raise ValueError("invalid source marker")
         safe_marker = html.escape(source_marker)
         model = analysis.model_used or "unavailable"
-        source = (
-            f'<a href="{html.escape(message.permalink, quote=True)}">Slack</a>'
-            if message.permalink
-            else "Slack (permalink indisponível para o app)"
-        )
+        original_messages = [
+            part.text.strip() for part in message.messages if part.text.strip()
+        ]
+        original_text = "\n".join(original_messages)
+        if not original_text:
+            original_text = "Mensagens selecionadas sem conteúdo textual."
+
+        message_links = []
+        authors: dict[tuple[str, str], list[SourceMessagePart]] = {}
+        for index, part in enumerate(message.messages, start=1):
+            if part.permalink:
+                message_links.append(
+                    f'<a href="{html.escape(part.permalink, quote=True)}">{index}</a>'
+                )
+            else:
+                message_links.append(str(index))
+            authors.setdefault((part.author_id, part.author_name), []).append(part)
+
+        provenance_rows = [
+            "<li>Mensagens no Slack: " + ", ".join(message_links) + "</li>"
+        ]
+        for (author_id, author_name), parts in authors.items():
+            first = parts[0].posted_at.isoformat()
+            last = parts[-1].posted_at.isoformat()
+            period = first if first == last else f"{first} a {last}"
+            provenance_rows.append(
+                "<li>"
+                f"Autor: {html.escape(author_name)} ({html.escape(author_id)}) — "
+                f"{len(parts)} mensagem(ns) — Período UTC: {html.escape(period)}"
+                "</li>"
+            )
         return "".join(
             [
                 "<h2>Resumo</h2><p>",
@@ -296,15 +425,13 @@ class PlaneClient:
                 section("Fatos confirmados", analysis.confirmed_facts),
                 section("Inferências", analysis.inferences),
                 section("Informações ausentes", analysis.missing_information),
-                "<h2>Mensagem original do Slack</h2><pre>",
-                html.escape(message.text),
-                "</pre>",
+                "<h2>Mensagem</h2><pre><code>",
+                html.escape(original_text),
+                "</code></pre>",
                 "<h2>Proveniência</h2><ul>",
-                f"<li>Fonte: {source}</li>",
                 f"<li>Workspace Slack: {html.escape(message.team_id)}</li>",
                 f"<li>Canal: {html.escape(message.channel_id)}</li>",
-                f"<li>Autor: {html.escape(message.author_name)} ({html.escape(message.author_id)})</li>",
-                f"<li>Data UTC: {html.escape(message.posted_at.isoformat())}</li>",
+                *provenance_rows,
                 f"<li>Modelo: {html.escape(model)}</li>",
                 f"<li>Tipo de análise: {html.escape(analysis.analysis_kind)}</li>",
                 f"<li>ID de origem: <code>{safe_marker}</code></li>",

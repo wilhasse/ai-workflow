@@ -5,7 +5,8 @@ import pytest
 import respx
 
 from slack_plane_intake.config import PlaneConfig
-from slack_plane_intake.models import ProblemAnalysis, SourceAttachment
+from slack_plane_intake.errors import ExternalServiceError
+from slack_plane_intake.models import ProblemAnalysis, SourceAttachment, SourceMessage
 from slack_plane_intake.plane_client import PlaneClient
 
 
@@ -36,13 +37,159 @@ SOURCE_MARKER = "spi-source:" + "a" * 64
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_lists_only_writable_projects_with_configured_project_first():
+    route = respx.get("https://plane.test/api/v1/workspaces/ws/projects/").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "id": "P2",
+                        "identifier": "OLOS",
+                        "name": "OLOS",
+                        "is_member": True,
+                    },
+                    {
+                        "id": "P3",
+                        "identifier": "PUBLIC",
+                        "name": "Read only",
+                        "is_member": False,
+                    },
+                    {
+                        "id": "P1",
+                        "identifier": "PROB",
+                        "name": "Problems",
+                        "is_member": True,
+                    },
+                ]
+            },
+        )
+    )
+    client = PlaneClient(plane_config())
+
+    projects = await client.list_projects()
+
+    await client.close()
+    assert [(project.id, project.identifier) for project in projects] == [
+        ("P1", "PROB"),
+        ("P2", "OLOS"),
+    ]
+    assert route.calls[0].request.headers["X-API-Key"] == "secret"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_resolves_selected_project_and_uses_its_default_state():
+    respx.get("https://plane.test/api/v1/workspaces/ws/projects/").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "id": "P1",
+                    "identifier": "PROB",
+                    "name": "Problems",
+                    "is_member": True,
+                },
+                {
+                    "id": "P2",
+                    "identifier": "OLOS",
+                    "name": "OLOS",
+                    "is_member": True,
+                },
+            ],
+        )
+    )
+    states = respx.get(
+        "https://plane.test/api/v1/workspaces/ws/projects/P2/states/"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {"id": "S-TODO", "group": "unstarted", "default": False},
+                {"id": "S-BACKLOG", "group": "backlog", "default": True},
+            ],
+        )
+    )
+    client = PlaneClient(plane_config())
+
+    selected = await client.resolve_project_config("P2")
+
+    await client.close()
+    assert selected.project_id == "P2"
+    assert selected.project_identifier == "OLOS"
+    assert selected.state_id == "S-BACKLOG"
+    assert states.called
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_preserves_configured_state_for_default_project():
+    respx.get("https://plane.test/api/v1/workspaces/ws/projects/").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "id": "P1",
+                    "identifier": "PROB",
+                    "name": "Problems",
+                    "is_member": True,
+                }
+            ],
+        )
+    )
+    respx.get("https://plane.test/api/v1/workspaces/ws/projects/P1/states/").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {"id": "S0", "group": "backlog", "default": True},
+                {"id": "S1", "group": "started", "default": False},
+            ],
+        )
+    )
+    client = PlaneClient(plane_config())
+
+    selected = await client.resolve_project_config("P1")
+
+    await client.close()
+    assert selected.state_id == "S1"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_rejects_forged_or_non_member_project_selection():
+    respx.get("https://plane.test/api/v1/workspaces/ws/projects/").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "id": "P3",
+                    "identifier": "PUBLIC",
+                    "name": "Read only",
+                    "is_member": False,
+                }
+            ],
+        )
+    )
+    client = PlaneClient(plane_config())
+
+    with pytest.raises(ExternalServiceError, match="not available"):
+        await client.resolve_project_config("P3")
+
+    await client.close()
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_create_problem_escapes_evidence_and_builds_key(source_message):
     route = respx.post(
         "https://plane.test/api/v1/workspaces/ws/projects/P1/work-items/"
     ).mock(return_value=httpx.Response(201, json={"id": "I1", "sequence_id": 7}))
     client = PlaneClient(plane_config())
+    unsafe_part = source_message.messages[0].model_copy(
+        update={"text": "<script>alert(1)</script>"}
+    )
     item = await client.create_problem(
-        source_message.model_copy(update={"text": "<script>alert(1)</script>"}),
+        source_message.model_copy(update={"messages": (unsafe_part,)}),
         analysis(),
         SOURCE_MARKER,
     )
@@ -179,3 +326,88 @@ async def test_append_warnings_escapes_text():
     body = patched.calls[0].request.content.decode()
     assert "&lt;failed&gt;" in body
     assert "upload <failed>" not in body
+
+
+def test_render_description_combines_messages_in_one_field_with_provenance(
+    source_message,
+):
+    second = source_message.messages[0].model_copy(
+        update={
+            "message_ts": "1724440001.123456",
+            "author_id": "U2",
+            "author_name": "Second Operator",
+            "text": "screenshot follows",
+            "permalink": "https://slack.test/second",
+            "attachments": (
+                SourceAttachment(
+                    file_id="F2",
+                    name="screen.png",
+                    mime_type="image/png",
+                    size=123,
+                    sha256="abc",
+                ),
+            ),
+        }
+    )
+    bundle = SourceMessage(
+        team_id=source_message.team_id,
+        channel_id=source_message.channel_id,
+        messages=(*source_message.messages, second),
+    )
+
+    rendered = PlaneClient.render_description(bundle, analysis(), SOURCE_MARKER)
+
+    assert rendered.count("<h2>Mensagem</h2>") == 1
+    assert rendered.count("<pre><code>") == 1
+    assert "Mensagem 1" not in rendered
+    assert "Mensagem 2" not in rendered
+    assert "API returns HTTP 500\nscreenshot follows" in rendered
+    assert rendered.count("Second Operator") == 2
+    assert "https://slack.test/second" in rendered
+    assert "Mensagens no Slack:" in rendered
+    assert "1 mensagem(ns)" in rendered
+    assert "screen.png — image/png — 123 bytes" in rendered
+    assert "Origem: Second Operator" in rendered
+
+
+def test_render_description_skips_image_only_message_text_and_groups_author(
+    source_message,
+):
+    first = source_message.messages[0].model_copy(
+        update={"author_id": "U2", "author_name": "Noboru", "text": "Primeira"}
+    )
+    image_only = first.model_copy(
+        update={
+            "message_ts": "1724440001.123456",
+            "text": "",
+            "permalink": "https://slack.test/image",
+            "attachments": (
+                SourceAttachment(
+                    file_id="F2",
+                    name="screen.png",
+                    mime_type="image/png",
+                    size=123,
+                ),
+            ),
+        }
+    )
+    last = first.model_copy(
+        update={
+            "message_ts": "1724440002.123456",
+            "text": "Última",
+            "permalink": "https://slack.test/last",
+            "attachments": (),
+        }
+    )
+    bundle = SourceMessage(
+        team_id=source_message.team_id,
+        channel_id=source_message.channel_id,
+        messages=(first, image_only, last),
+    )
+
+    rendered = PlaneClient.render_description(bundle, analysis(), SOURCE_MARKER)
+
+    assert "<pre><code>Primeira\nÚltima</code></pre>" in rendered
+    assert rendered.count("Autor: Noboru (U2)") == 1
+    assert "3 mensagem(ns)" in rendered
+    assert "Mensagens no Slack:" in rendered

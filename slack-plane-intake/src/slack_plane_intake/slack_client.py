@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -12,12 +13,18 @@ import httpx
 
 from .config import LimitConfig, SlackConfig
 from .errors import ExternalServiceError, SourceValidationError
-from .models import SourceAttachment, SourceMessage
+from .models import SourceAttachment, SourceMessage, SourceMessagePart
 
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 _MESSAGE_TS = re.compile(r"\d{9,}\.(?:\d{1,6})")
 _TEAM_ID = re.compile(r"T[A-Z0-9]+")
 _CHANNEL_ID = re.compile(r"[CDG][A-Z0-9]+")
+
+
+@dataclass
+class _DownloadBudget:
+    files_seen: int = 0
+    total_bytes: int = 0
 
 
 class SlackClient:
@@ -28,6 +35,7 @@ class SlackClient:
         work_dir: Path,
         *,
         client: httpx.AsyncClient | None = None,
+        user_client: httpx.AsyncClient | None = None,
         base_url: str = "https://slack.com/api",
     ) -> None:
         self.config = config
@@ -40,10 +48,21 @@ class SlackClient:
             timeout=60,
             follow_redirects=False,
         )
+        self._owns_user_client = user_client is None and bool(config.history_user_token)
+        self.user_client = user_client
+        if self.user_client is None and config.history_user_token:
+            self.user_client = httpx.AsyncClient(
+                base_url=base_url,
+                headers={"Authorization": f"Bearer {config.history_user_token}"},
+                timeout=60,
+                follow_redirects=False,
+            )
 
     async def close(self) -> None:
         if self._owns_client:
             await self.client.aclose()
+        if self._owns_user_client and self.user_client is not None:
+            await self.user_client.aclose()
 
     async def _api(
         self, method: str, *, request_method: str = "GET", **params: str
@@ -63,6 +82,88 @@ class SlackClient:
             error = str(payload.get("error", "unknown_error"))
             raise ExternalServiceError(f"Slack API rejected {method}: {error}")
         return payload
+
+    async def _user_api(self, method: str, **params: str) -> dict:
+        if self.user_client is None:
+            raise SourceValidationError(
+                "Slack DM history picker is not configured for this user"
+            )
+        try:
+            response = await self.user_client.get(method, params=params)
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise ExternalServiceError(
+                f"Slack user API request failed for {method}"
+            ) from exc
+        if not payload.get("ok"):
+            error = str(payload.get("error", "unknown_error"))
+            raise ExternalServiceError(f"Slack user API rejected {method}: {error}")
+        return payload
+
+    async def fetch_shortcut_history_payloads(
+        self,
+        *,
+        team_id: str,
+        channel_id: str,
+        invoking_user_id: str,
+        selected_message_payload: dict,
+    ) -> tuple[dict, ...]:
+        """Fetch up to ten messages ending at the selected message as the user."""
+        if (
+            not self.config.history_user_id
+            or invoking_user_id != self.config.history_user_id
+        ):
+            raise SourceValidationError(
+                "Slack DM history picker is not configured for this user"
+            )
+        await self._authorize_shortcut(
+            team_id=team_id,
+            channel_id=channel_id,
+            invoking_user_id=invoking_user_id,
+        )
+        selected_ts = str(selected_message_payload.get("ts", ""))
+        if not _MESSAGE_TS.fullmatch(selected_ts):
+            raise SourceValidationError("Slack message timestamp is invalid")
+
+        auth = await self._user_api("auth.test")
+        self._validate_history_identity(
+            auth,
+            team_id=team_id,
+            invoking_user_id=invoking_user_id,
+        )
+        history = await self._user_api(
+            "conversations.history",
+            channel=channel_id,
+            latest=selected_ts,
+            inclusive="true",
+            limit="10",
+        )
+        candidates: dict[str, dict] = {}
+        for value in history.get("messages") or ():
+            if not isinstance(value, dict):
+                continue
+            message_ts = str(value.get("ts", ""))
+            if not _MESSAGE_TS.fullmatch(message_ts):
+                continue
+            if not str(value.get("text") or "").strip() and not value.get("files"):
+                continue
+            candidates[message_ts] = value
+        candidates[selected_ts] = selected_message_payload
+        ordered = tuple(candidates[value] for value in sorted(candidates, key=float))
+        if not ordered:
+            raise SourceValidationError("Slack DM history did not contain messages")
+        preview_names: dict[str, str] = {}
+        decorated = []
+        for value in ordered[-10:]:
+            message = dict(value)
+            author_id = str(message.get("user") or "")
+            if author_id.startswith(("U", "W")):
+                if author_id not in preview_names:
+                    preview_names[author_id] = await self._resolve_user_name(author_id)
+                message["username"] = preview_names[author_id]
+            decorated.append(message)
+        return tuple(decorated)
 
     async def fetch_source_message(self, message_ts: str) -> SourceMessage:
         if not _MESSAGE_TS.fullmatch(message_ts):
@@ -142,9 +243,7 @@ class SlackClient:
         attachments = await self._download_attachments(
             message_ts, tuple(message.get("files") or ())
         )
-        return SourceMessage(
-            team_id=team_id,
-            channel_id=self.config.channel_id,
+        part = SourceMessagePart(
             message_ts=message_ts,
             author_id=author_id,
             author_name=author_name,
@@ -152,6 +251,11 @@ class SlackClient:
             permalink=permalink,
             posted_at=datetime.fromtimestamp(float(message_ts), tz=UTC),
             attachments=attachments,
+        )
+        return SourceMessage(
+            team_id=team_id,
+            channel_id=self.config.channel_id,
+            messages=(part,),
         )
 
     async def fetch_shortcut_source_message(
@@ -162,12 +266,84 @@ class SlackClient:
         invoking_user_id: str,
         message_payload: dict,
     ) -> SourceMessage:
-        """Build a source from a Slack-authenticated message shortcut payload.
+        """Build a source from one Slack-authenticated message shortcut payload."""
+        return await self.fetch_shortcut_source_messages(
+            team_id=team_id,
+            channel_id=channel_id,
+            invoking_user_id=invoking_user_id,
+            message_payloads=(message_payload,),
+        )
+
+    async def fetch_shortcut_source_messages(
+        self,
+        *,
+        team_id: str,
+        channel_id: str,
+        invoking_user_id: str,
+        message_payloads: tuple[dict, ...],
+    ) -> SourceMessage:
+        """Build one ordered source from authenticated shortcut payloads.
 
         Authorization belongs to the human invoking the shortcut. The selected
         message may have been posted by a monitoring bot, so its author is
         recorded as provenance but is not used as the authorization principal.
         """
+        await self._authorize_shortcut(
+            team_id=team_id,
+            channel_id=channel_id,
+            invoking_user_id=invoking_user_id,
+        )
+        if not 1 <= len(message_payloads) <= 10:
+            raise SourceValidationError(
+                "Slack ticket source must contain between 1 and 10 messages"
+            )
+        timestamps = []
+        for message_payload in message_payloads:
+            if not isinstance(message_payload, dict):
+                raise SourceValidationError("Slack shortcut message payload is invalid")
+            message_ts = str(message_payload.get("ts", ""))
+            if not _MESSAGE_TS.fullmatch(message_ts):
+                raise SourceValidationError("Slack message timestamp is invalid")
+            timestamps.append(message_ts)
+        if len(set(timestamps)) != len(timestamps):
+            raise SourceValidationError(
+                "Slack ticket source contains duplicate messages"
+            )
+
+        budget = _DownloadBudget()
+        parts = []
+        use_history_user = bool(
+            self.config.history_user_token
+            and invoking_user_id == self.config.history_user_id
+        )
+        if use_history_user:
+            history_auth = await self._user_api("auth.test")
+            self._validate_history_identity(
+                history_auth,
+                team_id=team_id,
+                invoking_user_id=invoking_user_id,
+            )
+        for message_payload in sorted(
+            message_payloads, key=lambda payload: float(str(payload["ts"]))
+        ):
+            parts.append(
+                await self._shortcut_source_part(
+                    channel_id=channel_id,
+                    message_payload=message_payload,
+                    budget=budget,
+                    use_history_user=use_history_user,
+                )
+            )
+        ordered = tuple(sorted(parts, key=lambda part: float(part.message_ts)))
+        return SourceMessage(
+            team_id=team_id,
+            channel_id=channel_id,
+            messages=ordered,
+        )
+
+    async def _authorize_shortcut(
+        self, *, team_id: str, channel_id: str, invoking_user_id: str
+    ) -> None:
         if invoking_user_id not in self.config.shortcut_allowed_users:
             raise SourceValidationError(
                 "Slack user is not allowed to create problem tickets"
@@ -176,12 +352,6 @@ class SlackClient:
             raise SourceValidationError("Slack shortcut workspace ID is invalid")
         if not _CHANNEL_ID.fullmatch(channel_id):
             raise SourceValidationError("Slack shortcut channel ID is invalid")
-        if not isinstance(message_payload, dict):
-            raise SourceValidationError("Slack shortcut message payload is invalid")
-
-        message_ts = str(message_payload.get("ts", ""))
-        if not _MESSAGE_TS.fullmatch(message_ts):
-            raise SourceValidationError("Slack message timestamp is invalid")
 
         auth = await self._api("auth.test")
         authenticated_team_id = str(auth.get("team_id", ""))
@@ -189,6 +359,21 @@ class SlackClient:
             raise SourceValidationError(
                 "Slack shortcut workspace does not match the configured bot token"
             )
+
+    async def _shortcut_source_part(
+        self,
+        *,
+        channel_id: str,
+        message_payload: dict,
+        budget: _DownloadBudget,
+        use_history_user: bool,
+    ) -> SourceMessagePart:
+        if not isinstance(message_payload, dict):
+            raise SourceValidationError("Slack shortcut message payload is invalid")
+
+        message_ts = str(message_payload.get("ts", ""))
+        if not _MESSAGE_TS.fullmatch(message_ts):
+            raise SourceValidationError("Slack message timestamp is invalid")
 
         files = tuple(
             item
@@ -219,9 +404,14 @@ class SlackClient:
 
         permalink = ""
         try:
-            permalink_payload = await self._api(
-                "chat.getPermalink", channel=channel_id, message_ts=message_ts
-            )
+            if use_history_user:
+                permalink_payload = await self._user_api(
+                    "chat.getPermalink", channel=channel_id, message_ts=message_ts
+                )
+            else:
+                permalink_payload = await self._api(
+                    "chat.getPermalink", channel=channel_id, message_ts=message_ts
+                )
             permalink = str(permalink_payload.get("permalink", ""))
         except ExternalServiceError:
             # A message shortcut can be invoked where the app is not a channel
@@ -229,10 +419,13 @@ class SlackClient:
             # ticket creation should continue without a clickable permalink.
             pass
 
-        attachments = await self._download_attachments(message_ts, files)
-        return SourceMessage(
-            team_id=team_id,
-            channel_id=channel_id,
+        attachments = await self._download_attachments(
+            message_ts,
+            files,
+            budget=budget,
+            use_history_user=use_history_user,
+        )
+        return SourceMessagePart(
             message_ts=message_ts,
             author_id=author_id,
             author_name=author_name,
@@ -301,21 +494,34 @@ class SlackClient:
         return "\n\n".join(parts)
 
     async def _download_attachments(
-        self, message_ts: str, files: tuple[dict, ...]
+        self,
+        message_ts: str,
+        files: tuple[dict, ...],
+        *,
+        budget: _DownloadBudget | None = None,
+        use_history_user: bool = False,
     ) -> tuple[SourceAttachment, ...]:
         batch_dir = self.work_dir / message_ts.replace(".", "_")
-        total_bytes = 0
+        budget = budget or _DownloadBudget()
         results: list[SourceAttachment] = []
 
         for index, shallow in enumerate(files):
             file_id = str(shallow.get("id", "")) or f"unknown-{index + 1}"
-            if index >= self.limits.max_files:
+            if budget.files_seen >= self.limits.max_files:
                 results.append(
                     self._metadata(shallow, file_id, "file-count limit exceeded")
                 )
                 continue
+            budget.files_seen += 1
             try:
-                detail = (await self._api("files.info", file=file_id)).get("file", {})
+                if use_history_user:
+                    detail = (await self._user_api("files.info", file=file_id)).get(
+                        "file", {}
+                    )
+                else:
+                    detail = (await self._api("files.info", file=file_id)).get(
+                        "file", {}
+                    )
             except ExternalServiceError as exc:
                 results.append(self._metadata(shallow, file_id, str(exc)))
                 continue
@@ -326,7 +532,7 @@ class SlackClient:
                     self._metadata(detail, file_id, "per-file size limit exceeded")
                 )
                 continue
-            if total_bytes + size > self.limits.max_total_bytes:
+            if budget.total_bytes + size > self.limits.max_total_bytes:
                 results.append(
                     self._metadata(detail, file_id, "batch size limit exceeded")
                 )
@@ -346,7 +552,11 @@ class SlackClient:
             safe_name = safe_name or f"{file_id}.bin"
             local_path = batch_dir / f"{file_id}-{safe_name}"
             try:
-                raw = await self._download(download_url, self.limits.max_file_bytes)
+                raw = await self._download(
+                    download_url,
+                    self.limits.max_file_bytes,
+                    use_history_user=use_history_user,
+                )
             except ExternalServiceError as exc:
                 results.append(self._metadata(detail, file_id, str(exc)))
                 continue
@@ -360,7 +570,7 @@ class SlackClient:
 
             batch_dir.mkdir(parents=True, exist_ok=True)
             local_path.write_bytes(raw)
-            total_bytes += len(raw)
+            budget.total_bytes += len(raw)
             results.append(
                 SourceAttachment(
                     file_id=file_id,
@@ -374,9 +584,16 @@ class SlackClient:
             )
         return tuple(results)
 
-    async def _download(self, url: str, max_bytes: int) -> bytes:
+    async def _download(
+        self, url: str, max_bytes: int, *, use_history_user: bool = False
+    ) -> bytes:
+        download_client = self.user_client if use_history_user else self.client
+        if download_client is None:
+            raise SourceValidationError(
+                "Slack DM history picker is not configured for file access"
+            )
         try:
-            async with self.client.stream("GET", url) as response:
+            async with download_client.stream("GET", url) as response:
                 response.raise_for_status()
                 chunks: list[bytes] = []
                 size = 0
@@ -400,6 +617,19 @@ class SlackClient:
         return parsed.scheme == "https" and (
             host == "slack.com" or host.endswith(".slack.com")
         )
+
+    @staticmethod
+    def _validate_history_identity(
+        payload: dict, *, team_id: str, invoking_user_id: str
+    ) -> None:
+        if str(payload.get("team_id", "")) != team_id:
+            raise SourceValidationError(
+                "Slack history token workspace does not match the shortcut"
+            )
+        if str(payload.get("user_id", "")) != invoking_user_id:
+            raise SourceValidationError(
+                "Slack history token does not belong to the invoking user"
+            )
 
     @staticmethod
     def _metadata(payload: dict, file_id: str, warning: str) -> SourceAttachment:

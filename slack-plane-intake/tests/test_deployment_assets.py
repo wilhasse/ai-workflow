@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -8,6 +9,7 @@ def test_examples_are_redacted_and_restricted():
     config_example = (ROOT / "deploy/hermes-config.example.yaml").read_text()
     assert "xoxb-redacted" in env_example
     assert "xapp-redacted" in env_example
+    assert "xoxp-redacted" in env_example
     assert "slack-plane-intake" in config_example
     assert "create_plane_problem" in config_example
     assert "slack: []" in config_example
@@ -19,6 +21,14 @@ def test_examples_are_redacted_and_restricted():
     assert "SPI_PLANE_BASE_URL=https://plane.cslog.com.br" in env_example
     assert "SPI_PLANE_WORKSPACE=cslog" in env_example
     assert "SPI_PLANE_PROJECT_IDENTIFIER=AGENTE" in env_example
+    assert "SPI_SLACK_HISTORY_USER_ID=U_REDACTED" in env_example
+    assert "SPI_SLACK_HISTORY_USER_TOKEN=xoxp-redacted" in env_example
+    assert "SPI_USER_CREDENTIALS_FILE" in env_example
+    credentials = json.loads(
+        (ROOT / "deploy/user-credentials.example.json").read_text()
+    )
+    assert credentials["U_REDACTED"]["slack_user_token"] == "xoxp-redacted"
+    assert credentials["U_REDACTED"]["plane_api_key"] == "plane_api_redacted"
     assert config_example.startswith("_config_version: 38\n")
 
 
@@ -44,7 +54,9 @@ def test_hermes_installer_includes_slack_and_mcp_clients():
     assert "/home/cslog/.local/bin/hermes" in installer
     assert "hermes-slack-problem-intake-shortcut.patch" in installer
     assert "hermes-slack-shortcut-multi-user.patch" in installer
+    assert "hermes-slack-multi-message-modal.patch" in installer
     assert "problem_intake_shortcut.py" in installer
+    assert "problem_intake_modal.py" in installer
 
 
 def test_hermes_shortcut_patch_is_private_and_bypasses_agent_loop():
@@ -66,6 +78,21 @@ def test_hermes_shortcut_has_a_separate_multi_user_allowlist():
     assert "SLACK_BOT_TOKEN" not in patch
 
 
+def test_hermes_modal_patch_registers_shortcut_and_view_callbacks():
+    patch = (ROOT / "patches/hermes-slack-multi-message-modal.patch").read_text()
+    bridge = (ROOT / "hermes_bridge/problem_intake_modal.py").read_text()
+    assert "from .problem_intake_modal import" in patch
+    assert "self._app.view" in patch
+    assert "handle_modal_submission" in patch
+    assert "views_open" in bridge
+    assert "views_update" in bridge
+    assert "slack_plane_intake.modal_cli" in bridge
+    assert "selected_message_ts" in bridge
+    assert '"type": "static_select"' in bridge
+    assert '"project_id": project_id' in bridge
+    assert "SLACK_BOT_TOKEN" not in bridge
+
+
 def test_activation_is_guarded_by_slack_and_single_owner_checks():
     local = (ROOT / "scripts/activate-godev.sh").read_text()
     target = (ROOT / "scripts/activate-target.py").read_text()
@@ -74,6 +101,8 @@ def test_activation_is_guarded_by_slack_and_single_owner_checks():
     assert "reference_status" in local
     assert "mcp test slack-plane-intake" in local
     assert "files:read" in target
+    assert "SPI_SLACK_HISTORY_USER_TOKEN" in target
+    assert '"im:history"' in target
     assert "conversations.open" in target
     assert "conversations.info" not in target
     assert "conversations.join" not in target

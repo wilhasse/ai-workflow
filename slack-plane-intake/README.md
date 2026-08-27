@@ -2,14 +2,15 @@
 
 `slack-plane-intake` is the restricted Slack-to-Plane boundary used by Hermes
 for CSLOG-179. The authorized user can send one top-level direct message to the
-existing Hermes Slack app or invoke the `Create AGENTE ticket` message shortcut
-on an alert in another Slack conversation. The service analyzes the exact
-source, creates one Plane work item, uploads unchanged originals when Slack
-permits file access, and deduplicates retries.
+existing Hermes Slack app or invoke the `Create Plane ticket` message shortcut
+on one or more messages in another Slack conversation. The service analyzes the
+exact selected sources, creates one Plane work item, uploads unchanged originals
+when Slack permits file access, and deduplicates retries.
 
 The authorization boundary remains deliberately narrow: Slack only, one
-authorized shortcut user, one one-to-one Hermes intake DM, and one Plane
-project. The app does not passively consume generic channels. Channel intake
+authorized shortcut allowlist and one one-to-one Hermes intake DM. The shortcut
+lists only Plane projects in which the invoking Plane user is a member, with
+`AGENTE` as the configured default. The app does not passively consume generic channels. Channel intake
 occurs only when the authorized user explicitly selects a message shortcut. It
 does not read a whole thread, use reactions as triggers, use Hermes Kanban, or
 process WhatsApp.
@@ -33,8 +34,11 @@ Visual analysis falls back through `kimi-k3`, `qwen3.8-max`, then
 clearly marked partial ticket containing the raw evidence and warnings.
 
 The source key `slack:<team>:<channel>:<message_ts>` and a visible, immutable
-Plane provenance ID make repeated delivery idempotent. Runtime state is stored under
-`~/.local/state/slack-plane-intake` by default. The SQLite ledger uses
+Plane provenance ID make repeated delivery idempotent. Multi-message sources use
+`slack-bundle:<team>:<channel>:<sha256-of-ordered-timestamps>` while retaining
+each message's author, UTC timestamp, text, permalink, and attachments. Runtime
+state is stored under `~/.local/state/slack-plane-intake` by default. The SQLite
+ledger and shortcut drafts use
 full-synchronous rollback journaling because the current target host's SQLite
 version is affected by an upstream WAL-reset defect.
 
@@ -142,29 +146,104 @@ and bot scopes `im:history`, `im:write`, `chat:write`, `files:read`, and
 
 For channel alerts, add an **On messages** shortcut to that same app:
 
-- Name: `Create AGENTE ticket`
+- Name: `Create Plane ticket`
 - Callback ID: `create_agente_ticket`
-- Description: `Create a Plane AGENTE ticket from this Slack message`
+- Description: `Create one Plane ticket from selected Slack messages`
 
-The patched Hermes adapter registers the callback on its existing Socket Mode
-connection, acknowledges it immediately, authorizes the invoking user against
-`SPI_SLACK_SHORTCUT_ALLOWED_USERS`, and invokes the intake CLI without an LLM
-turn. This shortcut-only allowlist may contain multiple Slack member IDs; keep
-`SPI_SLACK_ALLOWED_USERS` restricted to the single Hermes DM owner. If the
-shortcut variable is absent, it defaults to that DM owner for backward
-compatibility. Its
-progress and result are sent ephemerally through Slack's response URL, with the
-invoking user's Hermes DM as a private fallback. A monitoring bot is allowed to
-be the selected message's author; it is the human shortcut invocation that
-grants authority. If the app cannot read a channel permalink or attached file,
-the ticket is still created as partial with an explicit warning.
+The patched Hermes adapter registers both the shortcut and its Slack-native modal
+callback on the existing Socket Mode connection. It acknowledges the shortcut,
+opens the modal before Slack's trigger expires, authorizes the invoking user
+against `SPI_SLACK_SHORTCUT_ALLOWED_USERS`, and invokes the restricted modal CLI
+without an LLM turn. This shortcut-only allowlist may contain multiple Slack
+member IDs; keep `SPI_SLACK_ALLOWED_USERS` restricted to the single Hermes DM
+owner. If the shortcut variable is absent, it defaults to that DM owner for
+backward compatibility.
+
+To create one ticket from several messages in the same conversation:
+
+1. Run `Create Plane ticket` on the last message in the request burst.
+2. The modal loads up to the last 10 messages ending at that message.
+3. Only the message used to open the shortcut starts selected. Each option shows
+   its São Paulo date/time and Slack author; select the other related text and
+   screenshot messages, choose the destination in the searchable **Projeto
+   Plane** selector, then choose **Criar ticket**.
+
+The project list is loaded with the authenticated invoking user's Plane token.
+On submission, the selected project is fetched again with that same token before
+the workflow resolves the project's initial state and creates the work item.
+Read-only/public projects in which the user is not a member are not offered.
+
+Reading a normal person-to-person DM requires a Slack User OAuth token because
+the Hermes bot is not a member of that conversation. In the existing Slack app,
+add the User Token Scopes `im:history` and `files:read`, reinstall the app as the
+DM owner, and put the resulting user token and owner ID in the protected runtime
+environment:
+
+```bash
+SPI_SLACK_HISTORY_USER_ID=U_REDACTED
+SPI_SLACK_HISTORY_USER_TOKEN=xoxp-redacted
+```
+
+This is an intentional permission expansion: the user token can read private
+conversations visible to that user. The implementation binds the token to that
+exact Slack user, verifies the workspace and user through `auth.test`, retrieves
+only one bounded 10-message window ending at the explicitly selected message,
+and never uses that token for another shortcut user. Activation validates the
+token identity and both required user scopes before restarting Hermes.
+
+For multiple users, store each person's Slack User OAuth token together with
+their own Plane personal API key in a rootless service-owned file rather than in
+the shared environment. Copy `deploy/user-credentials.example.json` to a path
+under `~/.hermes`, replace the placeholders, restrict it, and reference it from
+the environment:
+
+```bash
+install -m 0600 deploy/user-credentials.example.json \
+  ~/.hermes/slack-plane-users.json
+# Edit the protected file without pasting tokens into shell history.
+SPI_USER_CREDENTIALS_FILE=/home/cslog/.hermes/slack-plane-users.json
+```
+
+Each JSON key must be a member of `SPI_SLACK_SHORTCUT_ALLOWED_USERS`. Its
+`slack_user_token` must belong to that exact Slack user and include
+`im:history` plus `files:read`; `plane_api_key` must be that person's Plane
+personal API key with access to the AGENTE default project and any other project
+they need in the selector. Activation validates Slack identity/workspace/scopes,
+the Plane current-user response, and AGENTE read access before restarting Hermes.
+At submission time the workflow selects both
+credentials exclusively by the authenticated Slack invoking-user ID. Users not
+present in this registry retain the existing collector/global-Plane fallback.
+
+Each authorized user has one private draft per Slack conversation. Repeating the
+shortcut on the same message is idempotent, drafts expire after two hours, and a
+draft accepts at most 10 messages. Users without a configured history token keep
+the explicit collector fallback: each shortcut adds one message and closing the
+modal preserves the draft. A
+successful, partial, or already-existing Plane result clears it; a failure keeps
+it for retry. For diagnostics, a content-free audit retains the offered and
+selected Slack timestamps, result status, and Plane key for 30 days; message text
+and attachment metadata are not copied into that audit. Slack progress and
+results are delivered privately in the invoking user's Hermes DM. A monitoring
+bot is allowed to be a selected message's author;
+it is the human shortcut invocation that grants authority. The workflow does not
+passively monitor conversations; it requests a bounded history window only after
+the bound user explicitly invokes the shortcut on one message. This makes the
+picker work in human-to-human DMs without adding the Hermes bot to them.
+If the app cannot read a permalink or attached file, the ticket is still created
+as partial with an explicit warning.
 
 ## Acceptance and rollback
 
-Live acceptance requires a text DM, a screenshot DM, a duplicate delivery of
-one event, an unauthorized-user attempt, and a thread-reply attempt. Only the
-first two may create tickets; the duplicate must return the same key. Original
-Plane attachments and their recorded hashes must match.
+Live acceptance requires invoking the shortcut once on the last message of a DM
+burst containing at least two texts and one screenshot. The modal must show the
+bounded history with date/time and author labels, initially select only the
+message that opened the shortcut, default the project selector to AGENTE, and
+create exactly one ticket in the chosen project containing every selected
+message's provenance and original attachment. A token/user mismatch and
+an unauthorized-user attempt must fail before any DM history is returned.
+The Plane description combines all selected Slack text under one **Mensagem**
+field; individual author, timestamp, permalink, and attachment provenance remain
+listed below it without numbered message headings.
 
 Rollback stops and disables only the new service on `10.1.0.7`:
 

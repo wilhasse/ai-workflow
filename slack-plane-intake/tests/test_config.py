@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from slack_plane_intake.config import load_config
@@ -62,6 +65,108 @@ def test_shortcut_allowlist_defaults_to_dm_owner(required_env):
     config = load_config(required_env)
 
     assert config.slack.shortcut_allowed_users == config.slack.allowed_users
+
+
+def test_history_picker_requires_matching_user_token_pair(required_env):
+    required_env["SPI_SLACK_HISTORY_USER_ID"] = "U1"
+    with pytest.raises(ConfigurationError, match="configured together"):
+        load_config(required_env)
+
+
+def test_history_picker_is_bound_to_an_authorized_user_and_redacted(required_env):
+    required_env["SPI_SLACK_SHORTCUT_ALLOWED_USERS"] = "U1,U2"
+    required_env["SPI_SLACK_HISTORY_USER_ID"] = "U1"
+    required_env["SPI_SLACK_HISTORY_USER_TOKEN"] = "xoxp-history-secret"
+
+    config = load_config(required_env)
+
+    assert config.slack.history_user_id == "U1"
+    assert config.slack.history_user_token == "xoxp-history-secret"
+    assert config.redacted_summary()["slack_history_picker_enabled"] is True
+    assert "xoxp-history-secret" not in repr(config.redacted_summary())
+
+
+def test_history_picker_rejects_user_outside_shortcut_allowlist(required_env):
+    required_env["SPI_SLACK_HISTORY_USER_ID"] = "U2"
+    required_env["SPI_SLACK_HISTORY_USER_TOKEN"] = "xoxp-history-secret"
+    with pytest.raises(ConfigurationError, match="must be in"):
+        load_config(required_env)
+
+
+def test_personal_credentials_scope_slack_and_plane_by_shortcut_user(required_env):
+    required_env["SPI_SLACK_SHORTCUT_ALLOWED_USERS"] = "U1,U2"
+    path = Path(required_env["SPI_STATE_ROOT"]).parent / "users.json"
+    path.write_text(
+        json.dumps(
+            {
+                "U2": {
+                    "slack_user_token": "xoxp-user-two",
+                    "plane_api_key": "plane-user-two",
+                }
+            }
+        )
+    )
+    path.chmod(0o600)
+    required_env["SPI_USER_CREDENTIALS_FILE"] = str(path)
+
+    config = load_config(required_env)
+    scoped = config.for_shortcut_user("U2")
+
+    assert scoped.slack.history_user_id == "U2"
+    assert scoped.slack.history_user_token == "xoxp-user-two"
+    assert scoped.plane.api_key == "plane-user-two"
+    assert config.plane.api_key == "plane-secret"
+    assert config.for_shortcut_user("U1") is config
+    summary = config.redacted_summary()
+    assert summary["shortcut_personal_credential_count"] == 1
+    assert "xoxp-user-two" not in repr(summary)
+    assert "plane-user-two" not in repr(summary)
+
+
+def test_personal_credentials_require_private_file_and_authorized_user(required_env):
+    required_env["SPI_SLACK_SHORTCUT_ALLOWED_USERS"] = "U1,U2"
+    path = Path(required_env["SPI_STATE_ROOT"]).parent / "users.json"
+    path.write_text(
+        json.dumps(
+            {
+                "U3": {
+                    "slack_user_token": "xoxp-user-three",
+                    "plane_api_key": "plane-user-three",
+                }
+            }
+        )
+    )
+    path.chmod(0o644)
+    required_env["SPI_USER_CREDENTIALS_FILE"] = str(path)
+
+    with pytest.raises(ConfigurationError, match="mode 0600"):
+        load_config(required_env)
+
+    path.chmod(0o600)
+    with pytest.raises(ConfigurationError, match="unauthorized") as raised:
+        load_config(required_env)
+    assert "xoxp-user-three" not in str(raised.value)
+    assert "plane-user-three" not in str(raised.value)
+
+
+def test_personal_credentials_reject_extra_fields(required_env):
+    path = Path(required_env["SPI_STATE_ROOT"]).parent / "users.json"
+    path.write_text(
+        json.dumps(
+            {
+                "U1": {
+                    "slack_user_token": "xoxp-user-one",
+                    "plane_api_key": "plane-user-one",
+                    "unexpected": "value",
+                }
+            }
+        )
+    )
+    path.chmod(0o600)
+    required_env["SPI_USER_CREDENTIALS_FILE"] = str(path)
+
+    with pytest.raises(ConfigurationError, match="contain only"):
+        load_config(required_env)
 
 
 def test_rejects_credentials_embedded_in_base_url(required_env):

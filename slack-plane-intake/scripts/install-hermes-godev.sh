@@ -24,6 +24,8 @@ incoming_dir="$install_root/incoming"
 remote_patch="$incoming_dir/hermes-slack-trigger-message-id.patch"
 remote_shortcut_patch="$incoming_dir/hermes-slack-problem-intake-shortcut.patch"
 remote_shortcut_users_patch="$incoming_dir/hermes-slack-shortcut-multi-user.patch"
+remote_modal_patch="$incoming_dir/hermes-slack-multi-message-modal.patch"
+remote_modal_module="$incoming_dir/problem_intake_modal.py"
 
 ssh "$host" 'command -v git >/dev/null && command -v python3 >/dev/null && test "$(id -un)" = cslog'
 ssh "$host" "install -d -m 0700 '$incoming_dir' '$install_root/releases'"
@@ -32,16 +34,23 @@ scp -q -- "$script_dir/../patches/hermes-slack-problem-intake-shortcut.patch" \
   "$host:$remote_shortcut_patch"
 scp -q -- "$script_dir/../patches/hermes-slack-shortcut-multi-user.patch" \
   "$host:$remote_shortcut_users_patch"
+scp -q -- "$script_dir/../patches/hermes-slack-multi-message-modal.patch" \
+  "$host:$remote_modal_patch"
+scp -q -- "$script_dir/../hermes_bridge/problem_intake_modal.py" \
+  "$host:$remote_modal_module"
 
 ssh "$host" bash -s -- \
   "$commit" "$release_dir" "$remote_patch" "$remote_shortcut_patch" \
-  "$remote_shortcut_users_patch" <<'REMOTE'
+  "$remote_shortcut_users_patch" "$remote_modal_patch" \
+  "$remote_modal_module" <<'REMOTE'
 set -euo pipefail
 commit=$1
 release_dir=$2
 patch_file=$3
 shortcut_patch_file=$4
 shortcut_users_patch_file=$5
+modal_patch_file=$6
+modal_module=$7
 
 if [[ ! -d "$release_dir/.git" ]]; then
   if [[ -e "$release_dir" ]]; then
@@ -67,8 +76,14 @@ fi
 if git -C "$release_dir" apply --check "$shortcut_patch_file" 2>/dev/null; then
   git -C "$release_dir" apply "$shortcut_patch_file"
 elif ! git -C "$release_dir" apply --reverse --check "$shortcut_patch_file" 2>/dev/null; then
-  echo "Hermes shortcut patch is neither applicable nor already applied" >&2
-  exit 1
+  shortcut_adapter="$release_dir/plugins/platforms/slack/adapter.py"
+  shortcut_module="$release_dir/plugins/platforms/slack/problem_intake_shortcut.py"
+  if [[ ! -f "$shortcut_module" ]] || \
+    ! grep -Fq '_problem_intake_callback_id' "$shortcut_adapter" || \
+    ! grep -Fq 'self._app.shortcut(_problem_intake_callback_id)' "$shortcut_adapter"; then
+    echo "Hermes shortcut patch is neither applicable nor already applied" >&2
+    exit 1
+  fi
 fi
 if git -C "$release_dir" apply --check "$shortcut_users_patch_file" 2>/dev/null; then
   git -C "$release_dir" apply "$shortcut_users_patch_file"
@@ -76,6 +91,14 @@ elif ! git -C "$release_dir" apply --reverse --check "$shortcut_users_patch_file
   echo "Hermes shortcut user patch is neither applicable nor already applied" >&2
   exit 1
 fi
+if git -C "$release_dir" apply --check "$modal_patch_file" 2>/dev/null; then
+  git -C "$release_dir" apply "$modal_patch_file"
+elif ! git -C "$release_dir" apply --reverse --check "$modal_patch_file" 2>/dev/null; then
+  echo "Hermes multi-message modal patch is neither applicable nor already applied" >&2
+  exit 1
+fi
+install -m 0600 -- "$modal_module" \
+  "$release_dir/plugins/platforms/slack/problem_intake_modal.py"
 
 if [[ ! -x "$release_dir/.venv/bin/python" ]]; then
   python3 -m venv "$release_dir/.venv"
@@ -84,7 +107,8 @@ fi
 "$release_dir/.venv/bin/python" -m py_compile \
   "$release_dir/gateway/run.py" \
   "$release_dir/plugins/platforms/slack/adapter.py" \
-  "$release_dir/plugins/platforms/slack/problem_intake_shortcut.py"
+  "$release_dir/plugins/platforms/slack/problem_intake_shortcut.py" \
+  "$release_dir/plugins/platforms/slack/problem_intake_modal.py"
 
 link_tmp=/home/cslog/.hermes-agent-link
 ln -sfn -- "$release_dir" "$link_tmp"
