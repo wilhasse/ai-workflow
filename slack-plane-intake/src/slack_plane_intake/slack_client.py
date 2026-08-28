@@ -20,9 +20,9 @@ _SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 _MESSAGE_TS = re.compile(r"\d{9,}\.(?:\d{1,6})")
 _TEAM_ID = re.compile(r"T[A-Z0-9]+")
 _CHANNEL_ID = re.compile(r"[CDG][A-Z0-9]+")
-_HISTORY_WINDOW_SECONDS = 15 * 60
+_HISTORY_WINDOW_SECONDS = 30 * 60
 _HISTORY_CANDIDATE_LIMIT = 100
-_HISTORY_SELECTION_LIMIT = 10
+_HISTORY_SELECTION_LIMIT = 20
 
 
 @dataclass
@@ -113,7 +113,7 @@ class SlackClient:
         invoking_user_id: str,
         selected_message_payload: dict,
     ) -> tuple[dict, ...]:
-        """Fetch the ten closest messages in a 15-minute window as the user."""
+        """Fetch the 20 closest messages in a 30-minute window as the user."""
         if (
             not self.config.history_user_id
             or invoking_user_id != self.config.history_user_id
@@ -307,9 +307,9 @@ class SlackClient:
             channel_id=channel_id,
             invoking_user_id=invoking_user_id,
         )
-        if not 1 <= len(message_payloads) <= 10:
+        if not 1 <= len(message_payloads) <= _HISTORY_SELECTION_LIMIT:
             raise SourceValidationError(
-                "Slack ticket source must contain between 1 and 10 messages"
+                "Slack ticket source must contain between 1 and 20 messages"
             )
         timestamps = []
         for message_payload in message_payloads:

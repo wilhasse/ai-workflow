@@ -75,6 +75,8 @@ def test_collector_modal_selects_all_and_metadata_contains_no_message_text(bridg
 
     assert view["callback_id"] == "create_agente_ticket_modal"
     assert view["title"]["text"] == "Ticket Plane"
+    assert message_element["type"] == "multi_static_select"
+    assert message_element["max_selected_items"] == 20
     assert message_element["initial_options"] == message_element["options"]
     assert project_element["type"] == "static_select"
     assert project_element["initial_option"]["value"] == "P-DELTA"
@@ -95,13 +97,46 @@ def test_history_picker_modal_selects_all_nearby_messages(bridge):
     view = bridge._ready_view(result)
 
     assert view["close"]["text"] == "Cancelar"
-    assert "janela de 15 minutos" in view["blocks"][0]["text"]["text"]
+    assert "janela de 30 minutos" in view["blocks"][0]["text"]["text"]
     element = view["blocks"][2]["element"]
     assert [option["value"] for option in element["initial_options"]] == [
         "1724440000.000001",
         "1724440001.000001",
     ]
     assert "Todas começam marcadas" in view["blocks"][0]["text"]["text"]
+
+
+def test_modal_offers_and_preselects_twenty_messages(bridge):
+    result = ready_result()
+    result["mode"] = "history"
+    result["initial_message_ts"] = "1724440010.000001"
+    result["messages"] = [
+        {
+            "message_ts": f"17244400{index:02d}.000001",
+            "label": f"{index + 1}. message",
+        }
+        for index in range(20)
+    ]
+
+    view = bridge._ready_view(result)
+    element = view["blocks"][2]["element"]
+
+    assert len(element["options"]) == 20
+    assert element["initial_options"] == element["options"]
+
+
+def test_modal_rejects_more_than_twenty_messages(bridge):
+    result = ready_result()
+    result["messages"] = [
+        {
+            "message_ts": f"17244400{index:02d}.000001",
+            "label": f"{index + 1}. message",
+        }
+        for index in range(21)
+    ]
+
+    with pytest.raises(ValueError, match="messages"):
+        bridge._ready_view(result)
 
 
 def test_history_picker_rejects_a_missing_anchor(bridge):

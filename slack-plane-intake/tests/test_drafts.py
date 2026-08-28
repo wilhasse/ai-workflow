@@ -82,11 +82,11 @@ def test_draft_selection_fails_closed_and_clear_checks_owner(tmp_path):
     )
 
 
-def test_draft_rejects_eleventh_message_and_expired_draft(tmp_path):
+def test_draft_rejects_twenty_first_message_and_expired_draft(tmp_path):
     path = tmp_path / "state.sqlite3"
     store = DraftStore(path)
     snapshot = None
-    for index in range(10):
+    for index in range(20):
         ts = f"17244400{index:02d}.000001"
         snapshot = store.add(
             team_id="T1",

@@ -11,7 +11,7 @@ from pathlib import Path
 
 from .errors import SourceValidationError
 
-_MAX_DRAFT_MESSAGES = 10
+_MAX_DRAFT_MESSAGES = 20
 _MAX_MESSAGE_PAYLOAD_BYTES = 256 * 1024
 _AUDIT_RETENTION = timedelta(days=30)
 _AUDIT_STATUSES = {"processing", "created", "existing", "partial", "failed"}
@@ -144,7 +144,7 @@ class DraftStore:
             if existing is None and count >= _MAX_DRAFT_MESSAGES:
                 connection.rollback()
                 raise SourceValidationError(
-                    "Slack draft already contains the maximum of 10 messages"
+                    "Slack draft already contains the maximum of 20 messages"
                 )
             connection.execute(
                 """
@@ -178,7 +178,7 @@ class DraftStore:
     ) -> DraftSnapshot:
         if not 1 <= len(messages) <= _MAX_DRAFT_MESSAGES:
             raise SourceValidationError(
-                "Slack history picker must contain between 1 and 10 messages"
+                "Slack history picker must contain between 1 and 20 messages"
             )
         timestamps = tuple(message_ts for message_ts, _payload in messages)
         if len(set(timestamps)) != len(timestamps):

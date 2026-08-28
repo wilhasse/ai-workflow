@@ -94,7 +94,7 @@ class ModalSubmitRequest(BaseModel):
     channel_id: str
     draft_id: str = Field(min_length=1, max_length=64)
     project_id: str = Field(min_length=1, max_length=64)
-    selected_message_ts: tuple[str, ...] = Field(min_length=1, max_length=10)
+    selected_message_ts: tuple[str, ...] = Field(min_length=1, max_length=20)
 
     @field_validator("team_id")
     @classmethod

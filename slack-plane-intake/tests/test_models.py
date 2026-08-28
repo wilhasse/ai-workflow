@@ -43,3 +43,16 @@ def test_multi_message_source_rejects_duplicates_and_non_chronological_order():
         SourceMessage(team_id="T1", channel_id="D1", messages=(first, first))
     with pytest.raises(ValidationError, match="chronological"):
         SourceMessage(team_id="T1", channel_id="D1", messages=(second, first))
+
+
+def test_multi_message_source_accepts_twenty_and_rejects_twenty_one():
+    messages = tuple(
+        part(f"17244400{index:02d}.000001", f"message {index + 1}")
+        for index in range(21)
+    )
+
+    source = SourceMessage(team_id="T1", channel_id="D1", messages=messages[:20])
+    assert len(source.messages) == 20
+
+    with pytest.raises(ValidationError, match="20"):
+        SourceMessage(team_id="T1", channel_id="D1", messages=messages)

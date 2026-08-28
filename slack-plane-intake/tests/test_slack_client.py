@@ -408,7 +408,7 @@ async def test_history_picker_reads_bounded_dm_window_as_invoking_user(
                         "text": "problem",
                     },
                     {
-                        "ts": "1724439000.000001",
+                        "ts": "1724438000.000001",
                         "user": "U2",
                         "text": "outside the window",
                     },
@@ -484,9 +484,80 @@ async def test_history_picker_reads_bounded_dm_window_as_invoking_user(
     assert auth.call_count == 2
     assert users.call_count == 2
     assert history.calls[0].request.url.params["limit"] == "100"
-    assert history.calls[0].request.url.params["oldest"] == "1724439102.000001"
-    assert history.calls[0].request.url.params["latest"] == "1724440902.000001"
+    assert history.calls[0].request.url.params["oldest"] == "1724438202.000001"
+    assert history.calls[0].request.url.params["latest"] == "1724441802.000001"
     assert history.calls[0].request.headers["Authorization"] == ("Bearer xoxp-history")
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_history_picker_keeps_twenty_closest_messages(tmp_path, limits):
+    respx.get("https://slack.com/api/auth.test").mock(
+        side_effect=[
+            httpx.Response(200, json={"ok": True, "team_id": "T1"}),
+            httpx.Response(
+                200,
+                json={"ok": True, "team_id": "T1", "user_id": "U1"},
+            ),
+        ]
+    )
+    respx.get("https://slack.com/api/conversations.history").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "messages": [
+                    {
+                        "ts": f"17244400{index:02d}.000001",
+                        "bot_id": "B1",
+                        "username": "Monitor",
+                        "text": f"message {index + 1}",
+                    }
+                    for index in range(25)
+                ],
+            },
+        )
+    )
+    bot_http = httpx.AsyncClient(base_url="https://slack.com/api/")
+    user_http = httpx.AsyncClient(base_url="https://slack.com/api/")
+    client = SlackClient(
+        SlackConfig(
+            "xoxb-secret",
+            "DINTAKE",
+            frozenset({"U1"}),
+            frozenset({"U1"}),
+            "U1",
+            "xoxp-history",
+        ),
+        limits,
+        tmp_path,
+        client=bot_http,
+        user_client=user_http,
+    )
+    selected_ts = "1724440012.000001"
+
+    messages = await client.fetch_shortcut_history_payloads(
+        team_id="T1",
+        channel_id="DPEER",
+        invoking_user_id="U1",
+        selected_message_payload={
+            "ts": selected_ts,
+            "bot_id": "B1",
+            "username": "Monitor",
+            "text": "authoritative selected message",
+        },
+    )
+    await client.close()
+    await bot_http.aclose()
+    await user_http.aclose()
+
+    assert len(messages) == 20
+    assert messages[0]["ts"] == "1724440002.000001"
+    assert messages[-1]["ts"] == "1724440021.000001"
+    assert (
+        next(message for message in messages if message["ts"] == selected_ts)["text"]
+        == "authoritative selected message"
+    )
 
 
 @respx.mock

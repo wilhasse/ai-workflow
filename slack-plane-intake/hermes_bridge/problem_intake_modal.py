@@ -29,6 +29,7 @@ _PROJECT_BLOCK_ID = "project"
 _PROJECT_ACTION_ID = "selected_project"
 _MAX_PAYLOAD_BYTES = 2 * 1024 * 1024
 _MAX_OUTPUT_BYTES = 1024 * 1024
+_MAX_MESSAGE_OPTIONS = 20
 
 
 def _plain_text(value: str) -> dict[str, str]:
@@ -74,7 +75,7 @@ def _error_view(message: str) -> dict[str, Any]:
 
 def _ready_view(result: dict[str, Any]) -> dict[str, Any]:
     messages = result.get("messages")
-    if not isinstance(messages, list) or not messages:
+    if not isinstance(messages, list) or not 1 <= len(messages) <= _MAX_MESSAGE_OPTIONS:
         raise ValueError("modal draft has no messages")
 
     projects = result.get("projects")
@@ -98,7 +99,7 @@ def _ready_view(result: dict[str, Any]) -> dict[str, Any]:
 
     options = []
     offered = []
-    for message in messages[:10]:
+    for message in messages:
         if not isinstance(message, dict):
             raise TypeError("invalid modal draft message")
         message_ts = str(message.get("message_ts") or "")
@@ -129,7 +130,7 @@ def _ready_view(result: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("history modal anchor is missing from the draft")
         initial_options = options
         instructions = (
-            f"*{count} mensagem(ns) próximas, em uma janela de 15 minutos.*\n"
+            f"*{count} mensagem(ns) próximas, em uma janela de 30 minutos.*\n"
             "Todas começam marcadas. Desmarque apenas as mensagens que não "
             "pertencem ao mesmo pedido."
         )
@@ -174,10 +175,12 @@ def _ready_view(result: dict[str, Any]) -> dict[str, Any]:
                 "block_id": _MESSAGES_BLOCK_ID,
                 "label": _plain_text("Mensagens do ticket"),
                 "element": {
-                    "type": "checkboxes",
+                    "type": "multi_static_select",
                     "action_id": _MESSAGES_ACTION_ID,
+                    "placeholder": _plain_text("Selecione as mensagens"),
                     "options": options,
                     "initial_options": initial_options,
+                    "max_selected_items": _MAX_MESSAGE_OPTIONS,
                 },
             },
         ],

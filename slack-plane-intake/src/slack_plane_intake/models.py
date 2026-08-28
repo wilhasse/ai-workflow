@@ -43,7 +43,7 @@ class SourceMessage(FrozenModel):
     provider: Literal["slack"] = "slack"
     team_id: str
     channel_id: str
-    messages: tuple[SourceMessagePart, ...] = Field(min_length=1, max_length=10)
+    messages: tuple[SourceMessagePart, ...] = Field(min_length=1, max_length=20)
 
     @model_validator(mode="after")
     def validate_messages(self) -> SourceMessage:

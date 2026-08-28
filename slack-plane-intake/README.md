@@ -164,7 +164,7 @@ backward compatibility.
 To create one ticket from several messages in the same conversation:
 
 1. Run `Create Plane ticket` on any message in the request burst.
-2. The modal loads at most the 10 closest messages within 15 minutes before or
+2. The modal loads at most the 20 closest messages within 30 minutes before or
    after that message.
 3. All nearby messages start selected. Each option shows its São Paulo date/time
    and Slack author; deselect unrelated messages, confirm `DELTA` or choose
@@ -189,8 +189,8 @@ SPI_SLACK_HISTORY_USER_TOKEN=xoxp-redacted
 This is an intentional permission expansion: the user token can read private
 conversations visible to that user. The implementation binds the token to that
 exact Slack user, verifies the workspace and user through `auth.test`, queries
-only one bounded 15-minute window around the explicitly selected message, keeps
-at most the 10 closest eligible messages, and never uses that token for another
+only one bounded 30-minute window around the explicitly selected message, keeps
+at most the 20 closest eligible messages, and never uses that token for another
 shortcut user. Activation validates the token identity and both required user
 scopes before restarting Hermes.
 
@@ -219,7 +219,7 @@ present in this registry retain the existing collector/global-Plane fallback.
 
 Each authorized user has one private draft per Slack conversation. Repeating the
 shortcut on the same message is idempotent, drafts expire after two hours, and a
-draft accepts at most 10 messages. Users without a configured history token keep
+draft accepts at most 20 messages. Users without a configured history token keep
 the explicit collector fallback: each shortcut adds one message and closing the
 modal preserves the draft. A
 successful, partial, or already-existing Plane result clears it; a failure keeps
@@ -239,7 +239,7 @@ as partial with an explicit warning.
 
 Live acceptance requires invoking the shortcut once on the last message of a DM
 burst containing at least two texts and one screenshot. The modal must show the
-bounded 15-minute history with date/time and author labels, initially select all
+bounded 30-minute history with date/time and author labels, initially select all
 nearby messages, default the project selector to DELTA when available, and
 create exactly one ticket in the chosen project containing every selected
 message's provenance and original attachment. A token/user mismatch and
