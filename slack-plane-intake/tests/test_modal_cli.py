@@ -251,13 +251,11 @@ async def test_history_picker_populates_real_multi_message_modal_in_one_action(
         lambda *_args, **_kwargs: slack,
     )
 
-    result = await process_request(
-        add_request("1724440002.000001", "please create a ticket")
-    )
+    result = await process_request(add_request("1724440000.000001", "problem"))
 
     assert result["status"] == "ready"
     assert result["mode"] == "history"
-    assert result["initial_message_ts"] == "1724440002.000001"
+    assert result["initial_message_ts"] == "1724440000.000001"
     assert len(result["messages"]) == 3
     assert "Benatti" in result["messages"][0]["label"]
     assert "·" in result["messages"][0]["label"]

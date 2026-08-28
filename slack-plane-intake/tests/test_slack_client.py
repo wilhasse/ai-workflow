@@ -369,7 +369,7 @@ async def test_message_bundle_rejects_duplicate_before_source_processing(
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_history_picker_reads_bounded_dm_window_as_invoking_user(
+async def test_history_picker_reads_following_dm_window_as_invoking_user(
     tmp_path, limits
 ):
     auth = respx.get("https://slack.com/api/auth.test").mock(
@@ -410,29 +410,25 @@ async def test_history_picker_reads_bounded_dm_window_as_invoking_user(
                     {
                         "ts": "1724438000.000001",
                         "user": "U2",
-                        "text": "outside the window",
+                        "text": "before the selected message",
+                    },
+                    {
+                        "ts": "1724441803.000001",
+                        "user": "U2",
+                        "text": "after the following window",
                     },
                 ],
             },
         )
     )
     users = respx.get("https://slack.com/api/users.info").mock(
-        side_effect=[
-            httpx.Response(
-                200,
-                json={
-                    "ok": True,
-                    "user": {"profile": {"display_name": "Benatti"}},
-                },
-            ),
-            httpx.Response(
-                200,
-                json={
-                    "ok": True,
-                    "user": {"profile": {"display_name": "Willian"}},
-                },
-            ),
-        ]
+        return_value=httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "user": {"profile": {"display_name": "Willian"}},
+            },
+        )
     )
     bot_http = httpx.AsyncClient(base_url="https://slack.com/api/")
     user_http = httpx.AsyncClient(
@@ -469,29 +465,25 @@ async def test_history_picker_reads_bounded_dm_window_as_invoking_user(
     await user_http.aclose()
 
     assert [message["ts"] for message in messages] == [
-        "1724440000.000001",
-        "1724440001.000001",
         "1724440002.000001",
         "1724440100.000001",
     ]
-    assert messages[2]["text"] == "authoritative selected message"
+    assert messages[0]["text"] == "authoritative selected message"
     assert [message["username"] for message in messages] == [
-        "Benatti",
-        "Benatti",
         "Willian",
         "Willian",
     ]
     assert auth.call_count == 2
-    assert users.call_count == 2
+    assert users.call_count == 1
     assert history.calls[0].request.url.params["limit"] == "100"
-    assert history.calls[0].request.url.params["oldest"] == "1724438202.000001"
+    assert history.calls[0].request.url.params["oldest"] == "1724440002.000001"
     assert history.calls[0].request.url.params["latest"] == "1724441802.000001"
     assert history.calls[0].request.headers["Authorization"] == ("Bearer xoxp-history")
 
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_history_picker_keeps_twenty_closest_messages(tmp_path, limits):
+async def test_history_picker_keeps_first_twenty_messages_from_anchor(tmp_path, limits):
     respx.get("https://slack.com/api/auth.test").mock(
         side_effect=[
             httpx.Response(200, json={"ok": True, "team_id": "T1"}),
@@ -534,7 +526,7 @@ async def test_history_picker_keeps_twenty_closest_messages(tmp_path, limits):
         client=bot_http,
         user_client=user_http,
     )
-    selected_ts = "1724440012.000001"
+    selected_ts = "1724440000.000001"
 
     messages = await client.fetch_shortcut_history_payloads(
         team_id="T1",
@@ -552,8 +544,8 @@ async def test_history_picker_keeps_twenty_closest_messages(tmp_path, limits):
     await user_http.aclose()
 
     assert len(messages) == 20
-    assert messages[0]["ts"] == "1724440002.000001"
-    assert messages[-1]["ts"] == "1724440021.000001"
+    assert messages[0]["ts"] == selected_ts
+    assert messages[-1]["ts"] == "1724440019.000001"
     assert (
         next(message for message in messages if message["ts"] == selected_ts)["text"]
         == "authoritative selected message"

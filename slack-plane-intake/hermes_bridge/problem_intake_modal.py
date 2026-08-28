@@ -130,7 +130,8 @@ def _ready_view(result: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("history modal anchor is missing from the draft")
         initial_options = options
         instructions = (
-            f"*{count} mensagem(ns) próximas, em uma janela de 30 minutos.*\n"
+            f"*{count} mensagem(ns): a selecionada e as seguintes, "
+            "nos próximos 30 minutos.*\n"
             "Todas começam marcadas. Desmarque apenas as mensagens que não "
             "pertencem ao mesmo pedido."
         )

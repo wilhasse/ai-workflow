@@ -20,7 +20,7 @@ _SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 _MESSAGE_TS = re.compile(r"\d{9,}\.(?:\d{1,6})")
 _TEAM_ID = re.compile(r"T[A-Z0-9]+")
 _CHANNEL_ID = re.compile(r"[CDG][A-Z0-9]+")
-_HISTORY_WINDOW_SECONDS = 30 * 60
+_HISTORY_FOLLOWING_WINDOW_SECONDS = 30 * 60
 _HISTORY_CANDIDATE_LIMIT = 100
 _HISTORY_SELECTION_LIMIT = 20
 
@@ -113,7 +113,7 @@ class SlackClient:
         invoking_user_id: str,
         selected_message_payload: dict,
     ) -> tuple[dict, ...]:
-        """Fetch the 20 closest messages in a 30-minute window as the user."""
+        """Fetch the anchor and up to 19 following messages over 30 minutes."""
         if (
             not self.config.history_user_id
             or invoking_user_id != self.config.history_user_id
@@ -140,8 +140,8 @@ class SlackClient:
         history = await self._user_api(
             "conversations.history",
             channel=channel_id,
-            oldest=str(selected_time - _HISTORY_WINDOW_SECONDS),
-            latest=str(selected_time + _HISTORY_WINDOW_SECONDS),
+            oldest=str(selected_time),
+            latest=str(selected_time + _HISTORY_FOLLOWING_WINDOW_SECONDS),
             inclusive="true",
             limit=str(_HISTORY_CANDIDATE_LIMIT),
         )
@@ -152,19 +152,19 @@ class SlackClient:
             message_ts = str(value.get("ts", ""))
             if not _MESSAGE_TS.fullmatch(message_ts):
                 continue
-            if abs(Decimal(message_ts) - selected_time) > _HISTORY_WINDOW_SECONDS:
+            message_time = Decimal(message_ts)
+            if not (
+                selected_time
+                <= message_time
+                <= selected_time + _HISTORY_FOLLOWING_WINDOW_SECONDS
+            ):
                 continue
             if not str(value.get("text") or "").strip() and not value.get("files"):
                 continue
             candidates[message_ts] = value
         candidates[selected_ts] = selected_message_payload
-        selected_timestamps = sorted(
-            candidates,
-            key=lambda value: (abs(Decimal(value) - selected_time), Decimal(value)),
-        )[:_HISTORY_SELECTION_LIMIT]
-        ordered = tuple(
-            candidates[value] for value in sorted(selected_timestamps, key=Decimal)
-        )
+        selected_timestamps = sorted(candidates, key=Decimal)[:_HISTORY_SELECTION_LIMIT]
+        ordered = tuple(candidates[value] for value in selected_timestamps)
         if not ordered:
             raise SourceValidationError("Slack DM history did not contain messages")
         preview_names: dict[str, str] = {}

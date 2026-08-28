@@ -163,10 +163,10 @@ backward compatibility.
 
 To create one ticket from several messages in the same conversation:
 
-1. Run `Create Plane ticket` on any message in the request burst.
-2. The modal loads at most the 20 closest messages within 30 minutes before or
-   after that message.
-3. All nearby messages start selected. Each option shows its São Paulo date/time
+1. Run `Create Plane ticket` on the first message in the request burst.
+2. The modal loads that message and at most the next 19 eligible messages sent
+   during the following 30 minutes.
+3. All loaded messages start selected. Each option shows its São Paulo date/time
    and Slack author; deselect unrelated messages, confirm `DELTA` or choose
    another destination in **Projeto Plane**, then choose **Criar ticket**.
 
@@ -189,10 +189,10 @@ SPI_SLACK_HISTORY_USER_TOKEN=xoxp-redacted
 This is an intentional permission expansion: the user token can read private
 conversations visible to that user. The implementation binds the token to that
 exact Slack user, verifies the workspace and user through `auth.test`, queries
-only one bounded 30-minute window around the explicitly selected message, keeps
-at most the 20 closest eligible messages, and never uses that token for another
-shortcut user. Activation validates the token identity and both required user
-scopes before restarting Hermes.
+only the bounded 30 minutes following the explicitly selected message, keeps
+that anchor plus at most the next 19 eligible messages, and never uses that token
+for another shortcut user. Activation validates the token identity and both
+required user scopes before restarting Hermes.
 
 For multiple users, store each person's Slack User OAuth token together with
 their own Plane personal API key in a rootless service-owned file rather than in
@@ -237,13 +237,14 @@ as partial with an explicit warning.
 
 ## Acceptance and rollback
 
-Live acceptance requires invoking the shortcut once on the last message of a DM
+Live acceptance requires invoking the shortcut once on the first message of a DM
 burst containing at least two texts and one screenshot. The modal must show the
-bounded 30-minute history with date/time and author labels, initially select all
-nearby messages, default the project selector to DELTA when available, and
-create exactly one ticket in the chosen project containing every selected
-message's provenance and original attachment. A token/user mismatch and
-an unauthorized-user attempt must fail before any DM history is returned.
+selected message and following 30-minute history with date/time and author
+labels, initially select all loaded messages, default the project selector to
+DELTA when available, and create exactly one ticket in the chosen project
+containing every selected message's provenance and original attachment. A
+token/user mismatch and an unauthorized-user attempt must fail before any DM
+history is returned.
 The Plane description combines all selected Slack text under one **Mensagem**
 field; individual author, timestamp, permalink, and attachment provenance remain
 listed below it without numbered message headings.

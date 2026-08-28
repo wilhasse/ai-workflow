@@ -90,14 +90,15 @@ def test_collector_modal_selects_all_and_metadata_contains_no_message_text(bridg
     assert "P-OLOS" not in view["private_metadata"]
 
 
-def test_history_picker_modal_selects_all_nearby_messages(bridge):
+def test_history_picker_modal_selects_anchor_and_following_messages(bridge):
     result = ready_result()
     result["mode"] = "history"
 
     view = bridge._ready_view(result)
 
     assert view["close"]["text"] == "Cancelar"
-    assert "janela de 30 minutos" in view["blocks"][0]["text"]["text"]
+    assert "a selecionada e as seguintes" in view["blocks"][0]["text"]["text"]
+    assert "próximos 30 minutos" in view["blocks"][0]["text"]["text"]
     element = view["blocks"][2]["element"]
     assert [option["value"] for option in element["initial_options"]] == [
         "1724440000.000001",
