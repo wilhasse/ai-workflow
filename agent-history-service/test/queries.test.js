@@ -23,4 +23,13 @@ test('buildSearchMessagesSql ranks flexible message search and applies filters',
   assert.match(sql, /m\.vm_id = "godev4"/)
   assert.ok(sql.includes('s.project LIKE "%ai-workflow%"'))
   assert.match(sql, /ORDER BY relevance ASC, m\.ts DESC/)
+  assert.match(sql, /session_meta NOT LIKE/)
+})
+
+test('buildSearchMessagesSql includes subagents only when requested', () => {
+  const sql = buildSearchMessagesSql(value => JSON.stringify(String(value)), 'retry design', {
+    include_subagents: '1',
+  })
+
+  assert.doesNotMatch(sql, /session_meta NOT LIKE/)
 })

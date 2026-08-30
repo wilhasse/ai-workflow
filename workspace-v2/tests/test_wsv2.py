@@ -1308,6 +1308,49 @@ class SessionArchiveTests(unittest.TestCase):
 
             self.assertEqual(_last_codex_user_message(rollout_path), 'last prompt')
 
+    def test_last_codex_user_message_reads_paginated_response_items(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            rollout_path = Path(tmp) / 'rollout.jsonl'
+            rollout_path.write_text(
+                '\n'.join(
+                    [
+                        json.dumps({
+                            'type': 'response_item',
+                            'payload': {
+                                'type': 'message',
+                                'role': 'user',
+                                'content': [{'type': 'input_text', 'text': '# AGENTS.md instructions'}],
+                            },
+                        }),
+                        json.dumps({'type': 'turn_context', 'payload': {}}),
+                        json.dumps({
+                            'type': 'response_item',
+                            'payload': {
+                                'type': 'message',
+                                'role': 'user',
+                                'content': [{'type': 'input_text', 'text': 'first real prompt'}],
+                            },
+                        }),
+                        json.dumps({
+                            'type': 'response_item',
+                            'payload': {'type': 'message', 'role': 'assistant', 'content': []},
+                        }),
+                        json.dumps({'type': 'turn_context', 'payload': {}}),
+                        json.dumps({
+                            'type': 'response_item',
+                            'payload': {
+                                'type': 'message',
+                                'role': 'user',
+                                'content': [{'type': 'input_text', 'text': 'last real prompt'}],
+                            },
+                        }),
+                    ]
+                ),
+                encoding='utf-8',
+            )
+
+            self.assertEqual(_last_codex_user_message(rollout_path), 'last real prompt')
+
     def test_build_archive_record_uses_last_user_message_for_last_prompt(self) -> None:
         record = build_archive_record(
             kind='codex',
