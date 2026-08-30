@@ -19,6 +19,7 @@ ARCHIVE_VERSION = 1
 DEFAULT_SCAN_LIMIT = 2500
 DEFAULT_PANE_MATCH_LIMIT = 3
 DEFAULT_RESTORE_SINCE_HOURS = 72
+REMOTE_SCANNER_PATH = ".local/lib/ai-workflow/workspace-v2/scripts/wsv2"
 KNOWN_RESUME_FLAGS = {
     "codex": (
         "--dangerously-bypass-approvals-and-sandbox",
@@ -367,19 +368,7 @@ def scan_remote_host(host: HostRecord, *, now_ms: int | None = None) -> dict[str
     if not host.ssh:
         return _unreachable_snapshot(host, now_ms, "host has no ssh target")
 
-    script_path = Path(os.environ.get("WSV2_REMOTE_SCRIPT_PATH") or PACKAGE_ROOT / "scripts" / "wsv2")
-    remote_cmd = " ".join(
-        [
-            f"WSV2_SELF_HOST={shlex.quote(host.id)}",
-            shlex.quote(str(script_path)),
-            "archive-scan-local",
-            "--json",
-            "--host-id",
-            shlex.quote(host.id),
-            "--host-name",
-            shlex.quote(host.name),
-        ]
-    )
+    remote_cmd = _build_remote_archive_command(host)
     try:
         result = subprocess.run(
             [
@@ -412,6 +401,27 @@ def scan_remote_host(host: HostRecord, *, now_ms: int | None = None) -> dict[str
     snapshot.setdefault("scannedAt", now_ms)
     snapshot.setdefault("reachable", True)
     return snapshot
+
+
+def _build_remote_archive_command(host: HostRecord) -> str:
+    configured_path = os.environ.get("WSV2_REMOTE_SCRIPT_PATH")
+    script_path = str(Path(configured_path).expanduser()) if configured_path else str(PACKAGE_ROOT / "scripts" / "wsv2")
+    select_script = f"script={shlex.quote(script_path)}"
+    if not configured_path:
+        select_script += f'; if [ ! -x "$script" ]; then script="$HOME/{REMOTE_SCANNER_PATH}"; fi'
+    scan_command = " ".join(
+        [
+            f"WSV2_SELF_HOST={shlex.quote(host.id)}",
+            '"$script"',
+            "archive-scan-local",
+            "--json",
+            "--host-id",
+            shlex.quote(host.id),
+            "--host-name",
+            shlex.quote(host.name),
+        ]
+    )
+    return f"{select_script}; {scan_command}"
 
 
 def merge_snapshots(

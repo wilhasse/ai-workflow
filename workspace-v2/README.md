@@ -158,6 +158,14 @@ On the control host, install one aggregate timer instead to refresh every config
 
 The aggregate timer runs `wsv2 archive-scan` every five minutes. It replaces stale remote snapshots when each host is reachable and retains the previous records when a host is temporarily unavailable.
 
+Install the scanner outside the Git checkout on remote hosts whose checkout is old or locally modified:
+
+```bash
+./workspace-v2/scripts/install-remote-scanner.sh cslog@10.1.0.12
+```
+
+The aggregate scan prefers the remote checkout and falls back to `~/.local/lib/ai-workflow/workspace-v2/scripts/wsv2`.
+
 Install automatic tmux restore after reboot on each VM:
 
 ```bash

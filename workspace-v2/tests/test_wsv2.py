@@ -32,6 +32,7 @@ from wsv2.codex_parking import (
     unpark_target,
 )
 from wsv2.session_archive import (
+    _build_remote_archive_command,
     _load_codex_threads,
     _last_codex_user_message,
     build_archive_record,
@@ -1225,6 +1226,18 @@ class OutageDrillTests(unittest.TestCase):
 
 
 class SessionArchiveTests(unittest.TestCase):
+    def test_remote_archive_command_falls_back_to_stable_install(self) -> None:
+        host = HostRecord(id='vm12', name='Fusion', ssh='cslog@10.1.0.12')
+
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('WSV2_REMOTE_SCRIPT_PATH', None)
+            command = _build_remote_archive_command(host)
+
+        self.assertIn('/home/cslog/ai-workflow/workspace-v2/scripts/wsv2', command)
+        self.assertIn('$HOME/.local/lib/ai-workflow/workspace-v2/scripts/wsv2', command)
+        self.assertIn('if [ ! -x "$script" ]', command)
+        self.assertIn('archive-scan-local', command)
+
     def test_load_archive_recovers_from_empty_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_path = Path(tmp) / 'archive.json'
