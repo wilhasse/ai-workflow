@@ -35,6 +35,12 @@ Visual analysis falls back through `gpt-5.6-terra`, `kimi-k3`, then
 `qwen3.8-max`. If all analysis models fail, the service still creates a
 clearly marked partial ticket containing the raw evidence and warnings.
 
+The Hermes gateway can use `grok-4.6` as a separate fallback through the same
+CLIProxyAPI endpoint. Register the account with CLIProxyAPI's `--xai-login`
+flow before enabling that entry in `deploy/hermes-config.example.yaml`. Keep
+the generated xAI credential in CLIProxyAPI's protected auth directory; never
+copy it into this repository.
+
 The source key `slack:<team>:<channel>:<message_ts>` and a visible, immutable
 Plane provenance ID make repeated delivery idempotent. Multi-message sources use
 `slack-bundle:<team>:<channel>:<sha256-of-ordered-timestamps>` while retaining

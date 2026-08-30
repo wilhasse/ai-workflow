@@ -10,6 +10,12 @@ model:
   context_length: 131072
 
 fallback_providers:
+  # Requires an xAI account registered in CLIProxyAPI with --xai-login.
+  - provider: custom
+    model: grok-4.6
+    base_url: http://127.0.0.1:8317/v1
+    key_env: SPI_CLIPROXY_API_KEY
+    api_mode: chat_completions
   - provider: custom
     model: qwen3.8-max
     base_url: http://127.0.0.1:8317/v1
