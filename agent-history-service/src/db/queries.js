@@ -206,6 +206,19 @@ export async function searchMessages(q, options = {}) {
   return rows
 }
 
+function canonicalSessionsSql() {
+  return `
+    SELECT session_id, vm_id, MIN(started_at) AS started_at, source,
+           MAX(project) AS project,
+           MAX(display_text) AS display_text,
+           MAX(session_meta) AS session_meta,
+           MAX(message_count) AS message_count,
+           MAX(last_synced_at) AS last_synced_at
+    FROM agent_sessions
+    GROUP BY session_id, vm_id, source
+  `
+}
+
 export function buildListSessionsSql(escape, { source, vm_id, project, from, to, include_subagents, limit = 50, offset = 0 } = {}) {
   const conditions = []
   if (source) conditions.push(`source = ${escape(source)}`)
@@ -217,7 +230,7 @@ export function buildListSessionsSql(escape, { source, vm_id, project, from, to,
     conditions.push(excludesCodexSubagents({ sourceColumn: 'source', sessionMetaColumn: 'session_meta', escape }))
   }
   const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : ''
-  return `SELECT * FROM agent_sessions ${where} ORDER BY started_at DESC LIMIT ${Number(limit)} OFFSET ${Number(offset)}`
+  return `SELECT * FROM (${canonicalSessionsSql()}) sessions ${where} ORDER BY started_at DESC LIMIT ${Number(limit)} OFFSET ${Number(offset)}`
 }
 
 async function enrichSessionSummaries(rows) {
@@ -275,7 +288,12 @@ export async function listSessions(options = {}) {
 
 export async function getSession(sessionId) {
   const pool = getPool()
-  const [rows] = await pool.query('SELECT * FROM agent_sessions WHERE session_id = ? ORDER BY started_at DESC LIMIT 1', [sessionId])
+  const [rows] = await pool.query(`
+    SELECT * FROM (${canonicalSessionsSql()}) sessions
+    WHERE session_id = ?
+    ORDER BY started_at DESC
+    LIMIT 1
+  `, [sessionId])
   return rows[0] ?? null
 }
 
@@ -332,7 +350,7 @@ export async function getSyncStatus() {
 export async function getStats() {
   const pool = getPool()
   const [[files]] = await pool.query('SELECT COUNT(*) as c FROM sync_state')
-  const [[sessions]] = await pool.query('SELECT COUNT(*) as c FROM agent_sessions')
+  const [[sessions]] = await pool.query("SELECT COUNT(DISTINCT CONCAT(session_id, '::', vm_id, '::', source)) as c FROM agent_sessions")
   const [[messages]] = await pool.query('SELECT COUNT(*) as c, SUM(LENGTH(content_text) - LENGTH(REPLACE(content_text, \' \', \'\')) + 1) as words FROM agent_messages WHERE content_text IS NOT NULL')
   return {
     files: Number(files.c) || 0,

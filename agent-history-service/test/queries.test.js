@@ -44,3 +44,19 @@ test('buildListSessionsSql hides Codex subagents by default', () => {
 
   assert.match(sql, /source != 'codex' OR session_meta IS NULL OR session_meta NOT LIKE/)
 })
+
+test('buildListSessionsSql canonicalizes stale session rows before filtering and pagination', () => {
+  const sql = buildListSessionsSql(value => JSON.stringify(String(value)), {
+    source: 'claude',
+    from: '2026-08-29',
+    to: '2026-08-29',
+    limit: 50,
+    offset: 50,
+  })
+
+  assert.match(sql, /MIN\(started_at\) AS started_at/)
+  assert.match(sql, /GROUP BY session_id, vm_id, source/)
+  assert.match(sql, /FROM \(\s*SELECT[\s\S]+FROM agent_sessions[\s\S]+GROUP BY session_id, vm_id, source\s*\) sessions/)
+  assert.match(sql, /WHERE source = "claude" AND started_at >= "2026-08-29"/)
+  assert.match(sql, /ORDER BY started_at DESC LIMIT 50 OFFSET 50/)
+})
