@@ -1,3 +1,4 @@
+import { stat } from 'node:fs/promises'
 import config from './config.js'
 import * as watermarks from './watermarks.js'
 import { discoverClaudeFiles, discoverCodexFiles } from './file-scanner.js'
@@ -34,6 +35,22 @@ function addSyncState(file, lineCount) {
 
 async function processJsonlFile(file, parser) {
   const wm = watermarks.get(file.key)
+  if (watermarks.needsRawLineWatermarkRepair(file.size, wm)) {
+    let repairedLineCount = 0
+    for await (const _record of parser(file.path, Number.MAX_SAFE_INTEGER, (processedLine) => {
+      repairedLineCount = processedLine
+    })) {}
+    if ((await stat(file.path)).size === file.size) {
+      watermarks.set(file.key, {
+        size: file.size,
+        lines: repairedLineCount,
+        line_mode: 'raw',
+        mtime: file.mtime.toISOString(),
+      })
+      addSyncState(file, repairedLineCount)
+    }
+    return 0
+  }
   if (!isChanged(file, wm)) return 0
 
   const startLine = wm.lines
@@ -88,7 +105,12 @@ async function processJsonlFile(file, parser) {
     totalSent += historyBatch.length
   }
 
-  watermarks.set(file.key, { size: file.size, lines: lineCount, mtime: file.mtime.toISOString() })
+  watermarks.set(file.key, {
+    size: file.size,
+    lines: lineCount,
+    line_mode: 'raw',
+    mtime: file.mtime.toISOString(),
+  })
   addSyncState(file, lineCount)
   return totalSent
 }

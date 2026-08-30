@@ -29,3 +29,8 @@ export function set(key, data) {
   if (!cache) cache = {}
   cache[key] = data
 }
+
+export function needsRawLineWatermarkRepair(fileSize, watermark) {
+  return Number(watermark?.size || 0) === Number(fileSize || 0)
+    && watermark?.line_mode !== 'raw'
+}
