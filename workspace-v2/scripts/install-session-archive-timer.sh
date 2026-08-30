@@ -5,9 +5,10 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HOST_ID="${WSV2_SELF_HOST:-local}"
 HOST_NAME=""
 INTERVAL="5min"
+ALL_HOSTS=0
 
 usage() {
-  printf 'Usage: %s [--host-id vm9] [--host-name Supersaber] [--interval 5min]\n' "$0"
+  printf 'Usage: %s [--host-id vm9] [--host-name Supersaber] [--interval 5min] [--all-hosts]\n' "$0"
 }
 
 escape_systemd_env() {
@@ -31,6 +32,10 @@ while [[ $# -gt 0 ]]; do
       INTERVAL="${2:?missing --interval value}"
       shift 2
       ;;
+    --all-hosts)
+      ALL_HOSTS=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -46,9 +51,19 @@ if [[ -z "$HOST_NAME" ]]; then
   HOST_NAME="$HOST_ID"
 fi
 
+if [[ "$ALL_HOSTS" -eq 1 ]]; then
+  ARCHIVE_COMMAND="archive-scan --quiet"
+else
+  ARCHIVE_COMMAND="archive-scan-local --save --quiet --host-id \"\$WSV2_ARCHIVE_HOST_ID\" --host-name \"\$WSV2_ARCHIVE_HOST_NAME\""
+fi
+
 if ! command -v systemctl >/dev/null 2>&1; then
   echo "systemctl not found; run this periodically instead:" >&2
-  echo "$ROOT_DIR/scripts/wsv2 archive-scan-local --save --host-id '$HOST_ID' --host-name '$HOST_NAME'" >&2
+  if [[ "$ALL_HOSTS" -eq 1 ]]; then
+    echo "$ROOT_DIR/scripts/wsv2 archive-scan" >&2
+  else
+    echo "$ROOT_DIR/scripts/wsv2 archive-scan-local --save --host-id '$HOST_ID' --host-name '$HOST_NAME'" >&2
+  fi
   exit 1
 fi
 
@@ -69,7 +84,7 @@ ENV_HOST_NAME="$(escape_systemd_env "$HOST_NAME")"
   echo "Type=oneshot"
   echo "Environment=\"WSV2_ARCHIVE_HOST_ID=$ENV_HOST_ID\""
   echo "Environment=\"WSV2_ARCHIVE_HOST_NAME=$ENV_HOST_NAME\""
-  echo "ExecStart=/usr/bin/env bash -lc '\"$SCRIPT_PATH\" archive-scan-local --save --quiet --host-id \"\$WSV2_ARCHIVE_HOST_ID\" --host-name \"\$WSV2_ARCHIVE_HOST_NAME\"'"
+  echo "ExecStart=/usr/bin/env bash -lc '\"$SCRIPT_PATH\" $ARCHIVE_COMMAND'"
 } >"$SERVICE_PATH"
 
 {

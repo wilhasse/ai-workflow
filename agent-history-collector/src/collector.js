@@ -9,9 +9,8 @@ import * as codexHistory from './parsers/codex-history.js'
 import * as codexSessions from './parsers/codex-sessions.js'
 
 let syncing = false
-
-// Accumulated sync-state records, flushed in batches at end of cycle
 let pendingSyncState = []
+const SYNC_STATE_BATCH_SIZE = 200
 
 function isChanged(file, wm) {
   return file.size !== wm.size
@@ -45,9 +44,9 @@ async function processJsonlFile(file, parser) {
   const historyBatch = []
   let totalSent = 0
 
-  for await (const record of parser(file.path, startLine)) {
-    lineCount++
-
+  for await (const record of parser(file.path, startLine, (processedLine) => {
+    lineCount = processedLine
+  })) {
     if (record._table === 'sessions') {
       if (!allowSessionRows) continue
       delete record._table
@@ -179,13 +178,11 @@ async function syncCycle() {
         console.error(`[collector] error processing ${file.key}:`, err.message)
       }
 
-      // Flush sync-state in batches of 200 to avoid accumulating too many
-      if (pendingSyncState.length >= 200) {
+      if (pendingSyncState.length >= SYNC_STATE_BATCH_SIZE) {
         await flushSyncState()
       }
     }
 
-    // Final flush
     await flushSyncState()
     await watermarks.save()
     const elapsed = ((Date.now() - start) / 1000).toFixed(1)

@@ -6,6 +6,7 @@ import {
   conversationTitle,
   formatConversationDateTime,
   groupConversationsByDate,
+  isInjectedConversationContext,
 } from '../../utils/conversationPresentation.js'
 
 const LIMIT = 50
@@ -92,7 +93,7 @@ async function apiGet(path, params = {}) {
 }
 
 async function loadCodexConversationIndex() {
-  const response = await fetch('/api/recovery-index?tool=codex&includeLowInfo=1&limit=2500')
+  const response = await fetch('/api/recovery-index?tool=codex&includeLowInfo=1&includeSubagents=1&limit=2500')
   const payload = await response.json().catch(() => null)
   if (!response.ok) throw new Error(payload?.error || 'Unable to load Codex conversation metadata')
   const records = Array.isArray(payload?.records) ? payload.records : []
@@ -116,13 +117,31 @@ function enrichConversation(session, conversationIndex) {
     cwd: metadata.cwd || session.project,
     folder: metadata.folder,
     historyMode: metadata.historyMode,
+    threadSource: metadata.threadSource,
+    parentThreadId: metadata.parentThreadId,
+    agentNickname: metadata.agentNickname,
+    agentRole: metadata.agentRole,
+    agentPath: metadata.agentPath,
+    firstPrompt: metadata.firstPrompt,
+    lastPrompt: metadata.lastPrompt,
+    userPromptCount: metadata.userPromptCount,
     resumeCommand: metadata.resumeCommand,
     project: metadata.cwd || session.project,
   }
 }
 
+function shouldShowConversation(session, conversationIndex, includeSubagents) {
+  if (session?.source !== 'codex') return true
+  const metadata = conversationIndex.get(String(session?.session_id || ''))
+  if (metadata?.threadSource === 'subagent') return Boolean(includeSubagents)
+  if (metadata) return Boolean(metadata.firstPrompt || metadata.lastPrompt)
+  return Boolean(session.display_text) && !isInjectedConversationContext(session.display_text)
+}
+
 function conversationMetadataMatches(record, filters) {
   if (!filters?.query || (filters.source && filters.source !== 'codex')) return false
+  if (!filters.includeSubagents && record.threadSource === 'subagent') return false
+  if (record.threadSource !== 'subagent' && !record.firstPrompt && !record.lastPrompt) return false
   if (filters.vm_id) {
     const hostValues = [record.hostId, record.hostName].map((value) => String(value || '').toLowerCase())
     if (!hostValues.includes(String(filters.vm_id).toLowerCase())) return false
@@ -169,7 +188,10 @@ function metadataSearchResult(record) {
 }
 
 function mergeMetadataSearchResults(results, conversationIndex, filters) {
-  const merged = results.map((result) => enrichConversation(result, conversationIndex))
+  const merged = results
+    .filter((result) => !isInjectedConversationContext(result.content_text))
+    .map((result) => enrichConversation(result, conversationIndex))
+    .filter((result) => shouldShowConversation(result, conversationIndex, filters?.includeSubagents))
   const seenSessions = new Set(merged.map((result) => String(result.session_id || '')))
   for (const record of conversationIndex.values()) {
     if (!conversationMetadataMatches(record, filters) || seenSessions.has(String(record.resumeId))) continue
@@ -238,7 +260,10 @@ function ConversationId({ id, copied, onCopy, full = false }) {
 
 function SessionCard({ session, active, copiedSessionId, onCopySessionId, onClick }) {
   const title = conversationTitle(session)
-  const preview = String(session.display_text || '').replace(/\s+/g, ' ').trim()
+  const rawPreview = session.lastPrompt || session.display_text || ''
+  const preview = isInjectedConversationContext(rawPreview)
+    ? ''
+    : String(rawPreview).replace(/\s+/g, ' ').trim()
   return (
     <button className={`ah-session-card ${active ? 'active' : ''}`} type="button" onClick={onClick}>
       <span className="ah-session-card-top">
@@ -254,6 +279,8 @@ function SessionCard({ session, active, copiedSessionId, onCopySessionId, onClic
           </span>
         )}
         {session.historyMode && <span className="ah-badge ah-badge-history">{session.historyMode}</span>}
+        {session.threadSource === 'subagent' && <span className="ah-badge ah-badge-history">subagent</span>}
+        {session.agentNickname && <span className="ah-badge ah-badge-history">{session.agentNickname}</span>}
         <ConversationId
           id={session.session_id}
           copied={copiedSessionId === session.session_id}
@@ -307,7 +334,7 @@ function SearchResults({ results, query, copiedSessionId, onCopySessionId, onSel
 
 function MessageBubble({ message }) {
   const role = message.msg_role || message.msg_type || 'unknown'
-  if (!message.content_text) return null
+  if (!message.content_text || isInjectedConversationContext(message.content_text)) return null
   return (
     <div className={`ah-message ${role === 'user' ? 'user' : 'assistant'}`}>
       <div className="ah-message-role">{role}</div>
@@ -370,6 +397,8 @@ function SessionDetail({ session, copiedSessionId, onCopySessionId, onBack }) {
               </span>
             )}
             {session.historyMode && <span className="ah-badge ah-badge-history">{session.historyMode}</span>}
+            {session.threadSource === 'subagent' && <span className="ah-badge ah-badge-history">subagent</span>}
+            {session.agentNickname && <span className="ah-badge ah-badge-history">{session.agentNickname}</span>}
             <span className="ah-muted">{formatConversationDateTime(session)}</span>
           </span>
         </div>
@@ -400,6 +429,7 @@ export default function AgentHistoryView() {
   const [project, setProject] = useState('')
   const [fromDate, setFromDate] = useState(dates.from)
   const [toDate, setToDate] = useState(dates.to)
+  const [includeSubagents, setIncludeSubagents] = useState(false)
   const [sessions, setSessions] = useState([])
   const [searchResults, setSearchResults] = useState(null)
   const [searchContext, setSearchContext] = useState(null)
@@ -420,8 +450,11 @@ export default function AgentHistoryView() {
   )
   const totalFiles = syncInfo.reduce((sum, item) => sum + (Number(item.file_count) || 0), 0)
   const enrichedSessions = useMemo(
-    () => sessions.map((session) => enrichConversation(session, conversationIndex)).sort(compareConversationRecency),
-    [conversationIndex, sessions],
+    () => sessions
+      .filter((session) => shouldShowConversation(session, conversationIndex, includeSubagents))
+      .map((session) => enrichConversation(session, conversationIndex))
+      .sort(compareConversationRecency),
+    [conversationIndex, includeSubagents, sessions],
   )
   const enrichedSearchResults = useMemo(
     () => searchResults === null
@@ -446,6 +479,7 @@ export default function AgentHistoryView() {
     from: overrides.from ?? fromDate,
     to: overrides.to ?? toDate,
     query: overrides.query ?? query,
+    includeSubagents: overrides.includeSubagents ?? includeSubagents,
   })
 
   const loadData = useCallback(async (filters) => {
@@ -456,6 +490,7 @@ export default function AgentHistoryView() {
       project: filters.project,
       from: filters.from,
       to: filters.to,
+      include_subagents: filters.includeSubagents ? '1' : undefined,
       limit: LIMIT,
       offset: 0,
     }
@@ -469,7 +504,11 @@ export default function AgentHistoryView() {
       if (filters.query?.trim()) {
         const data = await apiGet('/search', { ...baseFilters, q: filters.query.trim() })
         if (requestId.current !== id) return
-        setSearchContext({ ...baseFilters, query: filters.query.trim() })
+        setSearchContext({
+          ...baseFilters,
+          includeSubagents: filters.includeSubagents,
+          query: filters.query.trim(),
+        })
         setSearchResults(data)
         setSessions([])
         setHasMore(false)
@@ -494,7 +533,15 @@ export default function AgentHistoryView() {
     apiGet('/sync/status').then(setSyncInfo).catch(() => {})
     apiGet('/stats').then(setStats).catch(() => {})
     loadCodexConversationIndex().then(setConversationIndex).catch(() => {})
-    loadData({ query: '', vm_id: '', source: '', project: '', from: dates.from, to: dates.to })
+    loadData({
+      query: '',
+      vm_id: '',
+      source: '',
+      project: '',
+      from: dates.from,
+      to: dates.to,
+      includeSubagents: false,
+    })
   }, [dates.from, dates.to, loadData])
 
   const updateFilter = (key, value) => {
@@ -514,7 +561,16 @@ export default function AgentHistoryView() {
     setProject('')
     setFromDate(dates.from)
     setToDate(dates.to)
-    loadData({ query: '', vm_id: '', source: '', project: '', from: dates.from, to: dates.to })
+    setIncludeSubagents(false)
+    loadData({
+      query: '',
+      vm_id: '',
+      source: '',
+      project: '',
+      from: dates.from,
+      to: dates.to,
+      includeSubagents: false,
+    })
   }
 
   const loadMore = async () => {
@@ -527,6 +583,7 @@ export default function AgentHistoryView() {
         project,
         from: fromDate,
         to: toDate,
+        include_subagents: includeSubagents ? '1' : undefined,
         limit: LIMIT,
         offset,
       })
@@ -622,6 +679,17 @@ export default function AgentHistoryView() {
           <label>
             To
             <input type="date" value={toDate} onChange={(event) => updateFilter('to', event.target.value)} />
+          </label>
+          <label>
+            Include subagents
+            <input
+              type="checkbox"
+              checked={includeSubagents}
+              onChange={(event) => {
+                setIncludeSubagents(event.target.checked)
+                loadData(currentFilters({ includeSubagents: event.target.checked }))
+              }}
+            />
           </label>
         </div>
 

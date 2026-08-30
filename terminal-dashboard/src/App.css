@@ -4100,6 +4100,12 @@ button.danger:hover:not(:disabled) {
   font: inherit;
 }
 
+.ah-filter-row input[type="checkbox"] {
+  width: 1rem;
+  min-height: 1rem;
+  padding: 0;
+}
+
 .ah-content {
   flex: 1;
   display: flex;
@@ -4456,6 +4462,20 @@ button.danger:hover:not(:disabled) {
   background: var(--color-bg-tertiary);
   color: var(--color-text-primary);
   font: inherit;
+}
+
+.ri-controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--color-text-secondary);
+  font-size: 0.85rem;
+}
+
+.ri-controls input[type="checkbox"] {
+  width: 1rem;
+  min-height: 1rem;
+  padding: 0;
 }
 
 .ri-content {

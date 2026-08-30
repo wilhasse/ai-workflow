@@ -17,7 +17,6 @@ from .catalog import HostRecord, WorkspaceConfig, WorkspaceConfigError
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 ARCHIVE_VERSION = 1
 DEFAULT_SCAN_LIMIT = 2500
-DEFAULT_ROLLOUT_PROMPT_SCAN_LIMIT = 200
 DEFAULT_PANE_MATCH_LIMIT = 3
 DEFAULT_RESTORE_SINCE_HOURS = 72
 KNOWN_RESUME_FLAGS = {
@@ -286,7 +285,6 @@ def build_archive_record(
         "firstPrompt": str(session.get("firstUserMessage") or ""),
         "lastPrompt": str(
             session.get("lastUserMessage")
-            or session.get("preview")
             or session.get("firstUserMessage")
             or ""
         ),
@@ -306,6 +304,12 @@ def build_archive_record(
                 "modelProvider": session.get("modelProvider"),
                 "reasoningEffort": session.get("reasoningEffort"),
                 "tokensUsed": int(session.get("tokensUsed") or 0),
+                "threadSource": str(session.get("threadSource") or "legacy"),
+                "parentThreadId": str(session.get("parentThreadId") or ""),
+                "agentNickname": str(session.get("agentNickname") or ""),
+                "agentRole": str(session.get("agentRole") or ""),
+                "agentPath": str(session.get("agentPath") or ""),
+                "userPromptCount": int(session.get("userPromptCount") or 0),
             }
         )
     if active:
@@ -962,7 +966,8 @@ def _load_claude_sessions() -> list[dict[str, Any]]:
 
 
 def _load_codex_threads() -> list[dict[str, Any]]:
-    db_path = Path.home() / ".codex" / "state_5.sqlite"
+    codex_home = Path.home() / ".codex"
+    db_path = codex_home / "state_5.sqlite"
     if not db_path.exists():
         return []
     try:
@@ -978,6 +983,11 @@ def _load_codex_threads() -> list[dict[str, Any]]:
         recency_at_column = "recency_at" if "recency_at" in thread_columns else "null"
         recency_at_ms_column = "recency_at_ms" if "recency_at_ms" in thread_columns else "null"
         history_mode_column = "history_mode" if "history_mode" in thread_columns else "null"
+        thread_source_column = "thread_source" if "thread_source" in thread_columns else "null"
+        source_column = "source" if "source" in thread_columns else "null"
+        agent_nickname_column = "agent_nickname" if "agent_nickname" in thread_columns else "null"
+        agent_role_column = "agent_role" if "agent_role" in thread_columns else "null"
+        agent_path_column = "agent_path" if "agent_path" in thread_columns else "null"
         rows = connection.execute(
             f"""
             select
@@ -995,6 +1005,11 @@ def _load_codex_threads() -> list[dict[str, Any]]:
                 {recency_at_column},
                 {recency_at_ms_column},
                 {history_mode_column},
+                {thread_source_column},
+                {source_column},
+                {agent_nickname_column},
+                {agent_role_column},
+                {agent_path_column},
                 model_provider,
                 model,
                 reasoning_effort,
@@ -1018,8 +1033,9 @@ def _load_codex_threads() -> list[dict[str, Any]]:
     finally:
         connection.close()
 
+    prompt_history = _load_codex_prompt_history(codex_home / "history.jsonl")
     threads = []
-    for row_index, row in enumerate(rows):
+    for row in rows:
         (
             thread_id,
             rollout_path,
@@ -1035,17 +1051,29 @@ def _load_codex_threads() -> list[dict[str, Any]]:
             recency_at,
             recency_at_ms,
             history_mode,
+            thread_source,
+            source,
+            agent_nickname,
+            agent_role,
+            agent_path,
             model_provider,
             model,
             reasoning_effort,
             tokens_used,
         ) = row
-        last_user_message = (
-            _last_codex_user_message(Path(str(rollout_path or "")).expanduser())
-            if row_index < DEFAULT_ROLLOUT_PROMPT_SCAN_LIMIT
-            else ""
-        )
-        conversation_title = str(name or title or first_user_message or "Codex session")
+        source_metadata = _codex_source_metadata(source, thread_source)
+        prompts = prompt_history.get(str(thread_id), [])
+        if not prompts and source_metadata["threadSource"] != "subagent":
+            last_user_message = _last_codex_user_message(
+                Path(str(rollout_path or "")).expanduser(),
+                str(first_user_message or ""),
+            )
+            prompts = [str(first_user_message)] if first_user_message else []
+            if last_user_message and last_user_message != first_user_message:
+                prompts.append(last_user_message)
+        first_user_message_value = str(first_user_message or (prompts[0] if prompts else ""))
+        last_user_message = str(prompts[-1] if prompts else "")
+        conversation_title = str(name or title or first_user_message_value or "Codex session")
         updated_at_value = _int_or_none(updated_at_ms) or ((_int_or_none(updated_at) or 0) * 1000)
         recency_at_value = (
             _int_or_none(recency_at_ms)
@@ -1058,13 +1086,18 @@ def _load_codex_threads() -> list[dict[str, Any]]:
                 "cwd": str(cwd or Path.home()),
                 "title": conversation_title,
                 "conversationTitle": conversation_title,
-                "firstUserMessage": str(first_user_message or ""),
+                "firstUserMessage": first_user_message_value,
                 "preview": str(preview or ""),
                 "lastUserMessage": last_user_message,
+                "userPromptCount": len(prompts),
                 "startedAt": _int_or_none(created_at_ms) or ((_int_or_none(created_at) or 0) * 1000),
                 "updatedAt": updated_at_value,
                 "recencyAt": recency_at_value,
                 "historyMode": str(history_mode or ""),
+                **source_metadata,
+                "agentNickname": str(agent_nickname or ""),
+                "agentRole": str(agent_role or ""),
+                "agentPath": str(agent_path or ""),
                 "model": model,
                 "modelProvider": model_provider,
                 "reasoningEffort": reasoning_effort,
@@ -1074,10 +1107,68 @@ def _load_codex_threads() -> list[dict[str, Any]]:
     return threads
 
 
-def _last_codex_user_message(rollout_path: Path) -> str:
+def _load_codex_prompt_history(history_path: Path) -> dict[str, list[str]]:
+    prompts: dict[str, list[str]] = {}
+    if not history_path.exists() or not history_path.is_file():
+        return prompts
+    try:
+        with history_path.open(encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                thread_id = str(event.get("session_id") or "").strip()
+                message = str(event.get("text") or "").strip()
+                if thread_id and message:
+                    prompts.setdefault(thread_id, []).append(message)
+    except OSError:
+        return {}
+    return prompts
+
+
+def _codex_source_metadata(source: Any, thread_source: Any) -> dict[str, Any]:
+    raw_source = str(source or "").strip()
+    parsed_source: Any = raw_source
+    if raw_source.startswith("{"):
+        try:
+            parsed_source = json.loads(raw_source)
+        except json.JSONDecodeError:
+            parsed_source = raw_source
+
+    subagent = parsed_source.get("subagent") if isinstance(parsed_source, dict) else None
+    spawn = subagent.get("thread_spawn") if isinstance(subagent, dict) else None
+    inferred_source = "subagent" if subagent is not None else raw_source
+    normalized_source = str(thread_source or inferred_source or "legacy").strip().lower()
+    if normalized_source == "cli":
+        normalized_source = "user"
+    return {
+        "threadSource": normalized_source,
+        "parentThreadId": str((spawn or {}).get("parent_thread_id") or ""),
+    }
+
+
+def _response_item_text(payload: dict[str, Any]) -> str:
+    content = payload.get("content")
+    if isinstance(content, str):
+        return content.strip()
+    if not isinstance(content, list):
+        return ""
+    return "\n".join(
+        str(block.get("text") or "")
+        for block in content
+        if isinstance(block, dict) and block.get("type") in {"input_text", "text"}
+    ).strip()
+
+
+def _last_codex_user_message(rollout_path: Path, first_user_message: str = "") -> str:
     if not rollout_path.exists() or not rollout_path.is_file():
         return ""
     last_message = ""
+    response_turn_started = False
+    response_prompt_started = not bool(first_user_message)
     try:
         with rollout_path.open(encoding="utf-8") as handle:
             for line in handle:
@@ -1085,13 +1176,26 @@ def _last_codex_user_message(rollout_path: Path) -> str:
                     event = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if event.get("type") != "event_msg":
+                event_type = event.get("type")
+                if event_type == "turn_context":
+                    response_turn_started = True
                     continue
                 payload = event.get("payload") or {}
-                if payload.get("type") != "user_message":
+                if event_type == "event_msg" and payload.get("type") == "user_message":
+                    message = str(payload.get("message") or "").strip()
+                    if message:
+                        last_message = message
                     continue
-                message = str(payload.get("message") or "").strip()
-                if message:
+                if event_type != "response_item" or payload.get("role") != "user":
+                    continue
+                message = _response_item_text(payload)
+                if not message:
+                    continue
+                if first_user_message and not response_prompt_started:
+                    response_prompt_started = message == first_user_message
+                    if not response_prompt_started:
+                        continue
+                if response_turn_started or first_user_message:
                     last_message = message
     except OSError:
         return ""

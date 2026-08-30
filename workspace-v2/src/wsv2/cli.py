@@ -77,6 +77,7 @@ def build_parser() -> argparse.ArgumentParser:
         help='Snapshot tmux panes and Codex/Claude resume ids across configured hosts',
     )
     archive_scan_parser.add_argument('--json', action='store_true', help='Emit JSON instead of text')
+    archive_scan_parser.add_argument('--quiet', action='store_true', help='Suppress text output')
 
     local_archive_scan_parser = subparsers.add_parser(
         'archive-scan-local',
@@ -533,6 +534,8 @@ def main(argv: list[str] | None = None) -> int:
         except SessionArchiveError as error:
             print(str(error), file=sys.stderr)
             return 1
+        if args.quiet:
+            return 0
         if args.json:
             print(json.dumps(payload, indent=2))
             return 0

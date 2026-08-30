@@ -1501,6 +1501,7 @@ const buildRecoveryIndex = async (searchParams = new URLSearchParams()) => {
   const toolFilter = String(searchParams.get('tool') || '').trim().toLowerCase()
   const query = String(searchParams.get('q') || '').trim().toLowerCase()
   const includeLowInfo = searchParams.get('includeLowInfo') === '1'
+  const includeSubagents = searchParams.get('includeSubagents') === '1'
   const limit = Math.min(Math.max(Number.parseInt(searchParams.get('limit') || '800', 10) || 800, 1), 2500)
 
   const seen = new Set()
@@ -1529,11 +1530,15 @@ const buildRecoveryIndex = async (searchParams = new URLSearchParams()) => {
     if (toolFilter && kind.toLowerCase() !== toolFilter) {
       continue
     }
+    const threadSource = String(record.threadSource || 'legacy').toLowerCase()
+    if (threadSource === 'subagent' && !includeSubagents) {
+      continue
+    }
 
     const workspace = workspacesByKey.get(`${hostId}:${sessionId}`)
     const { label, status } = recoveryLabelForRecord(record, hostsById, labels)
     const firstPrompt = cleanRecoveryPrompt(record.firstPrompt || record.firstUserMessage || '')
-    const lastPrompt = cleanRecoveryPrompt(record.lastPrompt || record.preview || record.firstPrompt || '')
+    const lastPrompt = cleanRecoveryPrompt(record.lastPrompt || record.firstPrompt || '')
     const hasCapturedPrompt = Boolean(firstPrompt || lastPrompt)
     if (!hasCapturedPrompt && !includeLowInfo) {
       continue
@@ -1591,6 +1596,12 @@ const buildRecoveryIndex = async (searchParams = new URLSearchParams()) => {
       conversationTitle,
       conversationAt: Number(record.conversationAt || record.updatedAt || record.startedAt || 0),
       historyMode: String(record.historyMode || ''),
+      threadSource,
+      parentThreadId: String(record.parentThreadId || ''),
+      agentNickname: String(record.agentNickname || ''),
+      agentRole: String(record.agentRole || ''),
+      agentPath: String(record.agentPath || ''),
+      userPromptCount: Number(record.userPromptCount || 0),
       summary,
       firstPrompt,
       lastPrompt,

@@ -1514,6 +1514,92 @@ class SessionArchiveTests(unittest.TestCase):
         self.assertEqual(threads[0]['recencyAt'], 2000)
         self.assertEqual(threads[0]['historyMode'], '')
 
+    def test_load_codex_threads_uses_direct_history_and_classifies_subagents(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            codex_dir = home / '.codex'
+            codex_dir.mkdir()
+            database = sqlite3.connect(codex_dir / 'state_5.sqlite')
+            database.execute(
+                '''
+                create table threads (
+                    id text,
+                    rollout_path text,
+                    cwd text,
+                    name text,
+                    title text,
+                    first_user_message text,
+                    preview text,
+                    created_at integer,
+                    updated_at integer,
+                    created_at_ms integer,
+                    updated_at_ms integer,
+                    thread_source text,
+                    source text,
+                    agent_nickname text,
+                    agent_role text,
+                    agent_path text,
+                    model_provider text,
+                    model text,
+                    reasoning_effort text,
+                    tokens_used integer,
+                    archived integer
+                )
+                '''
+            )
+            database.executemany(
+                '''
+                insert into threads (
+                    id, rollout_path, cwd, name, title, first_user_message, preview,
+                    created_at, updated_at, created_at_ms, updated_at_ms,
+                    thread_source, source, agent_nickname, agent_role, agent_path,
+                    model_provider, model, reasoning_effort, tokens_used, archived
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''',
+                [
+                    (
+                        'root-thread', '', '/repo', 'Root conversation', '', 'first prompt',
+                        'assistant preview', 1, 2, 1000, 2000, 'cli', 'cli', '', '', '',
+                        'openai', 'gpt-5', 'high', 10, 0,
+                    ),
+                    (
+                        'child-thread', '', '/repo', 'Review worker', '', '',
+                        'assistant preview', 1, 3, 1000, 3000, 'subagent',
+                        json.dumps({'subagent': {'thread_spawn': {'parent_thread_id': 'root-thread'}}}),
+                        'reviewer', 'review', '/root/review', 'openai', 'gpt-5', 'high', 20, 0,
+                    ),
+                ],
+            )
+            database.commit()
+            database.close()
+            (codex_dir / 'history.jsonl').write_text(
+                '\n'.join(
+                    [
+                        json.dumps({'session_id': 'root-thread', 'text': 'first prompt'}),
+                        json.dumps(['malformed', 'non-object']),
+                        json.dumps({'session_id': 'root-thread', 'text': 'last prompt'}),
+                    ]
+                ),
+                encoding='utf-8',
+            )
+
+            with mock.patch('wsv2.session_archive.Path.home', return_value=home):
+                threads = _load_codex_threads()
+
+        root = next(thread for thread in threads if thread['resumeId'] == 'root-thread')
+        child = next(thread for thread in threads if thread['resumeId'] == 'child-thread')
+        self.assertEqual(root['threadSource'], 'user')
+        self.assertEqual(root['firstUserMessage'], 'first prompt')
+        self.assertEqual(root['lastUserMessage'], 'last prompt')
+        self.assertEqual(root['userPromptCount'], 2)
+        self.assertEqual(child['threadSource'], 'subagent')
+        self.assertEqual(child['parentThreadId'], 'root-thread')
+        self.assertEqual(child['agentNickname'], 'reviewer')
+        self.assertEqual(child['agentPath'], '/root/review')
+        self.assertEqual(child['firstUserMessage'], '')
+        self.assertEqual(child['lastUserMessage'], '')
+        self.assertEqual(child['userPromptCount'], 0)
+
     def test_build_archive_record_does_not_use_generic_title_as_prompt(self) -> None:
         record = build_archive_record(
             kind='codex',
@@ -1521,6 +1607,7 @@ class SessionArchiveTests(unittest.TestCase):
                 'resumeId': 'codex-1',
                 'cwd': '/repo',
                 'title': 'Codex session',
+                'preview': 'assistant preview',
                 'updatedAt': 300,
             },
             pane=None,

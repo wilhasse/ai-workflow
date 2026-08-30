@@ -4,7 +4,6 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import config from '../config.js'
 
-// Extracts text from Claude message content (string or array of content blocks)
 function extractText(content) {
   if (!content) return null
   if (typeof content === 'string') return content
@@ -17,18 +16,13 @@ function extractText(content) {
   return null
 }
 
-// Extract project name from file path
-// e.g. /home/cslog/.claude/projects/-home-cslog-ai-workflow/session.jsonl → -home-cslog-ai-workflow
 function extractProject(filePath) {
   const parts = filePath.split('/projects/')
   if (parts.length < 2) return null
   return parts[1].split('/')[0] ?? null
 }
 
-// Parses ~/.claude/projects/{project}/{session}.jsonl
-// Types we care about: user, assistant (messages)
-// Types we skip: permission-mode, file-history-snapshot, attachment, summary
-export async function* parse(filePath, startLine = 0) {
+export async function* parse(filePath, startLine = 0, onLine = () => {}) {
   const stream = fs.createReadStream(filePath, { encoding: 'utf8' })
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity })
   const project = extractProject(filePath)
@@ -40,6 +34,7 @@ export async function* parse(filePath, startLine = 0) {
 
   for await (const line of rl) {
     lineNum++
+    onLine(lineNum)
     if (lineNum <= startLine) continue
     if (!line.trim()) continue
     let rec
@@ -58,7 +53,6 @@ export async function* parse(filePath, startLine = 0) {
 
     if (!firstTimestamp) firstTimestamp = timestamp
 
-    // Yield session record once
     if (!sessionYielded) {
       sessionYielded = true
       yield {

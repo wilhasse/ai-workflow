@@ -68,8 +68,13 @@ test('Codex parser emits direct prompts but skips injected user context', async 
   await writeFile(filePath, `${records.map(record => JSON.stringify(record)).join('\n')}\n`)
 
   const parsed = []
-  for await (const record of parse(filePath)) parsed.push(record)
+  let processedLine = 0
+  for await (const record of parse(filePath, 0, (line) => { processedLine = line })) parsed.push(record)
   const messages = parsed.filter(record => record._table === 'messages')
+
+  const reparsed = []
+  for await (const record of parse(filePath)) reparsed.push(record)
+  const reparsedMessages = reparsed.filter(record => record._table === 'messages')
 
   assert.deepEqual(
     messages.map(message => [message.role, message.content_text]),
@@ -80,4 +85,10 @@ test('Codex parser emits direct prompts but skips injected user context', async 
       ['assistant', 'last answer'],
     ],
   )
+  assert.deepEqual(
+    messages.map(message => message.message_id),
+    reparsedMessages.map(message => message.message_id),
+  )
+  assert.deepEqual(messages.map(message => message.seq_num), [4, 5, 7, 8])
+  assert.equal(processedLine, records.length)
 })

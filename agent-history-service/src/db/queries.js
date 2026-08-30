@@ -129,6 +129,24 @@ function buildTextPredicate(column, escape, rawQuery) {
   return `(${conditions.join(' OR ')})`
 }
 
+function excludesCodexSubagents({ sourceColumn, sessionMetaColumn, escape }) {
+  return `(${sourceColumn} != 'codex' OR ${sessionMetaColumn} IS NULL OR ${sessionMetaColumn} NOT LIKE ${escape('%"subagent"%')})`
+}
+
+function excludesInjectedUserContext({ roleColumn, contentColumn, escape }) {
+  const prefixes = [
+    '# AGENTS.md instructions',
+    '<environment_context>',
+    '<recommended_plugins>',
+    '<skills_instructions>',
+    '<permissions instructions>',
+  ]
+  const directPrompt = prefixes
+    .map(prefix => `${contentColumn} NOT LIKE ${escape(`${prefix}%`)}`)
+    .join(' AND ')
+  return `(${roleColumn} != 'user' OR (${directPrompt}))`
+}
+
 function buildRelevanceExpr(column, escape, rawQuery) {
   const phrase = escapeMatchText(rawQuery)
   const words = phrase.split(/\s+/).filter((word) => word.length >= 2).join(' ')
@@ -147,12 +165,12 @@ function buildRelevanceExpr(column, escape, rawQuery) {
   return `CASE ${cases.join(' ')} ELSE 9 END`
 }
 
-// Query helpers for the read API
-export function buildSearchMessagesSql(escape, q, { source, vm_id, project, from, to, limit = 50, offset = 0 } = {}) {
+export function buildSearchMessagesSql(escape, q, { source, vm_id, project, from, to, include_subagents, limit = 50, offset = 0 } = {}) {
   const sessionLookup = `
-    SELECT session_id, vm_id, MAX(project) AS project, MAX(display_text) AS session_display
+    SELECT session_id, vm_id, source, MAX(project) AS project,
+           MAX(display_text) AS session_display, MAX(session_meta) AS session_meta
     FROM agent_sessions
-    GROUP BY session_id, vm_id
+    GROUP BY session_id, vm_id, source
   `
   let where = buildTextPredicate('m.content_text', escape, q)
   if (source) where += ` AND m.source = ${escape(source)}`
@@ -160,6 +178,10 @@ export function buildSearchMessagesSql(escape, q, { source, vm_id, project, from
   if (project) where += ` AND s.project LIKE ${escape('%' + escapeLikeText(project) + '%')} ESCAPE '\\\\'`
   if (from) where += ` AND m.ts >= ${escape(from)}`
   if (to) where += ` AND m.ts <= ${escape(to + ' 23:59:59')}`
+  if (include_subagents !== '1') {
+    where += ` AND ${excludesCodexSubagents({ sourceColumn: 'm.source', sessionMetaColumn: 's.session_meta', escape })}`
+  }
+  where += ` AND ${excludesInjectedUserContext({ roleColumn: 'm.msg_role', contentColumn: 'm.content_text', escape })}`
   const relevance = buildRelevanceExpr('m.content_text', escape, q)
 
   return `
@@ -170,7 +192,7 @@ export function buildSearchMessagesSql(escape, q, { source, vm_id, project, from
            ${relevance} AS relevance
     FROM agent_messages m
     LEFT JOIN (${sessionLookup}) s
-      ON s.session_id = m.session_id AND s.vm_id = m.vm_id
+      ON s.session_id = m.session_id AND s.vm_id = m.vm_id AND s.source = m.source
     WHERE ${where}
     ORDER BY relevance ASC, m.ts DESC
     LIMIT ${Number(limit)} OFFSET ${Number(offset)}
@@ -182,6 +204,20 @@ export async function searchMessages(q, options = {}) {
   const sql = buildSearchMessagesSql(value => pool.escape(value), q, options)
   const [rows] = await pool.query(sql)
   return rows
+}
+
+export function buildListSessionsSql(escape, { source, vm_id, project, from, to, include_subagents, limit = 50, offset = 0 } = {}) {
+  const conditions = []
+  if (source) conditions.push(`source = ${escape(source)}`)
+  if (vm_id) conditions.push(`vm_id = ${escape(vm_id)}`)
+  if (project) conditions.push(`project LIKE ${escape('%' + project + '%')}`)
+  if (from) conditions.push(`started_at >= ${escape(from)}`)
+  if (to) conditions.push(`started_at <= ${escape(to + ' 23:59:59')}`)
+  if (include_subagents !== '1') {
+    conditions.push(excludesCodexSubagents({ sourceColumn: 'source', sessionMetaColumn: 'session_meta', escape }))
+  }
+  const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : ''
+  return `SELECT * FROM agent_sessions ${where} ORDER BY started_at DESC LIMIT ${Number(limit)} OFFSET ${Number(offset)}`
 }
 
 async function enrichSessionSummaries(rows) {
@@ -230,16 +266,9 @@ async function enrichSessionSummaries(rows) {
   })
 }
 
-export async function listSessions({ source, vm_id, project, from, to, limit = 50, offset = 0 } = {}) {
+export async function listSessions(options = {}) {
   const pool = getPool()
-  const conditions = []
-  if (source) conditions.push(`source = ${pool.escape(source)}`)
-  if (vm_id) conditions.push(`vm_id = ${pool.escape(vm_id)}`)
-  if (project) conditions.push(`project LIKE ${pool.escape('%' + project + '%')}`)
-  if (from) conditions.push(`started_at >= ${pool.escape(from)}`)
-  if (to) conditions.push(`started_at <= ${pool.escape(to + ' 23:59:59')}`)
-  const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : ''
-  const sql = `SELECT * FROM agent_sessions ${where} ORDER BY started_at DESC LIMIT ${Number(limit)} OFFSET ${Number(offset)}`
+  const sql = buildListSessionsSql(value => pool.escape(value), options)
   const [rows] = await pool.query(sql)
   return enrichSessionSummaries(rows)
 }

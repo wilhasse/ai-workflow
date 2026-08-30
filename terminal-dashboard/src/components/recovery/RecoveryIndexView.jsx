@@ -123,6 +123,8 @@ function RecoveryRow({ record }) {
           {record.status && <span className={`ri-status ${record.status}`}>{record.status}</span>}
           {record.active && <span className="ri-status active">active</span>}
           {record.historyMode && <span className="ri-runtime-badge history">{record.historyMode}</span>}
+          {record.threadSource === 'subagent' && <span className="ri-runtime-badge">subagent</span>}
+          {record.agentNickname && <span className="ri-runtime-badge">{record.agentNickname}</span>}
           {record.model && <span className="ri-runtime-badge">{record.model}</span>}
           {record.modelProvider && <span className="ri-runtime-badge provider">{record.modelProvider}</span>}
           {record.reasoningEffort && <span className="ri-runtime-badge effort">{record.reasoningEffort}</span>}
@@ -158,6 +160,7 @@ export default function RecoveryIndexView() {
   const [query, setQuery] = useState('')
   const [workspaceKey, setWorkspaceKey] = useState('')
   const [tool, setTool] = useState('')
+  const [includeSubagents, setIncludeSubagents] = useState(false)
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -179,7 +182,12 @@ export default function RecoveryIndexView() {
     setLoading(true)
     setError('')
     try {
-      const next = await loadRecoveryIndex({ ...filters, includeLowInfo: 1, limit: 2500 })
+      const next = await loadRecoveryIndex({
+        ...filters,
+        includeSubagents: filters.includeSubagents ? 1 : undefined,
+        includeLowInfo: filters.includeSubagents ? 1 : undefined,
+        limit: 2500,
+      })
       setData(next)
     } catch (err) {
       setError(err.message || 'Unable to load recovery index')
@@ -191,10 +199,11 @@ export default function RecoveryIndexView() {
   const refresh = useCallback((overrides = {}) => fetchData({
     q: overrides.q ?? query,
     tool: overrides.tool ?? tool,
-  }), [fetchData, query, tool])
+    includeSubagents: overrides.includeSubagents ?? includeSubagents,
+  }), [fetchData, includeSubagents, query, tool])
 
   useEffect(() => {
-    fetchData({ q: '', tool: '' })
+    fetchData({ q: '', tool: '', includeSubagents: false })
   }, [fetchData])
 
   const applySearch = () => refresh()
@@ -203,7 +212,8 @@ export default function RecoveryIndexView() {
     setQuery('')
     setWorkspaceKey('')
     setTool('')
-    refresh({ q: '', tool: '' })
+    setIncludeSubagents(false)
+    refresh({ q: '', tool: '', includeSubagents: false })
   }
 
   return (
@@ -247,6 +257,17 @@ export default function RecoveryIndexView() {
           <option value="codex">Codex</option>
           <option value="claude">Claude</option>
         </select>
+        <label>
+          <input
+            type="checkbox"
+            checked={includeSubagents}
+            onChange={(event) => {
+              setIncludeSubagents(event.target.checked)
+              refresh({ includeSubagents: event.target.checked })
+            }}
+          />
+          Include subagents
+        </label>
         <button className="primary" type="button" onClick={applySearch} disabled={loading}>Search</button>
         <button className="secondary" type="button" onClick={reset} disabled={loading}>Reset</button>
       </div>

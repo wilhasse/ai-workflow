@@ -1,7 +1,6 @@
 import fs from 'node:fs'
 import readline from 'node:readline'
 import path from 'node:path'
-import { randomUUID } from 'node:crypto'
 import config from '../config.js'
 
 function extractText(content) {
@@ -16,27 +15,50 @@ function extractText(content) {
   return null
 }
 
-// Extract session ID from codex session filename
-// e.g. rollout-2026-04-04T11-55-51-019d58fe-43f7-75e2-9261-ca70651b8fe2.jsonl
+function isInjectedUserContext(text) {
+  const value = String(text || '').trimStart()
+  return [
+    '# AGENTS.md instructions',
+    '<environment_context>',
+    '<recommended_plugins>',
+    '<skills_instructions>',
+    '<permissions instructions>',
+  ].some(prefix => value.startsWith(prefix))
+}
+
 function extractSessionId(filePath) {
   const base = path.basename(filePath, '.jsonl')
-  // Session ID is the UUID at the end after the timestamp
   const match = base.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i)
   return match?.[1] ?? base
 }
 
-// Parses ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl
-// Types: session_meta, response_item (user/assistant messages), event_msg, turn_context
-export async function* parse(filePath, startLine = 0) {
+export async function* parse(filePath, startLine = 0, onLine = () => {}) {
   const stream = fs.createReadStream(filePath, { encoding: 'utf8' })
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity })
   const sessionId = extractSessionId(filePath)
   let lineNum = 0
-  let seqNum = 0
   let sessionYielded = false
+  let turnStarted = false
+  let pendingUser = null
+
+  const messageRecord = ({ payload, role, text, timestamp }) => ({
+    _table: 'messages',
+    message_id: payload.id ?? `${sessionId}:line:${lineNum}`,
+    session_id: sessionId,
+    vm_id: config.vmId,
+    source: 'codex',
+    msg_type: payload.type ?? 'message',
+    role,
+    content_text: text,
+    content_json: payload.content,
+    parent_uuid: null,
+    timestamp,
+    seq_num: lineNum,
+  })
 
   for await (const line of rl) {
     lineNum++
+    onLine(lineNum)
     if (lineNum <= startLine) continue
     if (!line.trim()) continue
     let rec
@@ -48,7 +70,13 @@ export async function* parse(filePath, startLine = 0) {
     const payload = rec.payload
     const timestamp = rec.timestamp ?? new Date().toISOString()
 
-    // Handle session_meta — yields a session record
+    if (type === 'turn_context') {
+      if (pendingUser) yield pendingUser
+      pendingUser = null
+      turnStarted = true
+      continue
+    }
+
     if (type === 'session_meta' && !sessionYielded) {
       sessionYielded = true
       yield {
@@ -71,29 +99,22 @@ export async function* parse(filePath, startLine = 0) {
       continue
     }
 
-    // Handle response_item with role user or assistant
     if (type === 'response_item' && payload) {
       const role = payload.role
       if (role !== 'user' && role !== 'assistant') continue
 
       const text = extractText(payload.content)
       if (!text) continue
-
-      seqNum++
-      yield {
-        _table: 'messages',
-        message_id: payload.id ?? randomUUID(),
-        session_id: sessionId,
-        vm_id: config.vmId,
-        source: 'codex',
-        msg_type: payload.type ?? 'message',
-        role,
-        content_text: text,
-        content_json: payload.content,
-        parent_uuid: null,
-        timestamp,
-        seq_num: seqNum,
+      if (role === 'user') {
+        if (!turnStarted || isInjectedUserContext(text)) continue
+        if (pendingUser) yield pendingUser
+        pendingUser = messageRecord({ payload, role, text, timestamp })
+        continue
       }
+      if (pendingUser) yield pendingUser
+      pendingUser = null
+      yield messageRecord({ payload, role, text, timestamp })
     }
   }
+  if (pendingUser) yield pendingUser
 }

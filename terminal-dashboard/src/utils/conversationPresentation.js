@@ -27,18 +27,31 @@ export const conversationTimestamp = (conversation) => {
   return 0
 }
 
-export const conversationTitle = (conversation) => String(
-  conversation?.conversationTitle
-  || conversation?.conversation_title
-  || conversation?.name
-  || conversation?.summary
-  || conversation?.title
-  || conversation?.display_text
-  || conversation?.session_display
-  || conversation?.preview
-  || conversation?.firstPrompt
-  || 'Untitled conversation',
-).replace(/\s+/g, ' ').trim()
+export const isInjectedConversationContext = (text) => {
+  const value = String(text || '').trimStart()
+  return [
+    '# AGENTS.md instructions',
+    '<environment_context>',
+    '<recommended_plugins>',
+    '<skills_instructions>',
+    '<permissions instructions>',
+  ].some((prefix) => value.startsWith(prefix))
+}
+
+export const conversationTitle = (conversation) => {
+  const title = [
+    conversation?.conversationTitle,
+    conversation?.conversation_title,
+    conversation?.name,
+    conversation?.summary,
+    conversation?.title,
+    conversation?.display_text,
+    conversation?.session_display,
+    conversation?.preview,
+    conversation?.firstPrompt,
+  ].find((value) => value && !isInjectedConversationContext(value))
+  return String(title || 'Untitled conversation').replace(/\s+/g, ' ').trim()
+}
 
 export const conversationFolder = (conversation) => {
   if (conversation?.folder) return String(conversation.folder)

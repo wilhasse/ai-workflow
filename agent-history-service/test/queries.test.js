@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { buildSearchMessagesSql } from '../src/db/queries.js'
+import { buildListSessionsSql, buildSearchMessagesSql } from '../src/db/queries.js'
 
 test('buildSearchMessagesSql ranks flexible message search and applies filters', () => {
   const sql = buildSearchMessagesSql(value => JSON.stringify(String(value)), 'some questions from Jairo', {
@@ -24,6 +24,8 @@ test('buildSearchMessagesSql ranks flexible message search and applies filters',
   assert.ok(sql.includes('s.project LIKE "%ai-workflow%"'))
   assert.match(sql, /ORDER BY relevance ASC, m\.ts DESC/)
   assert.match(sql, /session_meta NOT LIKE/)
+  assert.match(sql, /m\.msg_role != 'user'/)
+  assert.ok(sql.includes('m.content_text NOT LIKE "# AGENTS.md instructions%"'))
 })
 
 test('buildSearchMessagesSql includes subagents only when requested', () => {
@@ -32,4 +34,13 @@ test('buildSearchMessagesSql includes subagents only when requested', () => {
   })
 
   assert.doesNotMatch(sql, /session_meta NOT LIKE/)
+})
+
+test('buildListSessionsSql hides Codex subagents by default', () => {
+  const sql = buildListSessionsSql(value => JSON.stringify(String(value)), {
+    source: 'codex',
+    limit: 50,
+  })
+
+  assert.match(sql, /source != 'codex' OR session_meta IS NULL OR session_meta NOT LIKE/)
 })

@@ -4,13 +4,14 @@ import config from '../config.js'
 
 // Parses ~/.claude/history.jsonl
 // Each line: { display, timestamp, project, sessionId, pastedContents }
-export async function* parse(filePath, startLine = 0) {
+export async function* parse(filePath, startLine = 0, onLine = () => {}) {
   const stream = fs.createReadStream(filePath, { encoding: 'utf8' })
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity })
   let lineNum = 0
 
   for await (const line of rl) {
     lineNum++
+    onLine(lineNum)
     if (lineNum <= startLine) continue
     if (!line.trim()) continue
     let rec

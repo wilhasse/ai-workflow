@@ -150,6 +150,14 @@ Install a periodic local snapshot timer on each VM:
 
 Use the matching host id/name on `vm10` or `vm12`. The timer runs `wsv2 archive-scan-local --save` every five minutes by default.
 
+On the control host, install one aggregate timer instead to refresh every configured host in the shared archive:
+
+```bash
+./workspace-v2/scripts/install-session-archive-timer.sh --all-hosts
+```
+
+The aggregate timer runs `wsv2 archive-scan` every five minutes. It replaces stale remote snapshots when each host is reachable and retains the previous records when a host is temporarily unavailable.
+
 Install automatic tmux restore after reboot on each VM:
 
 ```bash
