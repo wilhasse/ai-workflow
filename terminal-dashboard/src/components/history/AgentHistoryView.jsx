@@ -1,4 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  compareConversationRecency,
+  conversationFolder,
+  conversationTimestamp,
+  conversationTitle,
+  formatConversationDateTime,
+  groupConversationsByDate,
+} from '../../utils/conversationPresentation.js'
 
 const LIMIT = 50
 const DETAIL_LIMIT = 200
@@ -83,6 +91,94 @@ async function apiGet(path, params = {}) {
   return payload.data
 }
 
+async function loadCodexConversationIndex() {
+  const response = await fetch('/api/recovery-index?tool=codex&includeLowInfo=1&limit=2500')
+  const payload = await response.json().catch(() => null)
+  if (!response.ok) throw new Error(payload?.error || 'Unable to load Codex conversation metadata')
+  const records = Array.isArray(payload?.records) ? payload.records : []
+  const index = new Map()
+  for (const record of records) {
+    const id = String(record.resumeId || '')
+    if (!id) continue
+    const previous = index.get(id)
+    if (!previous || compareConversationRecency(record, previous) < 0) index.set(id, record)
+  }
+  return index
+}
+
+function enrichConversation(session, conversationIndex) {
+  const metadata = conversationIndex.get(String(session?.session_id || ''))
+  if (!metadata || (session.source && session.source !== 'codex')) return session
+  return {
+    ...session,
+    conversationTitle: metadata.conversationTitle || metadata.summary,
+    conversationAt: metadata.conversationAt || metadata.updatedAt || metadata.score,
+    cwd: metadata.cwd || session.project,
+    folder: metadata.folder,
+    historyMode: metadata.historyMode,
+    resumeCommand: metadata.resumeCommand,
+    project: metadata.cwd || session.project,
+  }
+}
+
+function conversationMetadataMatches(record, filters) {
+  if (!filters?.query || (filters.source && filters.source !== 'codex')) return false
+  if (filters.vm_id) {
+    const hostValues = [record.hostId, record.hostName].map((value) => String(value || '').toLowerCase())
+    if (!hostValues.includes(String(filters.vm_id).toLowerCase())) return false
+  }
+  if (filters.project) {
+    const folder = `${record.cwd || ''} ${record.folder || ''}`.toLowerCase()
+    if (!folder.includes(String(filters.project).toLowerCase())) return false
+  }
+
+  const timestamp = conversationTimestamp(record)
+  const fromTimestamp = filters.from ? new Date(`${filters.from}T00:00:00`).getTime() : 0
+  const toTimestamp = filters.to ? new Date(`${filters.to}T23:59:59.999`).getTime() : 0
+  if (fromTimestamp && timestamp < fromTimestamp) return false
+  if (toTimestamp && timestamp > toTimestamp) return false
+
+  const haystack = [
+    record.conversationTitle,
+    record.summary,
+    record.cwd,
+    record.folder,
+    record.resumeId,
+    record.firstPrompt,
+    record.lastPrompt,
+  ].join(' ').toLowerCase()
+  const terms = String(filters.query).toLowerCase().split(/\s+/).filter(Boolean)
+  return terms.length > 0 && terms.every((term) => haystack.includes(term))
+}
+
+function metadataSearchResult(record) {
+  const title = conversationTitle(record)
+  const folder = record.cwd || record.folder || 'Unknown folder'
+  return {
+    ...record,
+    message_id: `conversation-metadata:${record.resumeId}`,
+    session_id: record.resumeId,
+    vm_id: record.hostId || record.hostName || 'local',
+    source: 'codex',
+    project: record.cwd,
+    display_text: title,
+    ts: record.conversationAt,
+    content_text: `Matched SQLite conversation metadata · ${folder} · ${record.resumeId}`,
+    metadataMatch: true,
+  }
+}
+
+function mergeMetadataSearchResults(results, conversationIndex, filters) {
+  const merged = results.map((result) => enrichConversation(result, conversationIndex))
+  const seenSessions = new Set(merged.map((result) => String(result.session_id || '')))
+  for (const record of conversationIndex.values()) {
+    if (!conversationMetadataMatches(record, filters) || seenSessions.has(String(record.resumeId))) continue
+    merged.push(metadataSearchResult(record))
+    seenSessions.add(String(record.resumeId))
+  }
+  return merged
+}
+
 function highlightText(text, query) {
   if (!text || !query) return text
   const words = query.split(/\s+/).filter(Boolean)
@@ -141,22 +237,30 @@ function ConversationId({ id, copied, onCopy, full = false }) {
 }
 
 function SessionCard({ session, active, copiedSessionId, onCopySessionId, onClick }) {
+  const title = conversationTitle(session)
+  const preview = String(session.display_text || '').replace(/\s+/g, ' ').trim()
   return (
     <button className={`ah-session-card ${active ? 'active' : ''}`} type="button" onClick={onClick}>
       <span className="ah-session-card-top">
+        <span className="ah-conversation-title">{title}</span>
+        <span className="ah-muted">{formatConversationDateTime(session)}</span>
+      </span>
+      <span className="ah-badge-row">
+        <SourceBadge source={session.source} />
+        <span className="ah-badge ah-badge-vm">{session.vm_id}</span>
+        {(session.cwd || session.project) && (
+          <span className="ah-badge ah-badge-project" title={session.cwd || session.project}>
+            {conversationFolder(session) || cleanProject(session.project)}
+          </span>
+        )}
+        {session.historyMode && <span className="ah-badge ah-badge-history">{session.historyMode}</span>}
         <ConversationId
           id={session.session_id}
           copied={copiedSessionId === session.session_id}
           onCopy={onCopySessionId}
         />
-        <span className="ah-muted">{formatDate(session.started_at || session.ts)}</span>
       </span>
-      <span className="ah-badge-row">
-        <SourceBadge source={session.source} />
-        <span className="ah-badge ah-badge-vm">{session.vm_id}</span>
-        {session.project && <span className="ah-badge ah-badge-project">{cleanProject(session.project)}</span>}
-      </span>
-      {session.display_text && <span className="ah-preview">{session.display_text}</span>}
+      {preview && preview !== title && <span className="ah-preview">{preview}</span>}
     </button>
   )
 }
@@ -174,9 +278,11 @@ function SearchResults({ results, query, copiedSessionId, onCopySessionId, onSel
           type="button"
           onClick={() => onSelectSession(result)}
         >
+          <span className="ah-conversation-title">{conversationTitle(result)}</span>
           <span className="ah-search-meta">
             <SourceBadge source={result.source} />
             <span className="ah-badge ah-badge-vm">{result.vm_id}</span>
+            {result.metadataMatch && <span className="ah-badge ah-badge-metadata">SQLite metadata</span>}
             {Number.isFinite(Number(result.relevance)) && (
               <span className="ah-badge ah-badge-rank">rank {Number(result.relevance) + 1}</span>
             )}
@@ -185,9 +291,13 @@ function SearchResults({ results, query, copiedSessionId, onCopySessionId, onSel
               copied={copiedSessionId === result.session_id}
               onCopy={onCopySessionId}
             />
-            <span className="ah-muted">{formatDate(result.ts)}</span>
+            <span className="ah-muted">{formatConversationDateTime(result)}</span>
           </span>
-          {result.project && <span className="ah-badge ah-badge-project">{cleanProject(result.project)}</span>}
+          {result.project && (
+            <span className="ah-badge ah-badge-project" title={result.project}>
+              {conversationFolder(result) || cleanProject(result.project)}
+            </span>
+          )}
           <span className="ah-result-text">{highlightText(snippetAroundMatch(result.content_text, query), query)}</span>
         </button>
       ))}
@@ -244,6 +354,7 @@ function SessionDetail({ session, copiedSessionId, onCopySessionId, onBack }) {
       <header className="ah-detail-header">
         <button className="secondary" type="button" onClick={onBack}>Back</button>
         <div className="ah-detail-title">
+          <span className="ah-conversation-title">{conversationTitle(session)}</span>
           <ConversationId
             id={session.session_id}
             copied={copiedSessionId === session.session_id}
@@ -253,8 +364,13 @@ function SessionDetail({ session, copiedSessionId, onCopySessionId, onBack }) {
           <span className="ah-badge-row">
             <SourceBadge source={session.source} />
             <span className="ah-badge ah-badge-vm">{session.vm_id}</span>
-            {session.project && <span className="ah-badge ah-badge-project">{cleanProject(session.project)}</span>}
-            <span className="ah-muted">{formatDate(session.started_at || session.ts)}</span>
+            {session.project && (
+              <span className="ah-badge ah-badge-project" title={session.project}>
+                {conversationFolder(session) || cleanProject(session.project)}
+              </span>
+            )}
+            {session.historyMode && <span className="ah-badge ah-badge-history">{session.historyMode}</span>}
+            <span className="ah-muted">{formatConversationDateTime(session)}</span>
           </span>
         </div>
       </header>
@@ -286,6 +402,7 @@ export default function AgentHistoryView() {
   const [toDate, setToDate] = useState(dates.to)
   const [sessions, setSessions] = useState([])
   const [searchResults, setSearchResults] = useState(null)
+  const [searchContext, setSearchContext] = useState(null)
   const [selectedSession, setSelectedSession] = useState(null)
   const [syncInfo, setSyncInfo] = useState([])
   const [stats, setStats] = useState(null)
@@ -294,6 +411,7 @@ export default function AgentHistoryView() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [copiedSessionId, setCopiedSessionId] = useState('')
+  const [conversationIndex, setConversationIndex] = useState(() => new Map())
   const copiedTimerRef = useRef(null)
 
   const vmOptions = useMemo(
@@ -301,6 +419,25 @@ export default function AgentHistoryView() {
     [syncInfo],
   )
   const totalFiles = syncInfo.reduce((sum, item) => sum + (Number(item.file_count) || 0), 0)
+  const enrichedSessions = useMemo(
+    () => sessions.map((session) => enrichConversation(session, conversationIndex)).sort(compareConversationRecency),
+    [conversationIndex, sessions],
+  )
+  const enrichedSearchResults = useMemo(
+    () => searchResults === null
+      ? null
+      : mergeMetadataSearchResults(searchResults, conversationIndex, searchContext),
+    [conversationIndex, searchContext, searchResults],
+  )
+  const groupedSessions = useMemo(
+    () => groupConversationsByDate(enrichedSessions, { sort: false }),
+    [enrichedSessions],
+  )
+  const selectedConversation = useMemo(
+    () => selectedSession ? enrichConversation(selectedSession, conversationIndex) : null,
+    [conversationIndex, selectedSession],
+  )
+  const sideConversations = enrichedSearchResults || enrichedSessions
 
   const currentFilters = (overrides = {}) => ({
     vm_id: overrides.vm_id ?? vmId,
@@ -332,12 +469,14 @@ export default function AgentHistoryView() {
       if (filters.query?.trim()) {
         const data = await apiGet('/search', { ...baseFilters, q: filters.query.trim() })
         if (requestId.current !== id) return
+        setSearchContext({ ...baseFilters, query: filters.query.trim() })
         setSearchResults(data)
         setSessions([])
         setHasMore(false)
       } else {
         const data = await apiGet('/sessions', baseFilters)
         if (requestId.current !== id) return
+        setSearchContext(null)
         setSearchResults(null)
         setSessions(data)
         setOffset(data.length)
@@ -354,6 +493,7 @@ export default function AgentHistoryView() {
   useEffect(() => {
     apiGet('/sync/status').then(setSyncInfo).catch(() => {})
     apiGet('/stats').then(setStats).catch(() => {})
+    loadCodexConversationIndex().then(setConversationIndex).catch(() => {})
     loadData({ query: '', vm_id: '', source: '', project: '', from: dates.from, to: dates.to })
   }, [dates.from, dates.to, loadData])
 
@@ -492,14 +632,14 @@ export default function AgentHistoryView() {
       </div>
 
       <div className="ah-content">
-        {selectedSession ? (
+        {selectedConversation ? (
           <>
             <div className="ah-side-list">
-              {(searchResults || sessions).map((session, index) => (
+              {sideConversations.map((session, index) => (
                 <SessionCard
                   key={`${session.session_id}-${session.vm_id || ''}-${index}`}
                   session={session}
-                  active={session.session_id === selectedSession.session_id}
+                  active={session.session_id === selectedConversation.session_id}
                   copiedSessionId={copiedSessionId}
                   onCopySessionId={copySessionId}
                   onClick={() => selectSession(session)}
@@ -507,15 +647,15 @@ export default function AgentHistoryView() {
               ))}
             </div>
             <SessionDetail
-              session={selectedSession}
+              session={selectedConversation}
               copiedSessionId={copiedSessionId}
               onCopySessionId={copySessionId}
               onBack={() => setSelectedSession(null)}
             />
           </>
-        ) : searchResults ? (
+        ) : enrichedSearchResults ? (
           <SearchResults
-            results={searchResults}
+            results={enrichedSearchResults}
             query={query}
             copiedSessionId={copiedSessionId}
             onCopySessionId={copySessionId}
@@ -525,15 +665,23 @@ export default function AgentHistoryView() {
           <div className="ah-list">
             {loading && sessions.length === 0 && <div className="ah-loading">Loading sessions...</div>}
             {!loading && sessions.length === 0 && !error && <div className="ah-empty">No sessions found</div>}
-            {sessions.map((session, index) => (
-              <SessionCard
-                key={`${session.session_id}-${session.vm_id || ''}-${index}`}
-                session={session}
-                active={false}
-                copiedSessionId={copiedSessionId}
-                onCopySessionId={copySessionId}
-                onClick={() => selectSession(session)}
-              />
+            {groupedSessions.map((group) => (
+              <section className="conversation-date-group" key={group.key}>
+                <h3 className="conversation-date-heading">
+                  <span>{group.label}</span>
+                  <span>{group.conversations.length} conversation{group.conversations.length === 1 ? '' : 's'}</span>
+                </h3>
+                {group.conversations.map((session, index) => (
+                  <SessionCard
+                    key={`${session.session_id}-${session.vm_id || ''}-${index}`}
+                    session={session}
+                    active={false}
+                    copiedSessionId={copiedSessionId}
+                    onCopySessionId={copySessionId}
+                    onClick={() => selectSession(session)}
+                  />
+                ))}
+              </section>
             ))}
             {hasMore && sessions.length > 0 && (
               <button className="ah-load-more" type="button" onClick={loadMore} disabled={loading}>

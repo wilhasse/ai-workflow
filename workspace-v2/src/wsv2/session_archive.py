@@ -16,7 +16,8 @@ from .catalog import HostRecord, WorkspaceConfig, WorkspaceConfigError
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 ARCHIVE_VERSION = 1
-DEFAULT_SCAN_LIMIT = 200
+DEFAULT_SCAN_LIMIT = 2500
+DEFAULT_ROLLOUT_PROMPT_SCAN_LIMIT = 200
 DEFAULT_PANE_MATCH_LIMIT = 3
 DEFAULT_RESTORE_SINCE_HOURS = 72
 KNOWN_RESUME_FLAGS = {
@@ -257,12 +258,19 @@ def build_archive_record(
     record_id = _record_id(kind, host_id, resume_id)
     title = _compact_title(
         str(
-            session.get("title")
+            session.get("conversationTitle")
+            or session.get("title")
             or session.get("firstUserMessage")
             or (pane or {}).get("paneTitle")
             or (pane or {}).get("windowName")
             or resume_id
         )
+    )
+    conversation_at = int(
+        session.get("recencyAt")
+        or session.get("updatedAt")
+        or session.get("startedAt")
+        or now_ms
     )
 
     record = {
@@ -273,6 +281,8 @@ def build_archive_record(
         "hostName": host_name,
         "cwd": cwd,
         "title": title,
+        "conversationTitle": title,
+        "conversationAt": conversation_at,
         "firstPrompt": str(session.get("firstUserMessage") or ""),
         "lastPrompt": str(
             session.get("lastUserMessage")
@@ -291,6 +301,7 @@ def build_archive_record(
     if kind == "codex":
         record.update(
             {
+                "historyMode": str(session.get("historyMode") or ""),
                 "model": session.get("model"),
                 "modelProvider": session.get("modelProvider"),
                 "reasoningEffort": session.get("reasoningEffort"),
@@ -959,12 +970,21 @@ def _load_codex_threads() -> list[dict[str, Any]]:
     except sqlite3.Error:
         return []
     try:
+        thread_columns = {
+            str(row[1])
+            for row in connection.execute("pragma table_info(threads)").fetchall()
+        }
+        name_column = "name" if "name" in thread_columns else "null"
+        recency_at_column = "recency_at" if "recency_at" in thread_columns else "null"
+        recency_at_ms_column = "recency_at_ms" if "recency_at_ms" in thread_columns else "null"
+        history_mode_column = "history_mode" if "history_mode" in thread_columns else "null"
         rows = connection.execute(
-            """
+            f"""
             select
                 id,
                 rollout_path,
                 cwd,
+                {name_column},
                 title,
                 first_user_message,
                 preview,
@@ -972,13 +992,23 @@ def _load_codex_threads() -> list[dict[str, Any]]:
                 updated_at,
                 created_at_ms,
                 updated_at_ms,
+                {recency_at_column},
+                {recency_at_ms_column},
+                {history_mode_column},
                 model_provider,
                 model,
                 reasoning_effort,
                 tokens_used
             from threads
             where archived = 0
-            order by coalesce(updated_at_ms, updated_at * 1000, created_at_ms, created_at * 1000) desc
+            order by coalesce(
+                {recency_at_ms_column},
+                {recency_at_column} * 1000,
+                updated_at_ms,
+                updated_at * 1000,
+                created_at_ms,
+                created_at * 1000
+            ) desc
             limit ?
             """,
             (DEFAULT_SCAN_LIMIT,),
@@ -989,11 +1019,12 @@ def _load_codex_threads() -> list[dict[str, Any]]:
         connection.close()
 
     threads = []
-    for row in rows:
+    for row_index, row in enumerate(rows):
         (
             thread_id,
             rollout_path,
             cwd,
+            name,
             title,
             first_user_message,
             preview,
@@ -1001,22 +1032,39 @@ def _load_codex_threads() -> list[dict[str, Any]]:
             updated_at,
             created_at_ms,
             updated_at_ms,
+            recency_at,
+            recency_at_ms,
+            history_mode,
             model_provider,
             model,
             reasoning_effort,
             tokens_used,
         ) = row
-        last_user_message = _last_codex_user_message(Path(str(rollout_path or "")).expanduser())
+        last_user_message = (
+            _last_codex_user_message(Path(str(rollout_path or "")).expanduser())
+            if row_index < DEFAULT_ROLLOUT_PROMPT_SCAN_LIMIT
+            else ""
+        )
+        conversation_title = str(name or title or first_user_message or "Codex session")
+        updated_at_value = _int_or_none(updated_at_ms) or ((_int_or_none(updated_at) or 0) * 1000)
+        recency_at_value = (
+            _int_or_none(recency_at_ms)
+            or ((_int_or_none(recency_at) or 0) * 1000)
+            or updated_at_value
+        )
         threads.append(
             {
                 "resumeId": str(thread_id),
                 "cwd": str(cwd or Path.home()),
-                "title": str(title or first_user_message or "Codex session"),
+                "title": conversation_title,
+                "conversationTitle": conversation_title,
                 "firstUserMessage": str(first_user_message or ""),
                 "preview": str(preview or ""),
                 "lastUserMessage": last_user_message,
                 "startedAt": _int_or_none(created_at_ms) or ((_int_or_none(created_at) or 0) * 1000),
-                "updatedAt": _int_or_none(updated_at_ms) or ((_int_or_none(updated_at) or 0) * 1000),
+                "updatedAt": updated_at_value,
+                "recencyAt": recency_at_value,
+                "historyMode": str(history_mode or ""),
                 "model": model,
                 "modelProvider": model_provider,
                 "reasoningEffort": reasoning_effort,

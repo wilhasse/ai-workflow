@@ -1373,6 +1373,72 @@ class SessionArchiveTests(unittest.TestCase):
                     id text,
                     rollout_path text,
                     cwd text,
+                    name text,
+                    title text,
+                    first_user_message text,
+                    preview text,
+                    created_at integer,
+                    updated_at integer,
+                    created_at_ms integer,
+                    updated_at_ms integer,
+                    recency_at integer,
+                    recency_at_ms integer,
+                    history_mode text,
+                    model_provider text,
+                    model text,
+                    reasoning_effort text,
+                    tokens_used integer,
+                    archived integer
+                )
+                '''
+            )
+            database.execute(
+                'insert into threads values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                (
+                    'thread-1', '', '/repo', 'Generated title', 'First prompt title', 'hello',
+                    'preview', 1, 2, 1000, 2000, 3, 3500, 'paginated', 'cliproxy',
+                    'qwen3.8-max', 'high', 9876, 0,
+                ),
+            )
+            database.commit()
+            database.close()
+
+            with mock.patch('wsv2.session_archive.Path.home', return_value=home):
+                threads = _load_codex_threads()
+
+        self.assertEqual(
+            {
+                key: threads[0][key]
+                for key in (
+                    'resumeId', 'title', 'conversationTitle', 'recencyAt', 'historyMode',
+                    'model', 'modelProvider', 'reasoningEffort', 'tokensUsed',
+                )
+            },
+            {
+                'resumeId': 'thread-1',
+                'title': 'Generated title',
+                'conversationTitle': 'Generated title',
+                'recencyAt': 3500,
+                'historyMode': 'paginated',
+                'model': 'qwen3.8-max',
+                'modelProvider': 'cliproxy',
+                'reasoningEffort': 'high',
+                'tokensUsed': 9876,
+            },
+        )
+
+    def test_load_codex_threads_supports_schema_before_conversation_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            codex_dir = home / '.codex'
+            codex_dir.mkdir()
+            database = sqlite3.connect(codex_dir / 'state_5.sqlite')
+            database.execute(
+                '''
+                create table threads (
+                    id text,
+                    rollout_path text,
+                    cwd text,
                     title text,
                     first_user_message text,
                     preview text,
@@ -1391,8 +1457,8 @@ class SessionArchiveTests(unittest.TestCase):
             database.execute(
                 'insert into threads values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 (
-                    'thread-1', '', '/repo', 'Test', 'hello', 'preview', 1, 2,
-                    1000, 2000, 'cliproxy', 'qwen3.8-max', 'high', 9876, 0,
+                    'legacy-thread', '', '/legacy', 'Legacy title', 'hello', 'preview',
+                    1, 2, 1000, 2000, 'openai', 'gpt-5', 'medium', 123, 0,
                 ),
             )
             database.commit()
@@ -1401,19 +1467,9 @@ class SessionArchiveTests(unittest.TestCase):
             with mock.patch('wsv2.session_archive.Path.home', return_value=home):
                 threads = _load_codex_threads()
 
-        self.assertEqual(
-            {
-                key: threads[0][key]
-                for key in ('resumeId', 'model', 'modelProvider', 'reasoningEffort', 'tokensUsed')
-            },
-            {
-                'resumeId': 'thread-1',
-                'model': 'qwen3.8-max',
-                'modelProvider': 'cliproxy',
-                'reasoningEffort': 'high',
-                'tokensUsed': 9876,
-            },
-        )
+        self.assertEqual(threads[0]['conversationTitle'], 'Legacy title')
+        self.assertEqual(threads[0]['recencyAt'], 2000)
+        self.assertEqual(threads[0]['historyMode'], '')
 
     def test_build_archive_record_does_not_use_generic_title_as_prompt(self) -> None:
         record = build_archive_record(

@@ -4166,6 +4166,16 @@ button.danger:hover:not(:disabled) {
 
 .ah-session-card-top {
   justify-content: space-between;
+  align-items: flex-start;
+}
+
+.ah-conversation-title {
+  min-width: 0;
+  color: var(--color-text-primary);
+  font-size: 0.94rem;
+  font-weight: 700;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .ah-session-id {
@@ -4233,6 +4243,8 @@ button.danger:hover:not(:disabled) {
 .ah-badge-claude { color: #fbbf24; background: rgba(217, 119, 6, 0.2); }
 .ah-badge-vm { color: #0f766e; background: rgba(20, 184, 166, 0.16); }
 .ah-badge-project { color: var(--color-text-secondary); background: rgba(148, 163, 184, 0.12); }
+.ah-badge-history { color: #c4b5fd; background: rgba(139, 92, 246, 0.16); }
+.ah-badge-metadata { color: #67e8f9; background: rgba(8, 145, 178, 0.18); }
 .ah-badge-rank { color: var(--color-accent-primary); background: rgba(245, 158, 11, 0.16); }
 .ah-badge-unknown { color: var(--color-text-tertiary); background: rgba(148, 163, 184, 0.1); }
 
@@ -4344,6 +4356,35 @@ button.danger:hover:not(:disabled) {
   color: var(--color-text-tertiary);
 }
 
+.conversation-date-group + .conversation-date-group {
+  margin-top: 1rem;
+}
+
+.conversation-date-heading {
+  position: sticky;
+  top: -0.85rem;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: -0.15rem 0 0.55rem;
+  padding: 0.45rem 0.15rem;
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-primary);
+  color: var(--color-text-secondary);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.conversation-date-heading span:last-child {
+  color: var(--color-text-tertiary);
+  font-size: 0.7rem;
+  font-weight: 500;
+}
+
 @media (max-width: 900px) {
   .ah-side-list {
     display: none;
@@ -4448,6 +4489,30 @@ button.danger:hover:not(:disabled) {
   flex: 1;
 }
 
+.ri-conversation-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.ri-conversation-title {
+  min-width: 0;
+  color: var(--color-text-primary);
+  font-size: 0.96rem;
+  font-weight: 750;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.ri-conversation-time {
+  flex: 0 0 auto;
+  color: var(--color-text-tertiary);
+  font-size: 0.76rem;
+  white-space: nowrap;
+}
+
 .ri-row-title,
 .ri-meta {
   display: flex;
@@ -4457,7 +4522,17 @@ button.danger:hover:not(:disabled) {
 }
 
 .ri-terminal {
+  color: var(--color-text-secondary);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.ri-folder {
+  padding: 0.12rem 0.45rem;
+  border-radius: var(--radius-sm);
+  background: rgba(148, 163, 184, 0.14);
   color: var(--color-text-primary);
+  font-size: 0.78rem;
   font-weight: 700;
 }
 
@@ -4485,6 +4560,11 @@ button.danger:hover:not(:disabled) {
 .ri-runtime-badge.effort {
   background: rgba(14, 165, 233, 0.17);
   text-transform: capitalize;
+}
+
+.ri-runtime-badge.history {
+  background: rgba(139, 92, 246, 0.17);
+  color: #c4b5fd;
 }
 
 .ri-status.active {
@@ -4518,6 +4598,10 @@ button.danger:hover:not(:disabled) {
   font-size: 0.78rem;
 }
 
+.ri-conversation-id {
+  font-family: 'JetBrains Mono', monospace;
+}
+
 .ri-command {
   display: block;
   margin-top: 0.55rem;
@@ -4534,6 +4618,9 @@ button.danger:hover:not(:disabled) {
 
 .ri-actions {
   flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
 }
 
 .ri-error,
@@ -4547,4 +4634,16 @@ button.danger:hover:not(:disabled) {
   background: rgba(220, 38, 38, 0.08);
   border: 1px solid rgba(220, 38, 38, 0.2);
   border-radius: var(--radius-md);
+}
+
+@media (max-width: 760px) {
+  .ri-row,
+  .ri-conversation-heading {
+    flex-direction: column;
+  }
+
+  .ri-actions {
+    width: 100%;
+    flex-direction: row;
+  }
 }

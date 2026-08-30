@@ -1,4 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  conversationFolder,
+  conversationTimestamp,
+  conversationTitle,
+  formatConversationDateTime,
+  groupConversationsByDate,
+} from '../../utils/conversationPresentation.js'
 
 const API_BASE = '/api/recovery-index'
 
@@ -75,7 +82,7 @@ function recordMatchesWorkspace(record, workspaceKey) {
 }
 
 function compareByRecentActivity(left, right) {
-  const timestampDifference = Number(right.score || 0) - Number(left.score || 0)
+  const timestampDifference = conversationTimestamp(right) - conversationTimestamp(left)
   if (timestampDifference) return timestampDifference
   if (Boolean(right.active) !== Boolean(left.active)) return right.active ? 1 : -1
 
@@ -84,27 +91,38 @@ function compareByRecentActivity(left, right) {
 }
 
 function RecoveryRow({ record }) {
-  const [copied, setCopied] = useState(false)
+  const [copiedAction, setCopiedAction] = useState('')
   const manualResume = buildManualResume(record)
 
   const copyResume = async () => {
     if (!manualResume) return
     await copyText(manualResume)
-    setCopied(true)
-    window.setTimeout(() => setCopied(false), 1400)
+    setCopiedAction('command')
+    window.setTimeout(() => setCopiedAction(''), 1400)
+  }
+
+  const copyId = async () => {
+    await copyText(record.resumeId)
+    setCopiedAction('id')
+    window.setTimeout(() => setCopiedAction(''), 1400)
   }
 
   return (
     <article className={`ri-row ${record.active ? 'active' : ''}`}>
       <div className="ri-row-main">
+        <div className="ri-conversation-heading">
+          <span className="ri-conversation-title">{conversationTitle(record)}</span>
+          <span className="ri-conversation-time">{formatConversationDateTime(record)}</span>
+        </div>
         <div className="ri-row-title">
+          <span className="ri-folder" title={record.cwd}>{conversationFolder(record) || 'Unknown folder'}</span>
           <span className="ri-terminal">
-            {record.workspaceName}
-            {record.terminalIndex != null ? ` #${record.terminalIndex}` : ''}
+            {record.workspaceName}{record.terminalIndex != null ? ` #${record.terminalIndex}` : ''}
           </span>
           {record.label && <span className="ri-label">{record.label}</span>}
           {record.status && <span className={`ri-status ${record.status}`}>{record.status}</span>}
           {record.active && <span className="ri-status active">active</span>}
+          {record.historyMode && <span className="ri-runtime-badge history">{record.historyMode}</span>}
           {record.model && <span className="ri-runtime-badge">{record.model}</span>}
           {record.modelProvider && <span className="ri-runtime-badge provider">{record.modelProvider}</span>}
           {record.reasoningEffort && <span className="ri-runtime-badge effort">{record.reasoningEffort}</span>}
@@ -116,18 +134,20 @@ function RecoveryRow({ record }) {
         <div className="ri-meta">
           <span>{record.hostName || record.hostId}</span>
           <span>{record.tool}</span>
-          <span title={record.resumeId}>{shortId(record.resumeId, 18)}</span>
+          <span className="ri-conversation-id" title={record.resumeId}>ID {shortId(record.resumeId, 18)}</span>
           {record.cwd && <span title={record.cwd}>{record.cwd}</span>}
           {record.tokensUsed > 0 && <span>{formatTokens(record.tokensUsed)} tokens</span>}
-          <span>{formatDate(record.score || record.updatedAt || record.lastSeenAt)}</span>
         </div>
         {manualResume && (
           <code className="ri-command" title={manualResume}>{manualResume}</code>
         )}
       </div>
       <div className="ri-actions">
+        <button className="secondary" type="button" onClick={copyId}>
+          {copiedAction === 'id' ? 'ID copied' : 'Copy ID'}
+        </button>
         <button className="secondary" type="button" onClick={copyResume} disabled={!manualResume}>
-          {copied ? 'Copied' : 'Copy command'}
+          {copiedAction === 'command' ? 'Copied' : 'Copy command'}
         </button>
       </div>
     </article>
@@ -150,12 +170,16 @@ export default function RecoveryIndexView() {
       .sort(compareByRecentActivity),
     [records, workspaceKey],
   )
+  const groupedRecords = useMemo(
+    () => groupConversationsByDate(filteredRecords, { sort: false }),
+    [filteredRecords],
+  )
 
   const fetchData = useCallback(async (filters) => {
     setLoading(true)
     setError('')
     try {
-      const next = await loadRecoveryIndex({ ...filters, limit: 1200 })
+      const next = await loadRecoveryIndex({ ...filters, includeLowInfo: 1, limit: 2500 })
       setData(next)
     } catch (err) {
       setError(err.message || 'Unable to load recovery index')
@@ -232,8 +256,16 @@ export default function RecoveryIndexView() {
       <div className="ri-content">
         {loading && !records.length && <div className="ri-empty">Loading recovery index...</div>}
         {!loading && !filteredRecords.length && !error && <div className="ri-empty">No saved conversations found</div>}
-        {filteredRecords.map((record) => (
-          <RecoveryRow key={`${record.tool}-${record.resumeId}`} record={record} />
+        {groupedRecords.map((group) => (
+          <section className="conversation-date-group" key={group.key}>
+            <h3 className="conversation-date-heading">
+              <span>{group.label}</span>
+              <span>{group.conversations.length} conversation{group.conversations.length === 1 ? '' : 's'}</span>
+            </h3>
+            {group.conversations.map((record) => (
+              <RecoveryRow key={`${record.tool}-${record.resumeId}`} record={record} />
+            ))}
+          </section>
         ))}
       </div>
     </section>

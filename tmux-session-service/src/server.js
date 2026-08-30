@@ -1414,6 +1414,7 @@ const loadArchiveWorkspaces = async (hosts, seenWorkspaces) => {
     }
     const score = Math.max(
       Number(record.activityAt || 0),
+      Number(record.conversationAt || 0),
       Number(record.lastSeenAt || 0),
       Number(record.updatedAt || 0),
     )
@@ -1455,6 +1456,7 @@ const cleanRecoveryPrompt = (value) => {
 const recoveryRecordScore = (record) => {
   const activityScore = Math.max(
     Number(record?.activityAt || 0),
+    Number(record?.conversationAt || 0),
     Number(record?.updatedAt || 0),
   )
   if (activityScore) {
@@ -1499,7 +1501,7 @@ const buildRecoveryIndex = async (searchParams = new URLSearchParams()) => {
   const toolFilter = String(searchParams.get('tool') || '').trim().toLowerCase()
   const query = String(searchParams.get('q') || '').trim().toLowerCase()
   const includeLowInfo = searchParams.get('includeLowInfo') === '1'
-  const limit = Math.min(Math.max(Number.parseInt(searchParams.get('limit') || '800', 10) || 800, 1), 2000)
+  const limit = Math.min(Math.max(Number.parseInt(searchParams.get('limit') || '800', 10) || 800, 1), 2500)
 
   const seen = new Set()
   const rows = []
@@ -1536,8 +1538,13 @@ const buildRecoveryIndex = async (searchParams = new URLSearchParams()) => {
     if (!hasCapturedPrompt && !includeLowInfo) {
       continue
     }
-    const summary = compactRecoveryText(record.title || firstPrompt || lastPrompt || 'Agent session', 220)
+    const conversationTitle = compactRecoveryText(
+      record.conversationTitle || record.title || firstPrompt || lastPrompt || 'Agent session',
+      220,
+    )
+    const summary = conversationTitle
     const cwd = String(record.cwd || tmuxData.paneCwd || '')
+    const folder = cwd ? path.basename(cwd) || cwd : ''
     const searchBlob = [
       hostId,
       sessionId,
@@ -1549,7 +1556,10 @@ const buildRecoveryIndex = async (searchParams = new URLSearchParams()) => {
       record.model,
       record.modelProvider,
       record.reasoningEffort,
+      record.historyMode,
       cwd,
+      folder,
+      conversationTitle,
       summary,
       firstPrompt,
       lastPrompt,
@@ -1577,6 +1587,10 @@ const buildRecoveryIndex = async (searchParams = new URLSearchParams()) => {
       reasoningEffort: String(record.reasoningEffort || ''),
       tokensUsed: Number(record.tokensUsed || 0),
       cwd,
+      folder,
+      conversationTitle,
+      conversationAt: Number(record.conversationAt || record.updatedAt || record.startedAt || 0),
+      historyMode: String(record.historyMode || ''),
       summary,
       firstPrompt,
       lastPrompt,
