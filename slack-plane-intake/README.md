@@ -39,7 +39,8 @@ The Hermes gateway can use `grok-4.6` as a separate fallback through the same
 CLIProxyAPI endpoint. Register the account with CLIProxyAPI's `--xai-login`
 flow before enabling that entry in `deploy/hermes-config.example.yaml`. Keep
 the generated xAI credential in CLIProxyAPI's protected auth directory; never
-copy it into this repository.
+copy it into this repository. Verify that the credential file has mode `0600`
+after login and token rotation.
 
 The source key `slack:<team>:<channel>:<message_ts>` and a visible, immutable
 Plane provenance ID make repeated delivery idempotent. Multi-message sources use
