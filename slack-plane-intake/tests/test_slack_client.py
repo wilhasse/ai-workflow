@@ -483,6 +483,255 @@ async def test_history_picker_reads_following_dm_window_as_invoking_user(
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_history_picker_reads_alert_channel_with_bot_token(tmp_path, limits):
+    auth = respx.get("https://slack.com/api/auth.test").mock(
+        return_value=httpx.Response(200, json={"ok": True, "team_id": "T1"})
+    )
+    history = respx.get("https://slack.com/api/conversations.history").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "messages": [
+                    {
+                        "ts": "1724440000.000001",
+                        "bot_id": "BALERT",
+                        "username": "Alertas",
+                        "text": ":x_vermelho: down",
+                    },
+                    {
+                        "ts": "1724440100.000001",
+                        "bot_id": "BALERT",
+                        "username": "Alertas",
+                        "text": "follow-up",
+                    },
+                ],
+            },
+        )
+    )
+    bot_http = httpx.AsyncClient(
+        base_url="https://slack.com/api/",
+        headers={"Authorization": "Bearer xoxb-secret"},
+    )
+    user_http = httpx.AsyncClient(
+        base_url="https://slack.com/api/",
+        headers={"Authorization": "Bearer xoxp-history"},
+    )
+    client = SlackClient(
+        SlackConfig(
+            "xoxb-secret",
+            "DINTAKE",
+            frozenset({"U1"}),
+            frozenset({"U1"}),
+            "U1",
+            "xoxp-history",
+        ),
+        limits,
+        tmp_path,
+        client=bot_http,
+        user_client=user_http,
+    )
+
+    messages = await client.fetch_shortcut_history_payloads(
+        team_id="T1",
+        channel_id="CALERTAS",
+        invoking_user_id="U1",
+        selected_message_payload={
+            "ts": "1724440000.000001",
+            "bot_id": "BALERT",
+            "username": "Alertas",
+            "text": ":x_vermelho: down",
+        },
+    )
+    await client.close()
+    await bot_http.aclose()
+    await user_http.aclose()
+
+    assert [message["ts"] for message in messages] == [
+        "1724440000.000001",
+        "1724440100.000001",
+    ]
+    assert auth.call_count == 1
+    assert history.calls[0].request.headers["Authorization"] == "Bearer xoxb-secret"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_history_picker_joins_public_channel_when_bot_is_absent(tmp_path, limits):
+    respx.get("https://slack.com/api/auth.test").mock(
+        return_value=httpx.Response(200, json={"ok": True, "team_id": "T1"})
+    )
+    history = respx.get("https://slack.com/api/conversations.history").mock(
+        side_effect=[
+            httpx.Response(200, json={"ok": False, "error": "not_in_channel"}),
+            httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "messages": [
+                        {
+                            "ts": "1724440000.000001",
+                            "text": "alert",
+                            "bot_id": "B1",
+                        }
+                    ],
+                },
+            ),
+        ]
+    )
+    joined = respx.post("https://slack.com/api/conversations.join").mock(
+        return_value=httpx.Response(200, json={"ok": True, "channel": {"id": "CALERT"}})
+    )
+    bot_http = httpx.AsyncClient(
+        base_url="https://slack.com/api/",
+        headers={"Authorization": "Bearer xoxb-secret"},
+    )
+    client = SlackClient(
+        SlackConfig(
+            "xoxb-secret",
+            "DINTAKE",
+            frozenset({"U1"}),
+            frozenset({"U1"}),
+        ),
+        limits,
+        tmp_path,
+        client=bot_http,
+    )
+
+    messages = await client.fetch_shortcut_history_payloads(
+        team_id="T1",
+        channel_id="CALERT",
+        invoking_user_id="U1",
+        selected_message_payload={"ts": "1724440000.000001", "text": "alert"},
+    )
+    await client.close()
+    await bot_http.aclose()
+
+    assert [message["ts"] for message in messages] == ["1724440000.000001"]
+    assert joined.called
+    assert history.call_count == 2
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_history_picker_joins_after_channel_not_found(tmp_path, limits):
+    respx.get("https://slack.com/api/auth.test").mock(
+        return_value=httpx.Response(200, json={"ok": True, "team_id": "T1"})
+    )
+    history = respx.get("https://slack.com/api/conversations.history").mock(
+        side_effect=[
+            httpx.Response(200, json={"ok": False, "error": "channel_not_found"}),
+            httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "messages": [
+                        {"ts": "1724440000.000001", "text": "alert", "bot_id": "B1"}
+                    ],
+                },
+            ),
+        ]
+    )
+    joined = respx.post("https://slack.com/api/conversations.join").mock(
+        return_value=httpx.Response(200, json={"ok": True, "channel": {"id": "CALERT"}})
+    )
+    bot_http = httpx.AsyncClient(
+        base_url="https://slack.com/api/",
+        headers={"Authorization": "Bearer xoxb-secret"},
+    )
+    client = SlackClient(
+        SlackConfig(
+            "xoxb-secret",
+            "DINTAKE",
+            frozenset({"U1"}),
+            frozenset({"U1"}),
+        ),
+        limits,
+        tmp_path,
+        client=bot_http,
+    )
+
+    messages = await client.fetch_shortcut_history_payloads(
+        team_id="T1",
+        channel_id="CALERT",
+        invoking_user_id="U1",
+        selected_message_payload={"ts": "1724440000.000001", "text": "alert"},
+    )
+    await client.close()
+    await bot_http.aclose()
+
+    assert [message["ts"] for message in messages] == ["1724440000.000001"]
+    assert joined.called
+    assert history.call_count == 2
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_history_picker_keeps_selected_alert_when_channel_is_invisible(
+    tmp_path, limits
+):
+    respx.get("https://slack.com/api/auth.test").mock(
+        side_effect=[
+            httpx.Response(200, json={"ok": True, "team_id": "T1"}),
+            httpx.Response(200, json={"ok": True, "team_id": "T1", "user_id": "U1"}),
+        ]
+    )
+    respx.get("https://slack.com/api/conversations.history").mock(
+        side_effect=[
+            httpx.Response(200, json={"ok": False, "error": "channel_not_found"}),
+            httpx.Response(200, json={"ok": False, "error": "missing_scope"}),
+        ]
+    )
+    respx.post("https://slack.com/api/conversations.join").mock(
+        return_value=httpx.Response(
+            200, json={"ok": False, "error": "method_not_supported_for_channel_type"}
+        )
+    )
+    bot_http = httpx.AsyncClient(
+        base_url="https://slack.com/api/",
+        headers={"Authorization": "Bearer xoxb-secret"},
+    )
+    user_http = httpx.AsyncClient(
+        base_url="https://slack.com/api/",
+        headers={"Authorization": "Bearer xoxp-history"},
+    )
+    client = SlackClient(
+        SlackConfig(
+            "xoxb-secret",
+            "DINTAKE",
+            frozenset({"U1"}),
+            frozenset({"U1"}),
+            "U1",
+            "xoxp-history",
+        ),
+        limits,
+        tmp_path,
+        client=bot_http,
+        user_client=user_http,
+    )
+    selected = {
+        "ts": "1724440000.000001",
+        "bot_id": "BALERT",
+        "username": "Alertas",
+        "text": ":x_vermelho: down",
+    }
+
+    messages = await client.fetch_shortcut_history_payloads(
+        team_id="T1",
+        channel_id="CALERTAS",
+        invoking_user_id="U1",
+        selected_message_payload=selected,
+    )
+    await client.close()
+    await bot_http.aclose()
+    await user_http.aclose()
+
+    assert [message["ts"] for message in messages] == ["1724440000.000001"]
+    assert messages[0]["text"] == ":x_vermelho: down"
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_history_picker_keeps_first_twenty_messages_from_anchor(tmp_path, limits):
     respx.get("https://slack.com/api/auth.test").mock(
         side_effect=[

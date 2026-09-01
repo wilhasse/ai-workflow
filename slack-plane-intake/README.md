@@ -182,6 +182,14 @@ On submission, the selected project is fetched again with that same token before
 the workflow resolves the project's initial state and creates the work item.
 Read-only/public projects in which the user is not a member are not offered.
 
+Channel shortcuts, including `#alertas`, use the Hermes bot token. The bot
+already needs `channels:history` and `groups:history`. For a public channel the
+bot is not in, intake joins it with `channels:join` and then reads the bounded
+history window. If the channel is private or otherwise invisible to the bot,
+the modal still opens with the message that was selected. Nearby messages in
+those private channels need the Hermes app invited, or a user token with
+`channels:history` / `groups:history`.
+
 Reading a normal person-to-person DM requires a Slack User OAuth token because
 the Hermes bot is not a member of that conversation. In the existing Slack app,
 add the User Token Scopes `im:history` and `files:read`, reinstall the app as the

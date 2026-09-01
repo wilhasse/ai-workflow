@@ -25,6 +25,10 @@ _HISTORY_CANDIDATE_LIMIT = 100
 _HISTORY_SELECTION_LIMIT = 20
 
 
+def is_im_channel(channel_id: str) -> bool:
+    return str(channel_id).startswith("D")
+
+
 @dataclass
 class _DownloadBudget:
     files_seen: int = 0
@@ -114,7 +118,7 @@ class SlackClient:
         selected_message_payload: dict,
     ) -> tuple[dict, ...]:
         """Fetch the anchor and up to 19 following messages over 30 minutes."""
-        if (
+        if is_im_channel(channel_id) and (
             not self.config.history_user_id
             or invoking_user_id != self.config.history_user_id
         ):
@@ -131,20 +135,24 @@ class SlackClient:
             raise SourceValidationError("Slack message timestamp is invalid")
         selected_time = Decimal(selected_ts)
 
-        auth = await self._user_api("auth.test")
-        self._validate_history_identity(
-            auth,
-            team_id=team_id,
-            invoking_user_id=invoking_user_id,
-        )
-        history = await self._user_api(
-            "conversations.history",
-            channel=channel_id,
-            oldest=str(selected_time),
-            latest=str(selected_time + _HISTORY_FOLLOWING_WINDOW_SECONDS),
-            inclusive="true",
-            limit=str(_HISTORY_CANDIDATE_LIMIT),
-        )
+        if is_im_channel(channel_id):
+            auth = await self._user_api("auth.test")
+            self._validate_history_identity(
+                auth,
+                team_id=team_id,
+                invoking_user_id=invoking_user_id,
+            )
+            history = await self._user_api(
+                "conversations.history",
+                **self._history_params(channel_id, selected_time),
+            )
+        else:
+            history = await self._channel_history(
+                channel_id,
+                selected_time,
+                team_id=team_id,
+                invoking_user_id=invoking_user_id,
+            )
         candidates: dict[str, dict] = {}
         for value in history.get("messages") or ():
             if not isinstance(value, dict):
@@ -327,7 +335,8 @@ class SlackClient:
         budget = _DownloadBudget()
         parts = []
         use_history_user = bool(
-            self.config.history_user_token
+            is_im_channel(channel_id)
+            and self.config.history_user_token
             and invoking_user_id == self.config.history_user_id
         )
         if use_history_user:
@@ -354,6 +363,88 @@ class SlackClient:
             channel_id=channel_id,
             messages=ordered,
         )
+
+    @staticmethod
+    def _history_params(channel_id: str, selected_time: Decimal) -> dict[str, str]:
+        return {
+            "channel": channel_id,
+            "oldest": str(selected_time),
+            "latest": str(selected_time + _HISTORY_FOLLOWING_WINDOW_SECONDS),
+            "inclusive": "true",
+            "limit": str(_HISTORY_CANDIDATE_LIMIT),
+        }
+
+    @staticmethod
+    def _is_channel_membership_error(exc: ExternalServiceError) -> bool:
+        text = str(exc)
+        return "not_in_channel" in text or "channel_not_found" in text
+
+    async def _channel_history(
+        self,
+        channel_id: str,
+        selected_time: Decimal,
+        *,
+        team_id: str,
+        invoking_user_id: str,
+    ) -> dict:
+        try:
+            return await self._bot_channel_history(channel_id, selected_time)
+        except ExternalServiceError:
+            return await self._user_channel_history_or_empty(
+                channel_id,
+                selected_time,
+                team_id=team_id,
+                invoking_user_id=invoking_user_id,
+            )
+
+    async def _user_channel_history_or_empty(
+        self,
+        channel_id: str,
+        selected_time: Decimal,
+        *,
+        team_id: str,
+        invoking_user_id: str,
+    ) -> dict:
+        if (
+            self.user_client is None
+            or not self.config.history_user_id
+            or invoking_user_id != self.config.history_user_id
+        ):
+            return {"messages": []}
+        try:
+            auth = await self._user_api("auth.test")
+            self._validate_history_identity(
+                auth,
+                team_id=team_id,
+                invoking_user_id=invoking_user_id,
+            )
+            return await self._user_api(
+                "conversations.history",
+                **self._history_params(channel_id, selected_time),
+            )
+        except (ExternalServiceError, SourceValidationError):
+            return {"messages": []}
+
+    async def _bot_channel_history(
+        self, channel_id: str, selected_time: Decimal
+    ) -> dict:
+        params = self._history_params(channel_id, selected_time)
+        try:
+            return await self._api("conversations.history", **params)
+        except ExternalServiceError as exc:
+            if not channel_id.startswith("C") or not self._is_channel_membership_error(
+                exc
+            ):
+                raise
+            try:
+                await self._api(
+                    "conversations.join",
+                    request_method="POST",
+                    channel=channel_id,
+                )
+            except ExternalServiceError:
+                raise exc from None
+            return await self._api("conversations.history", **params)
 
     async def _authorize_shortcut(
         self, *, team_id: str, channel_id: str, invoking_user_id: str

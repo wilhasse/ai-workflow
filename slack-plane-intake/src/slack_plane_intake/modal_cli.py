@@ -29,7 +29,7 @@ from .shortcut_models import (
     SlackMessage,
     sanitized_message_payload,
 )
-from .slack_client import SlackClient
+from .slack_client import SlackClient, is_im_channel
 
 _MAX_PAYLOAD_BYTES = 2 * 1024 * 1024
 _MAX_PROJECT_OPTIONS = 100
@@ -166,7 +166,7 @@ async def process_request(
                 )
             scoped_config = config.for_shortcut_user(shortcut.user.id)
             projects = await _list_projects(scoped_config, project_factory)
-            if (
+            if (not is_im_channel(shortcut.channel.id)) or (
                 scoped_config.slack.history_user_token
                 and shortcut.user.id == scoped_config.slack.history_user_id
             ):
