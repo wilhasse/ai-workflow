@@ -135,7 +135,7 @@ class UploadReport(FrozenModel):
 
 
 class IntakeResult(FrozenModel):
-    status: Literal["created", "existing", "partial", "failed"]
+    status: Literal["created", "appended", "existing", "partial", "failed"]
     issue_key: str | None = None
     issue_url: str | None = None
     model_used: str | None = None

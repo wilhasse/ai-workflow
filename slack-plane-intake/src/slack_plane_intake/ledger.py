@@ -104,7 +104,7 @@ class IntakeLedger:
             return LedgerClaim(claimed=True, attempt_count=attempt_count)
 
     def complete(self, source_key: str, result: IntakeResult) -> None:
-        if result.status not in {"created", "partial", "existing"}:
+        if result.status not in {"created", "appended", "partial", "existing"}:
             raise ValueError("Only successful or partial results can complete a claim")
         now = datetime.now(UTC).isoformat()
         with self._connect() as connection:

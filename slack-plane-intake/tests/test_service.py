@@ -153,3 +153,44 @@ async def test_shortcut_bundle_uses_one_aggregate_idempotent_workflow(
     intake.slack.fetch_shortcut_source_messages.assert_awaited_once()
     analyzer.analyze.assert_awaited_once_with(bundle)
     plane.create_problem.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_appends_comment_and_attachments_to_existing_ticket(
+    tmp_path, source_message
+):
+    intake, _analyzer, plane = service(tmp_path, source_message)
+    plane.config = MagicMock(project_identifier="DELTA", project_id="project-delta")
+    plane.get_work_item_by_sequence = AsyncMock(
+        return_value=PlaneWorkItem(
+            id="I385",
+            key="DELTA-385",
+            url="https://plane.test/ws/browse/DELTA-385",
+        )
+    )
+    plane.add_update_comment = AsyncMock()
+    plane.upload_originals.return_value = UploadReport(uploaded=1)
+    intake.slack.fetch_shortcut_source_messages.return_value = source_message
+
+    result = await intake.append_from_slack_shortcut_messages(
+        team_id="T1",
+        channel_id="DINTAKE",
+        invoking_user_id="U1",
+        message_payloads=({"ts": source_message.message_ts},),
+        issue_number="385",
+    )
+    duplicate = await intake.append_from_slack_shortcut_messages(
+        team_id="T1",
+        channel_id="DINTAKE",
+        invoking_user_id="U1",
+        message_payloads=({"ts": source_message.message_ts},),
+        issue_number="385",
+    )
+
+    assert result.status == "appended"
+    assert result.issue_key == "DELTA-385"
+    assert result.attachments_uploaded == 1
+    assert duplicate.status == "existing"
+    plane.create_problem.assert_not_awaited()
+    assert plane.add_update_comment.await_count == 1
+    assert plane.upload_originals.await_count == 1

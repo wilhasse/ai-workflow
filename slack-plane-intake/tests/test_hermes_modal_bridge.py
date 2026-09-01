@@ -70,8 +70,9 @@ def submission_body(
 
 def test_collector_modal_selects_all_and_metadata_contains_no_message_text(bridge):
     view = bridge._ready_view(ready_result())
-    message_element = view["blocks"][2]["element"]
+    message_element = view["blocks"][3]["element"]
     project_element = view["blocks"][1]["element"]
+    number_block = view["blocks"][2]
 
     assert view["callback_id"] == "create_agente_ticket_modal"
     assert view["title"]["text"] == "Ticket Plane"
@@ -88,6 +89,9 @@ def test_collector_modal_selects_all_and_metadata_contains_no_message_text(bridg
     assert "first" not in view["private_metadata"]
     assert "second" not in view["private_metadata"]
     assert "P-OLOS" not in view["private_metadata"]
+    assert number_block["optional"] is True
+    assert number_block["block_id"] == "issue_number"
+    assert number_block["element"]["type"] == "plain_text_input"
 
 
 def test_history_picker_modal_selects_anchor_and_following_messages(bridge):
@@ -99,7 +103,7 @@ def test_history_picker_modal_selects_anchor_and_following_messages(bridge):
     assert view["close"]["text"] == "Cancelar"
     assert "a selecionada e as seguintes" in view["blocks"][0]["text"]["text"]
     assert "próximos 30 minutos" in view["blocks"][0]["text"]["text"]
-    element = view["blocks"][2]["element"]
+    element = view["blocks"][3]["element"]
     assert [option["value"] for option in element["initial_options"]] == [
         "1724440000.000001",
         "1724440001.000001",
@@ -120,7 +124,7 @@ def test_modal_offers_and_preselects_twenty_messages(bridge):
     ]
 
     view = bridge._ready_view(result)
-    element = view["blocks"][2]["element"]
+    element = view["blocks"][3]["element"]
 
     assert len(element["options"]) == 20
     assert element["initial_options"] == element["options"]
@@ -173,6 +177,31 @@ def test_submission_includes_selected_project(bridge):
     assert not error
     assert not error_block
     assert request["project_id"] == "P-OLOS"
+    assert request["issue_number"] == ""
+
+
+def test_submission_includes_optional_issue_number(bridge):
+    body = submission_body(bridge, ["1724440000.000001"], project_id="P-DELTA")
+    body["view"]["state"]["values"]["issue_number"] = {"issue_number": {"value": "385"}}
+
+    request, error, error_block = bridge._submission_request(body)
+
+    assert not error
+    assert not error_block
+    assert request["issue_number"] == "385"
+
+
+def test_submission_rejects_invalid_issue_number(bridge):
+    body = submission_body(bridge, ["1724440000.000001"])
+    body["view"]["state"]["values"]["issue_number"] = {
+        "issue_number": {"value": "not-a-ticket"}
+    }
+
+    request, error, error_block = bridge._submission_request(body)
+
+    assert not request
+    assert "número" in error.lower() or "385" in error
+    assert error_block == "issue_number"
 
 
 def test_submission_rejects_missing_project(bridge):

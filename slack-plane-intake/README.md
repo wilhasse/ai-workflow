@@ -175,7 +175,9 @@ To create one ticket from several messages in the same conversation:
    during the following 30 minutes.
 3. All loaded messages start selected. Each option shows its São Paulo date/time
    and Slack author; deselect unrelated messages, confirm `DELTA` or choose
-   another destination in **Projeto Plane**, then choose **Criar ticket**.
+   another destination in **Projeto Plane**. Leave **Número do ticket** empty to
+   create a new work item, or type `385` / `DELTA-385` to append a comment and
+   original attachments to that existing ticket. Then choose **Criar ticket**.
 
 The project list is loaded with the authenticated invoking user's Plane token.
 On submission, the selected project is fetched again with that same token before

@@ -27,6 +27,7 @@ from .shortcut_models import (
     ModalAddRequest,
     ModalSubmitRequest,
     SlackMessage,
+    parse_existing_issue_number,
     sanitized_message_payload,
 )
 from .slack_client import SlackClient, is_im_channel
@@ -254,14 +255,29 @@ async def process_request(
             try:
                 service = service_factory(scoped_config)
                 try:
-                    result = await service.create_from_slack_shortcut_messages(
-                        team_id=snapshot.team_id,
-                        channel_id=snapshot.channel_id,
-                        invoking_user_id=snapshot.user_id,
-                        message_payloads=tuple(
-                            message.payload for message in snapshot.messages
-                        ),
-                    )
+                    payloads = tuple(message.payload for message in snapshot.messages)
+                    if request.issue_number:
+                        try:
+                            issue_number = parse_existing_issue_number(
+                                request.issue_number,
+                                scoped_config.plane.project_identifier,
+                            )
+                        except ValueError as exc:
+                            raise SourceValidationError(str(exc)) from exc
+                        result = await service.append_from_slack_shortcut_messages(
+                            team_id=snapshot.team_id,
+                            channel_id=snapshot.channel_id,
+                            invoking_user_id=snapshot.user_id,
+                            message_payloads=payloads,
+                            issue_number=issue_number,
+                        )
+                    else:
+                        result = await service.create_from_slack_shortcut_messages(
+                            team_id=snapshot.team_id,
+                            channel_id=snapshot.channel_id,
+                            invoking_user_id=snapshot.user_id,
+                            message_payloads=payloads,
+                        )
                 finally:
                     await service.close()
             except Exception:
@@ -272,7 +288,7 @@ async def process_request(
                 status=result.status,
                 issue_key=result.issue_key,
             )
-            if result.status in {"created", "partial", "existing"}:
+            if result.status in {"created", "appended", "partial", "existing"}:
                 store.clear(
                     draft_id=snapshot.draft_id,
                     team_id=snapshot.team_id,

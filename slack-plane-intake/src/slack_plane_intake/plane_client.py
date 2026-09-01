@@ -85,6 +85,10 @@ class PlaneClient:
         )
 
     @property
+    def workspace_items_path(self) -> str:
+        return f"/api/v1/workspaces/{self.config.workspace}/work-items/"
+
+    @property
     def projects_path(self) -> str:
         return f"/api/v1/workspaces/{self.config.workspace}/projects/"
 
@@ -219,6 +223,47 @@ class PlaneClient:
             raise ExternalServiceError(
                 "Plane returned an invalid work-item response", ambiguous=True
             ) from exc
+
+    async def get_work_item_by_sequence(self, sequence: int) -> PlaneWorkItem:
+        if sequence < 1:
+            raise ExternalServiceError("Plane ticket number is invalid")
+        key = f"{self.config.project_identifier}-{sequence}"
+        response = await self._api_request("GET", f"{self.workspace_items_path}{key}/")
+        if response.status_code == 404:
+            raise ExternalServiceError(f"Plane ticket {key} was not found")
+        if response.status_code >= 400:
+            raise ExternalServiceError(
+                f"Plane ticket lookup failed with HTTP {response.status_code}"
+            )
+        try:
+            body = response.json()
+            work_item = self._work_item_from_payload(body)
+        except (ValueError, KeyError, TypeError) as exc:
+            raise ExternalServiceError("Plane returned an invalid work-item") from exc
+        if str(body.get("project") or "") != self.config.project_id:
+            raise ExternalServiceError(
+                f"Plane ticket {key} does not belong to the selected project"
+            )
+        return work_item
+
+    async def add_update_comment(
+        self,
+        work_item: PlaneWorkItem,
+        message: SourceMessage,
+        analysis: ProblemAnalysis,
+        source_marker: str,
+    ) -> None:
+        html_body = "<h2>Atualização via Slack</h2>" + self.render_description(
+            message, analysis, source_marker
+        )
+        path = f"{self.work_items_path}{work_item.id}/comments/"
+        response = await self._api_request(
+            "POST", path, json={"comment_html": html_body}
+        )
+        if response.status_code >= 400:
+            raise ExternalServiceError(
+                f"Plane comment create failed with HTTP {response.status_code}"
+            )
 
     async def find_by_source_marker(self, source_marker: str) -> PlaneWorkItem | None:
         try:

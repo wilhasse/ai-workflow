@@ -504,3 +504,44 @@ def test_render_description_skips_image_only_message_text_and_groups_author(
     assert rendered.count("Autor: Noboru (U2)") == 1
     assert "3 mensagem(ns)" in rendered
     assert "Mensagens no Slack:" in rendered
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_get_work_item_by_sequence_checks_project():
+    respx.get("https://plane.test/api/v1/workspaces/ws/work-items/PROB-385/").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "I385",
+                "sequence_id": 385,
+                "project_identifier": "PROB",
+                "project": "P1",
+            },
+        )
+    )
+    client = PlaneClient(plane_config())
+    item = await client.get_work_item_by_sequence(385)
+    await client.close()
+    assert item.id == "I385"
+    assert item.key == "PROB-385"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_add_update_comment_posts_slack_html(source_message):
+    posted = respx.post(
+        "https://plane.test/api/v1/workspaces/ws/projects/P1/work-items/I385/comments/"
+    ).mock(return_value=httpx.Response(201, json={"id": "C1"}))
+    client = PlaneClient(plane_config())
+    await client.add_update_comment(
+        type("WorkItem", (), {"id": "I385"})(),
+        source_message,
+        analysis(),
+        SOURCE_MARKER,
+    )
+    await client.close()
+    body = posted.calls[0].request.content.decode()
+    assert "Atualização via Slack" in body
+    assert SOURCE_MARKER in body
+    assert "API returns HTTP 500" in body

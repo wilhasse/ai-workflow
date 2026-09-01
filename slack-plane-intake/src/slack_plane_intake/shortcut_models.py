@@ -14,6 +14,7 @@ _USER_ID = re.compile(r"[UW][A-Z0-9]+")
 _CHANNEL_ID = re.compile(r"[CDG][A-Z0-9]+")
 _MESSAGE_TS = re.compile(r"\d{9,}\.(?:\d{1,6})")
 _PROJECT_ID = re.compile(r"[A-Za-z0-9-]+")
+_ISSUE_NUMBER = re.compile(r"^(?:([A-Za-z][A-Za-z0-9]{0,9})-)?([1-9][0-9]{0,9})$")
 
 
 class SlackObject(BaseModel):
@@ -95,6 +96,7 @@ class ModalSubmitRequest(BaseModel):
     draft_id: str = Field(min_length=1, max_length=64)
     project_id: str = Field(min_length=1, max_length=64)
     selected_message_ts: tuple[str, ...] = Field(min_length=1, max_length=20)
+    issue_number: str = ""
 
     @field_validator("team_id")
     @classmethod
@@ -132,6 +134,32 @@ class ModalSubmitRequest(BaseModel):
         if any(not _MESSAGE_TS.fullmatch(value) for value in values):
             raise ValueError("invalid selected Slack message timestamp")
         return values
+
+    @field_validator("issue_number")
+    @classmethod
+    def validate_issue_number(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            return ""
+        if not _ISSUE_NUMBER.fullmatch(cleaned):
+            raise ValueError("invalid Plane issue number")
+        return cleaned
+
+
+def parse_existing_issue_number(raw: str, project_identifier: str) -> str:
+    """Return the sequence digits, or empty when the field was left blank."""
+    cleaned = raw.strip()
+    if not cleaned:
+        return ""
+    match = _ISSUE_NUMBER.fullmatch(cleaned)
+    if match is None:
+        raise ValueError("invalid Plane issue number")
+    prefix, number = match.group(1), match.group(2)
+    if prefix and prefix.casefold() != project_identifier.casefold():
+        raise ValueError(
+            f"issue number belongs to {prefix.upper()}, not {project_identifier}"
+        )
+    return number
 
 
 def sanitized_message_payload(message: SlackMessage) -> dict[str, Any]:

@@ -348,3 +348,39 @@ async def test_personal_credentials_route_history_and_plane_by_invoking_user(
         "plane-user-two",
         "plane-user-two",
     ]
+
+
+@pytest.mark.asyncio
+async def test_submission_with_issue_number_appends_instead_of_creating(
+    monkeypatch, required_env
+):
+    config = load_config(required_env)
+    monkeypatch.setattr("slack_plane_intake.modal_cli.load_config", lambda: config)
+    added = await process_request(add_request("1724440000.000001"))
+    service = AsyncMock()
+    service.append_from_slack_shortcut_messages.return_value = IntakeResult(
+        status="appended",
+        issue_key="DELTA-385",
+        issue_url="https://plane.test/ws/DELTA-385",
+        attachments_uploaded=1,
+    )
+
+    result = await process_request(
+        {
+            "action": "submit",
+            "draft_id": added["draft_id"],
+            "team_id": "T1",
+            "user_id": "U1",
+            "channel_id": "D1",
+            "project_id": "project-delta",
+            "issue_number": "385",
+            "selected_message_ts": ["1724440000.000001"],
+        },
+        service_factory=lambda _config: service,
+    )
+
+    assert result["status"] == "appended"
+    assert result["issue_key"] == "DELTA-385"
+    service.create_from_slack_shortcut_messages.assert_not_awaited()
+    kwargs = service.append_from_slack_shortcut_messages.await_args.kwargs
+    assert kwargs["issue_number"] == "385"

@@ -14,7 +14,14 @@ from .errors import SourceValidationError
 _MAX_DRAFT_MESSAGES = 20
 _MAX_MESSAGE_PAYLOAD_BYTES = 256 * 1024
 _AUDIT_RETENTION = timedelta(days=30)
-_AUDIT_STATUSES = {"processing", "created", "existing", "partial", "failed"}
+_AUDIT_STATUSES = {
+    "processing",
+    "created",
+    "appended",
+    "existing",
+    "partial",
+    "failed",
+}
 
 
 @dataclass(frozen=True)
@@ -79,7 +86,8 @@ class DraftStore:
                     offered_message_ts_json TEXT NOT NULL,
                     selected_message_ts_json TEXT NOT NULL,
                     status TEXT NOT NULL CHECK(status IN (
-                        'processing', 'created', 'existing', 'partial', 'failed'
+                        'processing', 'created', 'appended', 'existing',
+                        'partial', 'failed'
                     )),
                     issue_key TEXT,
                     created_at TEXT NOT NULL,
@@ -89,6 +97,43 @@ class DraftStore:
                     ON shortcut_submission_audit(created_at);
                 """
             )
+            self._ensure_appended_audit_status(connection)
+
+    @staticmethod
+    def _ensure_appended_audit_status(connection: sqlite3.Connection) -> None:
+        row = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE name='shortcut_submission_audit'"
+        ).fetchone()
+        sql = str(row["sql"] if row is not None else "")
+        if "appended" in sql:
+            return
+        connection.executescript(
+            """
+            CREATE TABLE shortcut_submission_audit_new (
+                submission_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                draft_id TEXT NOT NULL,
+                team_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                channel_id TEXT NOT NULL,
+                offered_message_ts_json TEXT NOT NULL,
+                selected_message_ts_json TEXT NOT NULL,
+                status TEXT NOT NULL CHECK(status IN (
+                    'processing', 'created', 'appended', 'existing',
+                    'partial', 'failed'
+                )),
+                issue_key TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            INSERT INTO shortcut_submission_audit_new
+            SELECT * FROM shortcut_submission_audit;
+            DROP TABLE shortcut_submission_audit;
+            ALTER TABLE shortcut_submission_audit_new
+                RENAME TO shortcut_submission_audit;
+            CREATE INDEX IF NOT EXISTS shortcut_submission_audit_created_at
+                ON shortcut_submission_audit(created_at);
+            """
+        )
 
     def add(
         self,

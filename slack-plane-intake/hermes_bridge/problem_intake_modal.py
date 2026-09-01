@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from typing import Any
 
 from .problem_intake_shortcut import CALLBACK_ID as _SHORTCUT_CALLBACK_ID
@@ -27,6 +28,8 @@ _MESSAGES_BLOCK_ID = "messages"
 _MESSAGES_ACTION_ID = "selected_messages"
 _PROJECT_BLOCK_ID = "project"
 _PROJECT_ACTION_ID = "selected_project"
+_ISSUE_NUMBER_BLOCK_ID = "issue_number"
+_ISSUE_NUMBER_ACTION_ID = "issue_number"
 _MAX_PAYLOAD_BYTES = 2 * 1024 * 1024
 _MAX_OUTPUT_BYTES = 1024 * 1024
 _MAX_MESSAGE_OPTIONS = 20
@@ -173,6 +176,20 @@ def _ready_view(result: dict[str, Any]) -> dict[str, Any]:
             },
             {
                 "type": "input",
+                "optional": True,
+                "block_id": _ISSUE_NUMBER_BLOCK_ID,
+                "label": _plain_text("Número do ticket"),
+                "hint": _plain_text(
+                    "Vazio cria um ticket novo. Ex.: 385 vira DELTA-385."
+                ),
+                "element": {
+                    "type": "plain_text_input",
+                    "action_id": _ISSUE_NUMBER_ACTION_ID,
+                    "placeholder": _plain_text("Ex.: 385"),
+                },
+            },
+            {
+                "type": "input",
                 "block_id": _MESSAGES_BLOCK_ID,
                 "label": _plain_text("Mensagens do ticket"),
                 "element": {
@@ -186,6 +203,22 @@ def _ready_view(result: dict[str, Any]) -> dict[str, Any]:
             },
         ],
     }
+
+
+def _format_modal_result(result: dict[str, Any]) -> str:
+    if str(result.get("status") or "") == "appended":
+        key = str(result.get("issue_key") or "ticket")
+        url = str(result.get("issue_url") or "")
+        link = f"<{url}|{key}>" if url.startswith("http") else key
+        text = f":white_check_mark: Comentário adicionado em {link}."
+        uploaded = result.get("attachments_uploaded")
+        if isinstance(uploaded, int) and uploaded > 0:
+            text += f"\nAnexos originais enviados: {uploaded}."
+        warnings = result.get("warnings")
+        if isinstance(warnings, list) and warnings:
+            text += "\n\n• " + " ".join(str(warnings[0]).split())[:500]
+        return text
+    return _format_result(result)
 
 
 def _warning(result: dict[str, Any]) -> str:
@@ -348,6 +381,23 @@ def _submission_request(
     project_id = str(selected_project.get("value") or "")
     if not project_id:
         return {}, "Selecione um projeto Plane.", _PROJECT_BLOCK_ID
+    issue_number = ""
+    issue_block = values.get(_ISSUE_NUMBER_BLOCK_ID) or {}
+    if issue_block:
+        if not isinstance(issue_block, dict):
+            return {}, "O número do ticket é inválido.", _ISSUE_NUMBER_BLOCK_ID
+        issue_action = issue_block.get(_ISSUE_NUMBER_ACTION_ID) or {}
+        if not isinstance(issue_action, dict):
+            return {}, "O número do ticket é inválido.", _ISSUE_NUMBER_BLOCK_ID
+        issue_number = str(issue_action.get("value") or "").strip()
+        if issue_number and not re.fullmatch(
+            r"(?:[A-Za-z][A-Za-z0-9]{0,9}-)?[1-9][0-9]{0,9}", issue_number
+        ):
+            return (
+                {},
+                "Use só o número, por exemplo 385, ou DELTA-385.",
+                _ISSUE_NUMBER_BLOCK_ID,
+            )
     block = values.get(_MESSAGES_BLOCK_ID) or {}
     if not isinstance(block, dict):
         return {}, "A seleção do modal é inválida.", _MESSAGES_BLOCK_ID
@@ -379,6 +429,7 @@ def _submission_request(
             "user_id": user_id,
             "channel_id": str(metadata.get("channel_id") or ""),
             "project_id": project_id,
+            "issue_number": issue_number,
             "selected_message_ts": list(selected),
         },
         "",
@@ -399,10 +450,15 @@ async def handle_modal_submission(ack: Any, adapter: Any, body: dict[str, Any]) 
 
     response_body = dict(body)
     response_body["channel"] = {"id": request["channel_id"]}
+    progress = (
+        ":hourglass_flowing_sand: Atualizando o ticket no Plane…"
+        if request.get("issue_number")
+        else ":hourglass_flowing_sand: Criando um ticket no Plane…"
+    )
     await _send_private_response(
         adapter,
         response_body,
-        ":hourglass_flowing_sand: Criando um ticket no Plane…",
+        progress,
     )
     try:
         result = await _run_modal(request)
@@ -416,7 +472,7 @@ async def handle_modal_submission(ack: Any, adapter: Any, body: dict[str, Any]) 
             "warnings": ["Unexpected problem-intake modal failure"],
         }
     delivered = await _send_private_response(
-        adapter, response_body, _format_result(result)
+        adapter, response_body, _format_modal_result(result)
     )
     if not delivered:
         logger.error("[Slack] Problem-intake modal result could not be delivered")
