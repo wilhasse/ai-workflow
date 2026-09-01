@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import html
 import re
@@ -10,6 +11,9 @@ from dataclasses import replace
 from pathlib import Path
 
 import httpx
+
+_RETRYABLE_STATUS = frozenset({429, 502, 503, 504})
+_MAX_ATTEMPTS = 6
 
 from .config import PlaneConfig
 from .errors import ExternalServiceError
@@ -42,6 +46,31 @@ class PlaneClient:
         )
         self.storage_client = storage_client or httpx.AsyncClient(timeout=120)
 
+    async def _sleep(self, seconds: float) -> None:
+        await asyncio.sleep(seconds)
+
+    @staticmethod
+    def _retry_delay(response: httpx.Response, attempt: int) -> float:
+        retry_after = response.headers.get("Retry-After")
+        if retry_after:
+            try:
+                return min(max(float(retry_after), 0.0), 30.0)
+            except ValueError:
+                pass
+        return min(0.5 * (2**attempt), 8.0)
+
+    async def _api_request(self, method: str, url: str, **kwargs) -> httpx.Response:
+        response: httpx.Response | None = None
+        for attempt in range(_MAX_ATTEMPTS):
+            response = await self.client.request(method, url, **kwargs)
+            if response.status_code not in _RETRYABLE_STATUS:
+                return response
+            if attempt == _MAX_ATTEMPTS - 1:
+                return response
+            await self._sleep(self._retry_delay(response, attempt))
+        assert response is not None
+        return response
+
     async def close(self) -> None:
         if self._owns_client:
             await self.client.aclose()
@@ -62,7 +91,7 @@ class PlaneClient:
     async def list_projects(self) -> tuple[PlaneProject, ...]:
         """Return projects in which the current Plane user can create work items."""
         try:
-            response = await self.client.get(self.projects_path)
+            response = await self._api_request("GET", self.projects_path)
             response.raise_for_status()
             body = response.json()
         except (httpx.HTTPError, ValueError) as exc:
@@ -106,7 +135,7 @@ class PlaneClient:
 
         states_path = f"{self.projects_path}{project.id}/states/"
         try:
-            response = await self.client.get(states_path)
+            response = await self._api_request("GET", states_path)
             response.raise_for_status()
             body = response.json()
         except (httpx.HTTPError, ValueError) as exc:
@@ -171,7 +200,9 @@ class PlaneClient:
             "assignees": [],
         }
         try:
-            response = await self.client.post(self.work_items_path, json=payload)
+            response = await self._api_request(
+                "POST", self.work_items_path, json=payload
+            )
         except (httpx.TimeoutException, httpx.TransportError) as exc:
             raise ExternalServiceError(
                 "Plane work-item creation had an ambiguous network failure",
@@ -191,7 +222,8 @@ class PlaneClient:
 
     async def find_by_source_marker(self, source_marker: str) -> PlaneWorkItem | None:
         try:
-            response = await self.client.get(
+            response = await self._api_request(
+                "GET",
                 self.work_items_path,
                 params={"per_page": "50", "order_by": "-created_at"},
             )
@@ -208,8 +240,8 @@ class PlaneClient:
             detail = candidate
             if source_marker not in str(detail.get("description_html", "")):
                 try:
-                    response = await self.client.get(
-                        f"{self.work_items_path}{candidate['id']}/"
+                    response = await self._api_request(
+                        "GET", f"{self.work_items_path}{candidate['id']}/"
                     )
                     response.raise_for_status()
                     detail = response.json()
@@ -247,7 +279,7 @@ class PlaneClient:
             return
         path = f"{self.work_items_path}{work_item.id}/"
         try:
-            response = await self.client.get(path)
+            response = await self._api_request("GET", path)
             response.raise_for_status()
             body = response.json()
             current = str(body.get("description_html") or "")
@@ -256,8 +288,8 @@ class PlaneClient:
                 + "".join(f"<li>{html.escape(value)}</li>" for value in values)
                 + "</ul>"
             )
-            response = await self.client.patch(
-                path, json={"description_html": current + warning_html}
+            response = await self._api_request(
+                "PATCH", path, json={"description_html": current + warning_html}
             )
             response.raise_for_status()
         except (httpx.HTTPError, ValueError, TypeError) as exc:
@@ -280,15 +312,21 @@ class PlaneClient:
             "external_source": "slack-plane-intake",
             "external_id": external_id,
         }
-        completed = False
+        stored = False
         try:
-            response = await self.client.post(base, json=payload)
-            response.raise_for_status()
+            response = await self._api_request("POST", base, json=payload)
+            if response.status_code >= 400:
+                raise ExternalServiceError(
+                    "Plane attachment credential request failed"
+                    f" with HTTP {response.status_code}"
+                )
             credentials = response.json()
             upload_data = credentials["upload_data"]
             upload_url = upload_data["url"]
             fields = upload_data["fields"]
             asset_id = credentials["asset_id"]
+        except ExternalServiceError:
+            raise
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
             raise ExternalServiceError(
                 "Plane attachment credential request failed"
@@ -308,13 +346,21 @@ class PlaneClient:
                 },
             )
             response.raise_for_status()
-            response = await self.client.patch(
-                f"{base}{asset_id}/", json={"is_uploaded": True}
+            stored = True
+            response = await self._api_request(
+                "PATCH", f"{base}{asset_id}/", json={"is_uploaded": True}
             )
-            response.raise_for_status()
-            completed = True
-            response = await self.client.get(base)
-            response.raise_for_status()
+            if response.status_code >= 400:
+                raise ExternalServiceError(
+                    "Plane attachment completion failed"
+                    f" with HTTP {response.status_code}"
+                )
+            response = await self._api_request("GET", base)
+            if response.status_code >= 400:
+                raise ExternalServiceError(
+                    "Plane attachment verification failed"
+                    f" with HTTP {response.status_code}"
+                )
             listing = response.json()
             assets = (
                 listing if isinstance(listing, list) else listing.get("results", [])
@@ -331,9 +377,9 @@ class PlaneClient:
             if not verified:
                 raise ExternalServiceError("Plane attachment verification failed")
         except (OSError, httpx.HTTPError, ValueError, ExternalServiceError) as exc:
-            if not completed:
+            if not stored:
                 try:
-                    await self.client.delete(f"{base}{asset_id}/")
+                    await self._api_request("DELETE", f"{base}{asset_id}/")
                 except httpx.HTTPError:
                     pass
             if isinstance(exc, ExternalServiceError):

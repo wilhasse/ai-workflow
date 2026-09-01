@@ -276,6 +276,99 @@ async def test_attachment_presign_upload_complete_and_verify(tmp_path):
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_attachment_complete_retries_http_429(tmp_path, monkeypatch):
+    path = tmp_path / "original.txt"
+    path.write_bytes(b"unchanged-original")
+    attachment = SourceAttachment(
+        file_id="F1",
+        name="original.txt",
+        mime_type="text/plain",
+        size=path.stat().st_size,
+        sha256="hash",
+        local_path=path,
+    )
+    base = (
+        "https://plane.test/api/v1/workspaces/ws/projects/P1/work-items/I1/attachments/"
+    )
+    respx.post(base).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "upload_data": {
+                    "url": "https://storage.test/upload",
+                    "fields": {"key": "opaque"},
+                },
+                "asset_id": "A1",
+            },
+        )
+    )
+    respx.post("https://storage.test/upload").mock(return_value=httpx.Response(204))
+    complete = respx.patch(f"{base}A1/").mock(
+        side_effect=[
+            httpx.Response(429, headers={"Retry-After": "0"}),
+            httpx.Response(204),
+        ]
+    )
+    respx.get(base).mock(
+        return_value=httpx.Response(200, json=[{"id": "A1", "is_uploaded": True}])
+    )
+    client = PlaneClient(plane_config())
+    monkeypatch.setattr(client, "_sleep", _noop_sleep, raising=False)
+    report = await client.upload_originals(
+        type("WorkItem", (), {"id": "I1"})(), (attachment,), "slack:T:C:1.1"
+    )
+    await client.close()
+    assert report.uploaded == 1
+    assert report.warnings == ()
+    assert complete.call_count == 2
+
+
+async def _noop_sleep(_seconds: float = 0) -> None:
+    return None
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stored_attachment_is_not_deleted_after_complete_429(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "original.txt"
+    path.write_text("evidence")
+    attachment = SourceAttachment(
+        file_id="F1",
+        name="original.txt",
+        mime_type="text/plain",
+        size=path.stat().st_size,
+        local_path=path,
+    )
+    base = (
+        "https://plane.test/api/v1/workspaces/ws/projects/P1/work-items/I1/attachments/"
+    )
+    respx.post(base).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "upload_data": {"url": "https://storage.test/upload", "fields": {}},
+                "asset_id": "A1",
+            },
+        )
+    )
+    respx.post("https://storage.test/upload").mock(return_value=httpx.Response(204))
+    respx.patch(f"{base}A1/").mock(return_value=httpx.Response(429))
+    deleted = respx.delete(f"{base}A1/").mock(return_value=httpx.Response(204))
+    client = PlaneClient(plane_config())
+    monkeypatch.setattr(client, "_sleep", _noop_sleep, raising=False)
+    report = await client.upload_originals(
+        type("WorkItem", (), {"id": "I1"})(), (attachment,), "slack:T:C:1.1"
+    )
+    await client.close()
+    assert report.uploaded == 0
+    assert any("HTTP 429" in warning for warning in report.warnings)
+    assert not deleted.called
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_failed_storage_upload_deletes_dangling_asset(tmp_path):
     path = tmp_path / "original.txt"
     path.write_text("evidence")
