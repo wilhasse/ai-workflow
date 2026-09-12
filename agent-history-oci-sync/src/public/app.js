@@ -2,7 +2,7 @@ const $ = id => document.getElementById(id)
 const PAGE_SIZE = 50
 const MESSAGE_PAGE_SIZE = 100
 const MAX_EXPORT_BYTES = 1024 * 1024
-const state = { signedIn: false, authVersion: 0, list: [], offset: 0, selected: null, messageOffset: 0, listVersion: 0, detailVersion: 0, messageVersion: 0, listBusy: false, messagesBusy: false, exportBusy: false }
+const state = { signedIn: false, authVersion: 0, list: [], branches: new Map(), offset: 0, selected: null, messageOffset: 0, listVersion: 0, detailVersion: 0, messageVersion: 0, listBusy: false, messagesBusy: false, exportBusy: false }
 let searchTimer
 
 function element(tag, className, text) {
@@ -39,6 +39,7 @@ function showLogin(message = '') {
   state.messageVersion++
   state.selected = null
   state.list = []
+  state.branches.clear()
   $('conversation-list').replaceChildren()
   $('messages').replaceChildren()
   $('summary-text').textContent = ''
@@ -125,30 +126,125 @@ function showListState(heading, detail = '', retry = false) {
   $('conversation-list').replaceChildren(box)
 }
 
-function paintList() {
-  const fragment = document.createDocumentFragment()
-  for (const row of state.list) {
-    const selected = state.selected?.session_id === row.session_id && state.selected?.vm_id === row.vm_id
-    const card = element('button', `conversation-card${selected ? ' selected' : ''}`)
-    card.type = 'button'
-    card.setAttribute('aria-pressed', String(selected))
-    const top = element('span', 'card-top')
-    top.append(element('span', 'card-source', row.source || 'Conversation'), element('span', '', date(row.last_activity || row.ts || row.started_at, true)))
-    card.append(top, element('span', 'card-title', title(row)))
-    const project = row.project?.split('/').filter(Boolean).pop()
-    card.append(element('span', 'card-project', [project, row.vm_id].filter(Boolean).join(' · ')))
-    if ($('search').value.trim() && row.content_text) card.append(element('p', 'card-snippet', row.content_text.slice(0, 300)))
-    card.addEventListener('click', () => openConversation(row, true))
-    fragment.append(card)
+const sessionKey = row => JSON.stringify([row.session_id, row.vm_id])
+
+function conversationRow(row, { child = false, search = false, ancestors = new Set() } = {}) {
+  const key = sessionKey(row)
+  const branch = state.branches.get(key)
+  const group = element('div', `conversation-group${child ? ' conversation-child' : ' conversation-root'}`)
+  group.dataset.sessionId = row.session_id
+  group.dataset.vmId = row.vm_id
+  const selected = state.selected?.session_id === row.session_id && state.selected?.vm_id === row.vm_id
+  const card = element('button', `conversation-card${selected ? ' selected' : ''}`)
+  card.type = 'button'
+  card.dataset.listControl = `select:${search ? JSON.stringify([row.session_id, row.vm_id, row.message_id, row.ts]) : key}`
+  card.setAttribute('aria-pressed', String(selected))
+  const top = element('span', 'card-top')
+  top.append(element('span', 'card-source', child ? 'Helper' : row.source || 'Conversation'), element('span', '', date(row.last_activity || row.ts || row.started_at, true)))
+  const label = child ? row.agent_nickname || row.agent_path || row.session_id : title(row)
+  card.append(top, element('span', 'card-title', label))
+  const project = row.project?.split('/').filter(Boolean).pop()
+  card.append(element('span', 'card-project', [project, row.vm_id].filter(Boolean).join(' · ')))
+  if (search && row.content_text) card.append(element('p', 'card-snippet', row.content_text.slice(0, 300)))
+  card.addEventListener('click', () => openConversation(row, true))
+  group.append(card)
+  if (!search && row.child_count > 0 && !ancestors.has(key)) {
+    const disclosure = element('button', 'helper-toggle', `${branch?.expanded ? '▾' : '▸'} ${row.child_count} ${Number(row.child_count) === 1 ? 'helper' : 'helpers'}`)
+    disclosure.type = 'button'
+    disclosure.dataset.listControl = `toggle:${key}`
+    disclosure.setAttribute('aria-label', `${row.child_count} ${Number(row.child_count) === 1 ? 'helper' : 'helpers'}`)
+    disclosure.setAttribute('aria-expanded', String(Boolean(branch?.expanded)))
+    disclosure.addEventListener('click', () => toggleChildren(row))
+    group.append(disclosure)
+    if (branch?.expanded) {
+      const children = element('div', 'conversation-children')
+      children.setAttribute('aria-label', `Helpers for ${label}`)
+      const path = new Set(ancestors).add(key)
+      for (const helper of branch.rows) children.append(conversationRow(helper, { child: true, ancestors: path }))
+      if (branch.busy) {
+        const loading = element('p', 'helper-status', 'Loading helpers…')
+        loading.setAttribute('role', 'status')
+        children.append(loading)
+      } else if (branch.error) {
+        const error = element('p', 'helper-status helper-error', branch.error)
+        error.setAttribute('role', 'alert')
+        const retry = element('button', 'helper-more', 'Try again')
+        retry.type = 'button'
+        retry.dataset.listControl = `more:${key}`
+        retry.addEventListener('click', () => loadChildren(row))
+        children.append(error, retry)
+      } else if (branch.loaded && !branch.rows.length) {
+        children.append(element('p', 'helper-status', 'No helpers match these filters.'))
+      } else if (branch.more) {
+        const more = element('button', 'helper-more', 'Load more helpers')
+        more.type = 'button'
+        more.dataset.listControl = `more:${key}`
+        more.addEventListener('click', () => loadChildren(row))
+        children.append(more)
+      }
+      group.append(children)
+    }
   }
+  return group
+}
+
+function paintList() {
+  const focusedControl = document.activeElement?.dataset.listControl
+  const fragment = document.createDocumentFragment()
+  const search = Boolean($('search').value.trim())
+  for (const row of state.list) fragment.append(conversationRow(row, { search }))
   $('conversation-list').replaceChildren(fragment)
-  if (!state.list.length) showListState($('search').value.trim() ? 'No matching messages' : 'No conversations here yet', $('search').value.trim() ? 'Try another word, or change the source and host filters.' : 'Try another filter or check the cloud sync status below.')
+  if (focusedControl) {
+    const control = [...$('conversation-list').querySelectorAll('[data-list-control]')].find(node => node.dataset.listControl === focusedControl)
+    control?.focus({ preventScroll: true })
+  }
+  if (!state.list.length) showListState(search ? 'No matching messages' : 'No conversations here yet', search ? 'Try another word, or change the source and host filters.' : 'Try another filter or check the cloud sync status below.')
+}
+
+function toggleChildren(row) {
+  const key = sessionKey(row)
+  let branch = state.branches.get(key)
+  if (!branch) {
+    branch = { expanded: false, rows: [], loaded: false, more: false, busy: false, error: '' }
+    state.branches.set(key, branch)
+  }
+  branch.expanded = !branch.expanded
+  if (branch.expanded && !branch.loaded && !branch.busy) loadChildren(row)
+  else paintList()
+}
+
+async function loadChildren(row) {
+  const key = sessionKey(row)
+  const branch = state.branches.get(key)
+  if (!state.signedIn || !branch || branch.busy) return
+  const version = state.listVersion
+  const current = () => state.signedIn && version === state.listVersion && state.branches.get(key) === branch
+  branch.busy = true
+  branch.error = ''
+  paintList()
+  const params = new URLSearchParams({ vm_id: row.vm_id, limit: PAGE_SIZE, offset: branch.rows.length })
+  if ($('source').value) params.set('source', $('source').value)
+  try {
+    const rows = await api(`/sessions/${encodeURIComponent(row.session_id)}/children?${params}`)
+    if (!current()) return
+    branch.rows.push(...rows)
+    branch.loaded = true
+    branch.more = rows.length === PAGE_SIZE
+  } catch (err) {
+    if (current()) branch.error = err.message
+  } finally {
+    if (current()) {
+      branch.busy = false
+      paintList()
+    }
+  }
 }
 
 async function loadList(reset = false) {
   if (!state.signedIn) return
   if (reset) state.offset = 0
   const version = ++state.listVersion
+  state.branches.clear()
   state.listBusy = true
   $('list-prev').disabled = true
   $('list-next').disabled = true
@@ -159,6 +255,7 @@ async function loadList(reset = false) {
   if ($('host').value) params.set('vm_id', $('host').value)
   const q = $('search').value.trim()
   if (q) params.set('q', q)
+  else params.set('grouped', '1')
   $('list-caption').textContent = q ? 'Matching messages' : 'Recent conversations'
   $('list-count').textContent = ''
   updateUrl()

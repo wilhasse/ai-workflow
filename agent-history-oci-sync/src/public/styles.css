@@ -508,6 +508,51 @@ h1,h2,p {
   background: #688b4e;
 }
 
+.conversation-group {
+  min-width: 0;
+}
+
+.helper-toggle,
+.helper-more {
+  display: block;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #526f3d;
+  padding: 8px 12px;
+  margin: 0 0 6px;
+  text-align: left;
+  font-size: 11px;
+}
+
+.helper-toggle:hover,
+.helper-more:hover {
+  background: #eaf1e2;
+}
+
+.conversation-children {
+  margin: 0 0 10px 12px;
+  padding-left: 7px;
+  border-left: 1px solid #dce8d2;
+}
+
+.conversation-child > .conversation-card {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+.helper-status {
+  margin: 0;
+  padding: 10px 12px;
+  color: #7e8c7a;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.helper-error {
+  color: #9c382e;
+}
+
 .card-top {
   display: flex;
   justify-content: space-between;

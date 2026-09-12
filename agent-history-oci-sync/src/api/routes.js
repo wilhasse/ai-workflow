@@ -30,6 +30,8 @@ function validateQuery(q, path) {
     if (q[name] !== undefined && (!/^\d{4}-\d{2}-\d{2}$/.test(q[name]) || !Number.isFinite(Date.parse(q[name])) || new Date(q[name]).toISOString().slice(0, 10) !== q[name])) throw new queries.QueryInputError(`Invalid ${name} date`)
   }
   if (q.from && q.to && q.from > q.to) throw new queries.QueryInputError('from must not be after to')
+  if (q.grouped !== undefined && !['0', '1'].includes(q.grouped)) throw new queries.QueryInputError('grouped must be 0 or 1')
+  q.grouped = q.grouped === '1'
   if (q.dialog !== undefined && !['0', '1'].includes(q.dialog)) throw new queries.QueryInputError('dialog must be 0 or 1')
   q.dialog = q.dialog === '1'
   if (q.format !== undefined && q.format !== 'raw') throw new queries.QueryInputError('format must be raw')
@@ -77,6 +79,13 @@ async function dispatch(method, url, body) {
 
   if (method === 'GET' && path === '/sessions') {
     const rows = await queries.listSessions(q)
+    return { status: 200, body: { ok: true, data: rows } }
+  }
+
+  const childrenMatch = path.match(/^\/sessions\/([^/]+)\/children$/)
+  if (method === 'GET' && childrenMatch) {
+    const rows = await queries.listSessionChildren(childrenMatch[1], q)
+    if (rows === null) return { status: 404, body: { ok: false, error: 'Session not found' } }
     return { status: 200, body: { ok: true, data: rows } }
   }
 

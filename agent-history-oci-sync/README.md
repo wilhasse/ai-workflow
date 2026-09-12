@@ -102,8 +102,10 @@ Public endpoints are `/`, static assets, `/auth/login`, `/auth/session`, `/auth/
 Machine callers use `Authorization: Bearer <API_TOKEN>` on the existing unprefixed routes:
 
 - `POST /ingest/{sessions,messages,history,tasks,todos,sync-state}`.
-- `GET /sessions`, `/sessions/:id`, and `/sessions/:id/messages`.
+- `GET /sessions`, `/sessions/:id`, `/sessions/:id/children`, and `/sessions/:id/messages`.
 - `GET /sessions/:id/handoff?vm_id=HOST&format=raw`.
 - `GET /search?q=WORDS`, `/history`, `/tasks`, `/sync/status`, and `/stats`.
 
 Send `vm_id` for conversation reads. Omitting it is accepted only for an unambiguous session. Pagination is capped at 500 messages or 100 other rows; handoff tail is capped at 200 messages. `dialog=1` selects user/assistant messages; `dialog=0` includes events and tools. Search uses MySQL FULLTEXT word semantics, not arbitrary substring matching.
+
+The browser uses `/sessions?grouped=1` to page parent conversations, then `/sessions/:id/children?vm_id=HOST` to expand helpers with separate pagination. Grouping follows saved parent IDs on the same host. Missing or filtered parents leave their children visible; cyclic relationships remain accessible. Omitting `grouped` preserves the flat session list. Search continues to return matching messages.
