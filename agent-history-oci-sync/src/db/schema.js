@@ -19,8 +19,10 @@ const DDL = [
     session_meta    MEDIUMTEXT   DEFAULT NULL,
     message_count   INT          NOT NULL DEFAULT 0,
     last_synced_at  DATETIME     NOT NULL,
+    last_activity   DATETIME     DEFAULT NULL,
     PRIMARY KEY (session_id, vm_id, started_at),
     KEY idx_started_at (started_at),
+    KEY idx_last_activity (last_activity),
     KEY idx_source (source),
     FULLTEXT KEY ft_display_text (display_text)
   ) ${COMPRESSED}`,
@@ -120,6 +122,15 @@ export async function ensureSchema() {
       throw err
     }
   }
+  const [columns] = await pool.query(
+    "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'agent_sessions' AND COLUMN_NAME = 'last_activity'",
+  )
+  if (!columns.length) await pool.query('ALTER TABLE agent_sessions ADD COLUMN last_activity DATETIME DEFAULT NULL')
+  const [indexes] = await pool.query(
+    "SELECT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'agent_sessions' AND INDEX_NAME = 'idx_last_activity'",
+  )
+  if (!indexes.length) await pool.query('ALTER TABLE agent_sessions ADD INDEX idx_last_activity (last_activity)')
+
 }
 
 // Allow running standalone: node src/db/schema.js

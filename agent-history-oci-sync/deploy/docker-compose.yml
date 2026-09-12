@@ -1,6 +1,7 @@
 services:
   api:
     build: ..
+    image: agent-history-oci:${HISTORY_IMAGE_TAG:-latest}
     container_name: agent-history-oci-api
     env_file: .env
     ports:

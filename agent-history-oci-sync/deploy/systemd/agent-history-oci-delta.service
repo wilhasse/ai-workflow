@@ -1,9 +1,14 @@
 [Unit]
-Description=Delta sync Doris agent history to OCI MySQL via SSH tunnel
+Description=Replay recent conversation messages and refresh metadata to OCI
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
 User=cslog
-ExecStart=/home/cslog/ai-workflow/agent-history-oci-sync/scripts/delta-sync.sh
+Environment=SYNC_MAX_ROWS=200000
+Environment=SYNC_MAX_SECONDS=600
+Environment=SYNC_OVERLAP_HOURS=48
+ExecStart=/home/cslog/ai-workflow/agent-history-oci-sync/scripts/delta-sync.sh --delta
+TimeoutStartSec=15min
+UMask=0077

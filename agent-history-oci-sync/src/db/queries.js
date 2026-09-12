@@ -11,7 +11,8 @@ function toDatetime(v) {
     return new Date(ms).toISOString().replace('T', ' ').replace('Z', '').slice(0, 19)
   }
   if (typeof v === 'string') {
-    const d = new Date(v)
+    const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(v) ? `${v.replace(' ', 'T')}Z` : v
+    const d = new Date(normalized)
     if (isNaN(d.getTime())) return nowStr()
     return d.toISOString().replace('T', ' ').replace('Z', '').slice(0, 19)
   }
@@ -37,21 +38,32 @@ async function batchUpsert(table, keyCols, cols, rows) {
   const allPlaceholders = rows.map(() => placeholders).join(',')
   const updates = cols
     .filter(c => !keyCols.includes(c))
-    .map(c => `${c} = new.${c}`)
+    .map(c => c === 'last_activity' ? `last_activity = GREATEST(COALESCE(${table}.last_activity, new.last_activity), new.last_activity)` : `${c} = new.${c}`)
     .join(', ')
   const sql = `INSERT INTO ${table} (${cols.join(',')}) VALUES ${allPlaceholders} AS new ON DUPLICATE KEY UPDATE ${updates}`
   await pool.query(sql, rows.flat())
 }
 
 export async function upsertSessions(records) {
-  const cols = ['session_id', 'vm_id', 'started_at', 'source', 'project', 'display_text', 'session_meta', 'message_count', 'last_synced_at']
+  const cols = ['session_id', 'vm_id', 'started_at', 'source', 'project', 'display_text', 'session_meta', 'message_count', 'last_synced_at', 'last_activity']
   const now = nowStr()
   const rows = records.map(r => [
     r.session_id, r.vm_id, toDatetime(r.started_at),
     truncate(r.source, 16) ?? '', truncate(r.project, 512), r.display_text ?? null,
-    jsonStr(r.session_meta), r.message_count ?? 0, now,
+    jsonStr(r.session_meta), r.message_count ?? 0, now, toDatetime(r.last_activity ?? r.started_at),
   ])
   await batchUpsert('agent_sessions', ['session_id', 'vm_id', 'started_at'], cols, rows)
+  if (rows.length) {
+    await getPool().query(
+      `UPDATE agent_sessions s JOIN (
+         SELECT session_id, vm_id, MAX(last_activity) AS latest FROM agent_sessions
+         WHERE (session_id, vm_id) IN (${rows.map(() => '(?, ?)').join(',')})
+         GROUP BY session_id, vm_id
+       ) activity ON activity.session_id = s.session_id AND activity.vm_id = s.vm_id
+       SET s.last_activity = GREATEST(COALESCE(s.last_activity, activity.latest), activity.latest)`,
+      rows.flatMap(row => [row[0], row[1]]),
+    )
+  }
 }
 
 export async function upsertMessages(records) {
@@ -63,6 +75,31 @@ export async function upsertMessages(records) {
     r.parent_uuid ?? null, r.seq_num ?? 0,
   ])
   await batchUpsert('agent_messages', ['message_id', 'session_id', 'vm_id', 'ts'], cols, rows)
+  const activity = new Map()
+  for (const row of rows) {
+    const [, sessionId, host, timestamp, source] = row
+    const key = JSON.stringify([sessionId, host])
+    const previous = activity.get(key)
+    activity.set(key, {
+      sessionId, host, source,
+      first: previous && previous.first < timestamp ? previous.first : timestamp,
+      last: previous && previous.last > timestamp ? previous.last : timestamp,
+    })
+  }
+  for (const { sessionId, host, source, first, last } of activity.values()) {
+    await getPool().query(
+      `INSERT INTO agent_sessions (session_id, vm_id, started_at, source, message_count, last_synced_at, last_activity, session_meta)
+       SELECT ?, ?, ?, ?, 0, ?, ?, '{"message_derived":true}' FROM DUAL
+       WHERE NOT EXISTS (SELECT 1 FROM agent_sessions WHERE session_id = ? AND vm_id = ?)
+       ON DUPLICATE KEY UPDATE last_activity = GREATEST(COALESCE(last_activity, ?), ?)`,
+      [sessionId, host, first, source, nowStr(), last, sessionId, host, last, last],
+    )
+    await getPool().query(
+      `UPDATE agent_sessions SET last_activity = GREATEST(COALESCE(last_activity, ?), ?)
+       WHERE session_id = ? AND vm_id = ?`,
+      [last, last, sessionId, host],
+    )
+  }
 }
 
 export async function upsertHistory(records) {
@@ -119,83 +156,128 @@ export async function upsertSummary({ session_id, vm_id, summary, model, msg_cou
 
 // Read API
 
-export async function searchMessages(q, { source, vm_id, project, from, to, limit = 50, offset = 0 } = {}) {
-  const pool = getPool()
-  const params = [q, `%${q}%`]
-  let where = '(MATCH(m.content_text) AGAINST (? IN NATURAL LANGUAGE MODE) OR m.content_text LIKE ?)'
-  if (source) { where += ' AND m.source = ?'; params.push(source) }
-  if (vm_id) { where += ' AND m.vm_id = ?'; params.push(vm_id) }
-  if (project) { where += ' AND s.project LIKE ?'; params.push(`%${project}%`) }
-  if (from) { where += ' AND m.ts >= ?'; params.push(from) }
-  if (to) { where += ' AND m.ts <= ?'; params.push(`${to} 23:59:59`) }
-  params.push(Number(limit), Number(offset))
-  const [rows] = await pool.query(
-    `SELECT m.message_id, m.session_id, m.vm_id, m.source, m.msg_role,
-            m.content_text, m.ts, m.seq_num, s.project, s.display_text AS session_display,
-            MATCH(m.content_text) AGAINST (?) AS relevance
-     FROM agent_messages m
-     LEFT JOIN (
-       SELECT session_id, vm_id, MAX(project) AS project, MAX(display_text) AS display_text
-       FROM agent_sessions GROUP BY session_id, vm_id
-     ) s ON s.session_id = m.session_id AND s.vm_id = m.vm_id
-     WHERE ${where}
-     ORDER BY relevance DESC, m.ts DESC
-     LIMIT ? OFFSET ?`,
-    [q, ...params],
+export class QueryInputError extends Error {}
+
+export async function resolveSessionHost(sessionId, vmId) {
+  if (vmId) return vmId
+  const [hosts] = await getPool().query(
+    `SELECT vm_id FROM agent_sessions WHERE session_id = ?
+     UNION SELECT vm_id FROM agent_messages WHERE session_id = ? LIMIT 2`,
+    [sessionId, sessionId],
   )
-  return rows
+  if (hosts.length > 1) throw new QueryInputError('vm_id is required for a session stored on multiple hosts')
+  return hosts[0]?.vm_id ?? null
 }
 
-export async function listSessions({ source, vm_id, project, from, to, limit = 50, offset = 0 } = {}) {
-  const pool = getPool()
-  const conditions = []
-  const params = []
-  if (source) { conditions.push('s.source = ?'); params.push(source) }
-  if (vm_id) { conditions.push('s.vm_id = ?'); params.push(vm_id) }
-  if (project) { conditions.push('s.project LIKE ?'); params.push(`%${project}%`) }
-  if (from) { conditions.push('s.started_at >= ?'); params.push(from) }
-  if (to) { conditions.push('s.started_at <= ?'); params.push(`${to} 23:59:59`) }
-  const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : ''
+// Match the dashboard's conversationPresentation injected-context prefixes.
+const injectedPrefixes = ['# AGENTS.md instructions', '<environment_context>', '<recommended_plugins>', '<skills_instructions>', '<permissions instructions>', '<developer_instructions>', '<developer>']
+const substantivePrompt = injectedPrefixes.map(prefix => `LEFT(REGEXP_REPLACE(m.content_text, '^[[:space:]]+', ''), ${prefix.length}) <> '${prefix}'`).join(' AND ')
+const isInjected = text => injectedPrefixes.some(prefix => String(text ?? '').trimStart().startsWith(prefix))
+
+function presentSession(row) {
+  let meta = {}
+  try { meta = typeof row.session_meta === 'string' ? JSON.parse(row.session_meta) : row.session_meta ?? {} } catch {}
+  const title = [meta?.conversationTitle, meta?.conversation_title, meta?.title, row.display_text, row.first_prompt].find(value => typeof value === 'string' && value.trim() && !isInjected(value)) || row.session_id
+  return {
+    ...row,
+    title: String(title).split('\n')[0].slice(0, 240),
+    display_text: title,
+    last_activity: row.last_activity || row.started_at,
+    message_count: Number(row.message_count) || 0,
+  }
+}
+
+export async function searchMessages(q, { source, vm_id, project, from, to, limit = 50, offset = 0, dialog = false } = {}) {
+  const params = [q, q]
+  let where = 'MATCH(m.content_text) AGAINST (? IN NATURAL LANGUAGE MODE)'
+  if (source) { where += ' AND m.source = ?'; params.push(source) }
+  if (vm_id) { where += ' AND m.vm_id = ?'; params.push(vm_id) }
+  if (project) {
+    where += ` AND EXISTS (SELECT 1 FROM agent_sessions s WHERE s.session_id = m.session_id AND s.vm_id = m.vm_id AND s.project LIKE ?)`
+    params.push(`%${project}%`)
+  }
+  if (from) { where += ' AND m.ts >= ?'; params.push(from) }
+  if (to) { where += ' AND m.ts <= ?'; params.push(`${to} 23:59:59`) }
+  if (dialog) where += " AND m.msg_role IN ('user', 'assistant')"
   params.push(Number(limit), Number(offset))
-  const [rows] = await pool.query(
-    `SELECT s.*, sm.summary IS NOT NULL AS has_summary
-     FROM agent_sessions s
-     LEFT JOIN session_summaries sm
-       ON sm.session_id = s.session_id AND sm.vm_id = s.vm_id
-     ${where}
-     ORDER BY s.started_at DESC
-     LIMIT ? OFFSET ?`,
+  const [rows] = await getPool().query(
+    `SELECT hits.*,
+       (SELECT s.project FROM agent_sessions s WHERE s.session_id = hits.session_id AND s.vm_id = hits.vm_id ORDER BY COALESCE(s.session_meta = '{"message_derived":true}', 0), s.started_at DESC LIMIT 1) AS project,
+       (SELECT LEFT(s.display_text, 240) FROM agent_sessions s WHERE s.session_id = hits.session_id AND s.vm_id = hits.vm_id ORDER BY COALESCE(s.session_meta = '{"message_derived":true}', 0), s.started_at DESC LIMIT 1) AS session_display
+     FROM (
+       SELECT m.message_id, m.session_id, m.vm_id, m.source, m.msg_role,
+         m.content_text, m.ts, m.seq_num,
+         MATCH(m.content_text) AGAINST (? IN NATURAL LANGUAGE MODE) AS relevance
+       FROM agent_messages m WHERE ${where}
+       ORDER BY relevance DESC, m.ts DESC, m.message_id ASC, m.session_id ASC, m.vm_id ASC LIMIT ? OFFSET ?
+     ) hits ORDER BY hits.relevance DESC, hits.ts DESC, hits.message_id ASC, hits.session_id ASC, hits.vm_id ASC`,
     params,
   )
   return rows
 }
 
-export async function getSession(sessionId) {
-  const pool = getPool()
-  const [rows] = await pool.query(
-    'SELECT * FROM agent_sessions WHERE session_id = ? ORDER BY started_at DESC LIMIT 1',
-    [sessionId],
+export async function listSessions({ source, vm_id, project, from, to, limit = 50, offset = 0 } = {}) {
+  const conditions = []
+  const params = []
+  if (source) { conditions.push('s.source = ?'); params.push(source) }
+  if (vm_id) { conditions.push('s.vm_id = ?'); params.push(vm_id) }
+  if (project) { conditions.push('s.project LIKE ?'); params.push(`%${project}%`) }
+  if (from) { conditions.push('s.last_activity >= ?'); params.push(from) }
+  if (to) { conditions.push('s.last_activity <= ?'); params.push(`${to} 23:59:59`) }
+  conditions.push(`NOT EXISTS (SELECT 1 FROM agent_sessions newer WHERE newer.session_id = s.session_id AND newer.vm_id = s.vm_id AND (
+    (COALESCE(newer.session_meta, '') <> '{"message_derived":true}' AND s.session_meta = '{"message_derived":true}') OR
+    ((COALESCE(newer.session_meta = '{"message_derived":true}', 0) = COALESCE(s.session_meta = '{"message_derived":true}', 0)) AND newer.started_at > s.started_at)
+  ))`)
+  params.push(Number(limit), Number(offset))
+  const [rows] = await getPool().query(
+    `SELECT page.*,
+       (SELECT COUNT(*) FROM agent_messages m WHERE m.session_id = page.session_id AND m.vm_id = page.vm_id) AS message_count,
+       COALESCE(page.last_activity, page.started_at) AS last_activity,
+       (SELECT LEFT(m.content_text, 512) FROM agent_messages m WHERE m.session_id = page.session_id AND m.vm_id = page.vm_id AND m.msg_role = 'user' AND m.content_text <> '' AND ${substantivePrompt} ORDER BY m.seq_num, m.ts, m.message_id LIMIT 1) AS first_prompt,
+       EXISTS (SELECT 1 FROM session_summaries sm WHERE sm.session_id = page.session_id AND sm.vm_id = page.vm_id AND sm.summary IS NOT NULL) AS has_summary
+     FROM (
+       SELECT s.* FROM agent_sessions s WHERE ${conditions.join(' AND ')}
+       ORDER BY s.last_activity DESC, s.session_id, s.vm_id LIMIT ? OFFSET ?
+     ) page ORDER BY page.last_activity DESC, page.session_id, page.vm_id`,
+    params,
   )
-  return rows[0] ?? null
+  return rows.map(presentSession)
 }
 
-export async function getSessionMessages(sessionId, { limit = 1000, offset = 0 } = {}) {
-  const pool = getPool()
-  const [rows] = await pool.query(
+export async function getSession(sessionId, { vm_id } = {}) {
+  const host = await resolveSessionHost(sessionId, vm_id)
+  if (!host) return null
+  const [rows] = await getPool().query(
+    `SELECT s.*,
+       (SELECT COUNT(*) FROM agent_messages m WHERE m.session_id = s.session_id AND m.vm_id = s.vm_id) AS message_count,
+       COALESCE(s.last_activity, s.started_at) AS last_activity,
+       (SELECT LEFT(m.content_text, 512) FROM agent_messages m WHERE m.session_id = s.session_id AND m.vm_id = s.vm_id AND m.msg_role = 'user' AND m.content_text <> '' AND ${substantivePrompt} ORDER BY m.seq_num, m.ts, m.message_id LIMIT 1) AS first_prompt
+     FROM agent_sessions s WHERE s.session_id = ? AND s.vm_id = ? ORDER BY COALESCE(s.session_meta = '{"message_derived":true}', 0), s.started_at DESC LIMIT 1`,
+    [sessionId, host],
+  )
+  return rows[0] ? presentSession(rows[0]) : null
+}
+
+export async function getSessionMessages(sessionId, { vm_id, limit = 200, offset = 0, dialog = false, recent = false } = {}) {
+  const host = await resolveSessionHost(sessionId, vm_id)
+  if (!host) return []
+  const direction = recent ? 'DESC' : 'ASC'
+  const [rows] = await getPool().query(
     `SELECT * FROM agent_messages
-     WHERE session_id = ?
-     ORDER BY seq_num ASC, ts ASC
+     WHERE session_id = ? AND vm_id = ?${dialog ? " AND msg_role IN ('user', 'assistant') AND content_text IS NOT NULL AND content_text <> ''" : ''}
+     ORDER BY seq_num ${direction}, ts ${direction}, message_id ${direction}
      LIMIT ? OFFSET ?`,
-    [sessionId, Number(limit), Number(offset)],
+    [sessionId, host, Number(limit), Number(offset)],
   )
-  return rows
+  return recent ? rows.reverse() : rows
 }
 
-export async function getSummary(sessionId) {
-  const pool = getPool()
-  const [rows] = await pool.query(
-    'SELECT * FROM session_summaries WHERE session_id = ? LIMIT 1',
-    [sessionId],
+export async function getSummary(sessionId, { vm_id } = {}) {
+  const host = await resolveSessionHost(sessionId, vm_id)
+  if (!host) return null
+  const [rows] = await getPool().query(
+    'SELECT * FROM session_summaries WHERE session_id = ? AND vm_id = ? LIMIT 1',
+    [sessionId, host],
   )
   return rows[0] ?? null
 }

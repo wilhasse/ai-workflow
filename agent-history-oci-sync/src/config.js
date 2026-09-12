@@ -1,9 +1,13 @@
 export default {
   host: process.env.HOST ?? '0.0.0.0',
   port: Number.parseInt(process.env.PORT ?? '5002', 10),
-  // Bearer token required for every endpoint except /health.
-  // Empty means auth disabled (only acceptable on a trusted network).
+  // Machine callers use bearer authentication; browsers have separate read-only sessions.
   apiToken: process.env.API_TOKEN ?? '',
+  history: {
+    username: process.env.HISTORY_USERNAME ?? '',
+    passwordHash: process.env.HISTORY_PASSWORD_HASH ?? '',
+    origin: process.env.HISTORY_ORIGIN ?? '',
+  },
   mysql: {
     host: process.env.MYSQL_HOST ?? '10.0.0.36',
     port: Number.parseInt(process.env.MYSQL_PORT ?? '3306', 10),

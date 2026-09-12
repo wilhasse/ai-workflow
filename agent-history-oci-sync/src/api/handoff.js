@@ -43,22 +43,24 @@ export function renderHandoff({ session, summary, messages }) {
   return lines.join('\n')
 }
 
-export async function buildHandoff(sessionId, { tail = 40 } = {}) {
-  const session = await queries.getSession(sessionId)
-  const summary = await queries.getSummary(sessionId)
-  const all = await queries.getSessionMessages(sessionId, { limit: 100000 })
-  if (!session && !all.length) return null
-  const dialog = all.filter(m => ['user', 'assistant'].includes(m.msg_role) && m.content_text)
-  const messages = dialog.slice(-Math.max(1, Number(tail)))
-  // Some sessions only exist in agent_messages (collector emits session rows
-  // only on full re-reads), so fall back to message-derived metadata.
-  const effectiveSession = session ?? (all.length ? {
+export async function buildHandoff(sessionId, { vm_id, tail = 40 } = {}) {
+  const host = await queries.resolveSessionHost(sessionId, vm_id)
+  if (!host) return null
+  const scope = { vm_id: host }
+  const session = await queries.getSession(sessionId, scope)
+  const summary = await queries.getSummary(sessionId, scope)
+  const messages = await queries.getSessionMessages(sessionId, {
+    ...scope, limit: Math.min(200, Math.max(1, Number(tail))), dialog: true, recent: true,
+  })
+  const first = session ? null : (await queries.getSessionMessages(sessionId, { ...scope, limit: 1 }))[0]
+  if (!session && !first) return null
+  const effectiveSession = session ?? {
     session_id: sessionId,
-    vm_id: all[0].vm_id,
-    source: all[0].source,
-    started_at: all[0].ts,
+    vm_id: host,
+    source: first.source,
+    started_at: first.ts,
     project: null,
     display_text: null,
-  } : null)
+  }
   return renderHandoff({ session: effectiveSession, summary, messages })
 }

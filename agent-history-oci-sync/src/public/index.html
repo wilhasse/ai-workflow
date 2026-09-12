@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#153e3a">
+  <title>Conversation archive · SuperSaber</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <p id="boot-status" class="boot-status" role="status">Opening your archive…</p>
+  <main id="login-screen" class="login-screen" hidden>
+    <section class="login-intro">
+      <a class="brand" href="/" aria-label="SuperSaber archive home"><img src="/icon.svg" alt="" width="42" height="42"><span>SuperSaber<span class="brand-sub">Conversation archive</span></span></a>
+      <div class="intro-copy"><span class="eyebrow">A place for your conversations</span><h1>Pick up the<br>thread. Anywhere.</h1><p>Your archived conversations, ideas and context.<br>Available from the cloud when you’re away.</p><div class="intro-rule"></div><span class="intro-note">Private access · Stored in Oracle Cloud</span></div>
+      <span class="intro-footer">Browse, search and export saved conversations.</span>
+    </section>
+    <section class="login-panel">
+      <form id="login-form" class="login-form" method="post" action="/auth/login">
+        <span class="eyebrow">Welcome back</span><h2>Open your archive</h2><p class="muted">Sign in to browse your conversations.</p>
+        <label for="username">Username</label><input id="username" name="username" autocomplete="username" maxlength="128" required>
+        <label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" maxlength="1024" required>
+        <p id="login-error" class="error" role="alert" hidden></p><button id="login-submit" class="button primary" type="submit">Sign in <span aria-hidden="true">→</span></button>
+        <p class="login-footnote">Access is private. Your session expires after 12 hours.</p>
+      </form>
+    </section>
+  </main>
+  <div id="archive" class="archive" data-view="list" hidden>
+    <header class="app-header">
+      <a class="brand" href="/" aria-label="SuperSaber archive home"><img src="/icon.svg" alt="" width="36" height="36"><span>SuperSaber<span class="brand-sub">Conversation archive</span></span></a>
+      <div class="header-actions"><span class="cloud-badge"><span aria-hidden="true">●</span> Stored in OCI</span><span id="signed-user" class="signed-user"></span><button id="logout" class="button quiet" type="button">Sign out</button></div>
+    </header>
+    <div id="global-error" class="global-error" role="alert" hidden></div>
+    <div class="workspace">
+      <aside class="library" aria-label="Conversation library">
+        <div class="library-top"><div class="section-heading"><h1>Your conversations</h1><button id="refresh" class="icon-button" title="Refresh conversations" aria-label="Refresh conversations" type="button">↻</button></div>
+          <form id="search-form" role="search"><label class="sr-only" for="search">Search conversation messages</label><div class="search-box"><span aria-hidden="true">⌕</span><input id="search" name="q" type="search" placeholder="Search your conversations" maxlength="200"><button class="sr-only" type="submit">Search</button></div></form>
+          <div class="filters"><label>Source<select id="source"><option value="">All sources</option><option value="codex">Codex</option><option value="claude">Claude</option></select></label><label>Host<select id="host"><option value="">All hosts</option></select></label></div>
+          <div class="list-caption"><span id="list-caption">Recent conversations</span><span id="list-count"></span></div>
+        </div>
+        <div id="conversation-list" class="conversation-list" aria-live="polite"></div>
+        <div class="list-pagination"><button id="list-prev" class="button quiet" type="button" disabled>← Previous</button><span id="list-page">Page 1</span><button id="list-next" class="button quiet" type="button" disabled>Next →</button></div>
+        <details class="sync-details"><summary>Archive update status</summary><p class="muted small">Update times for stored host metadata. New messages appear after a successful sync.</p><div id="sync-status">Checking uploads…</div></details>
+      </aside>
+      <main id="reader" class="reader">
+        <section id="reader-empty" class="reader-empty"><div class="empty-art" aria-hidden="true"><span class="paper paper-back"></span><span class="paper paper-front"><i></i><i></i><i></i><b>↗</b></span></div><span class="eyebrow">Your saved conversations</span><h2>Open a conversation<br>to read its messages.</h2><p>Choose a conversation to revisit your work,<br>or search for something you remember.</p><span class="empty-tip">Your archive is available independently of your local environment.</span></section>
+        <section id="conversation" class="conversation" hidden>
+          <div class="conversation-header"><button id="back" class="button quiet back-button" type="button">← All conversations</button><div class="reader-kicker"><span id="conversation-source" class="source-badge"></span><span id="conversation-host"></span></div><h2 id="conversation-title"></h2><p id="conversation-project" class="conversation-project"></p><div class="conversation-toolbar"><span id="conversation-date" class="muted small"></span><a id="handoff" class="button secondary" download>Export handoff ↗</a></div>
+            <details id="summary-panel" class="summary-panel" hidden><summary>Conversation summary</summary><p id="summary-text"></p></details>
+          </div>
+          <div class="message-controls"><span id="message-caption">Messages</span><label class="toggle"><input id="show-tools" type="checkbox">Show tools &amp; events</label></div>
+          <div id="message-error" class="message-error error" role="alert" hidden></div>
+          <div id="messages" class="messages" aria-live="polite"></div>
+          <div class="message-footer"><span id="message-count" class="muted small"></span><button id="load-more" class="button secondary" type="button" hidden>Load more messages</button></div>
+        </section>
+      </main>
+    </div>
+  </div>
+  <noscript><p class="boot-status">Enable JavaScript to sign in and read your archive.</p></noscript>
+</body>
+</html>
