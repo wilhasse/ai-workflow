@@ -1,0 +1,9 @@
+[Unit]
+Description=Continue complete conversation reconciliation twice per hour between normal syncs
+
+[Timer]
+OnCalendar=*-*-* *:07,37:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=Continue complete retained-message reconciliation to OCI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=cslog
+Environment=SYNC_MAX_ROWS=100000
+Environment=SYNC_MAX_SECONDS=600
+ExecStart=/home/cslog/ai-workflow/agent-history-oci-sync/scripts/delta-sync.sh --reconcile
+TimeoutStartSec=15min
+UMask=0077
