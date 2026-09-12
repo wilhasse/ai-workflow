@@ -103,19 +103,18 @@ test('real MySQL preserves host isolation, pagination, activity and indexed sear
     }
 
 
-    // Helpers inherit titles, but grouping follows metadata and keeps root pagination.
     for (const table of ['agent_messages', 'agent_sessions', 'session_summaries']) await pool.query(`DELETE FROM ${table}`)
     const makeSession = (session_id, parent, extra = {}) => ({
       session_id, vm_id: 'host-a', source: 'codex', project: '/group',
       started_at: '2026-09-01', last_activity: '2026-09-12', display_text: 'Inherited title',
-      session_meta: parent === undefined ? {} : { source: { subagent: { thread_spawn: { parent_thread_id: parent } } }, agent_path: `/root/${session_id}`, agent_nickname: `Agent ${session_id}` },
+      session_meta: parent === undefined ? {} : { source: { subagent: { thread_spawn: { parent_thread_id: parent, agent_path: `/root/${session_id}`, agent_nickname: `Agent ${session_id}` } } } },
       ...extra,
     })
     await queries.upsertSessions([
       makeSession('parent'), ...Array.from({ length: 5 }, (_, i) => makeSession(`helper-${i}`, 'parent')),
       makeSession('nested', 'helper-0'), makeSession('orphan-helper', 'absent'),
       makeSession('self-parent', 'self-parent'), makeSession('cycle-a', 'cycle-b'), makeSession('cycle-b', 'cycle-a'),
-      makeSession('cycle-child', 'cycle-a'), makeSession('cross-host', 'parent', { vm_id: 'host-b' }),
+      makeSession('a-cycle-child', 'cycle-a'), makeSession('cross-host', 'parent', { vm_id: 'host-b' }),
       makeSession('malformed'), makeSession('invalid-parent', 123), makeSession('root-two'),
       makeSession('versioned', undefined, { started_at: '2026-08-01', source: 'claude' }),
       makeSession('versioned', 'parent', { started_at: '2026-09-01' }),
@@ -147,6 +146,19 @@ test('real MySQL preserves host isolation, pagination, activity and indexed sear
     const detail = (await route('GET', '/sessions/helper-0?vm_id=host-a')).body.data
     assert.equal(detail.parent_session_id, 'parent')
     assert.equal(detail.agent_nickname, 'Agent helper-0')
+    const bulkRoots = Array.from({ length: 101 }, (_, i) => makeSession(`bulk-root-${String(i).padStart(3, '0')}`, undefined, { source: 'bulk' }))
+    const bulkChildren = Array.from({ length: 101 }, (_, i) => makeSession(`bulk-child-${String(i).padStart(3, '0')}`, 'bulk-root-000', { source: 'bulk' }))
+    await queries.upsertSessions([...bulkRoots, ...bulkChildren])
+    const firstRoots = (await route('GET', '/sessions?grouped=1&source=bulk&limit=100')).body.data
+    const lastRoots = (await route('GET', '/sessions?grouped=1&source=bulk&limit=100&offset=100')).body.data
+    assert.deepEqual([...firstRoots, ...lastRoots].map(r => r.session_id), bulkRoots.map(r => r.session_id))
+    const firstChildren = (await route('GET', '/sessions/bulk-root-000/children?vm_id=host-a&limit=100')).body.data
+    const lastChildren = (await route('GET', '/sessions/bulk-root-000/children?vm_id=host-a&limit=100&offset=100')).body.data
+    assert.deepEqual([...firstChildren, ...lastChildren].map(r => r.session_id), bulkChildren.map(r => r.session_id))
+    await queries.upsertSessions([makeSession('parent', undefined, { vm_id: 'host-b' })])
+    assert.equal((await route('GET', '/sessions/parent/children')).status, 400)
+    assert.deepEqual((await route('GET', '/sessions/parent/children?vm_id=host-b')).body.data.map(r => r.session_id), ['cross-host'])
+
 
   } finally {
     await pool.end()

@@ -1,3 +1,4 @@
+import { sessionGraph } from './session-graph.js'
 import { getPool } from './connection.js'
 
 function nowStr() {
@@ -174,12 +175,69 @@ const injectedPrefixes = ['# AGENTS.md instructions', '<environment_context>', '
 const substantivePrompt = injectedPrefixes.map(prefix => `LEFT(REGEXP_REPLACE(m.content_text, '^[[:space:]]+', ''), ${prefix.length}) <> '${prefix}'`).join(' AND ')
 const isInjected = text => injectedPrefixes.some(prefix => String(text ?? '').trimStart().startsWith(prefix))
 
+const canonicalSession = `NOT EXISTS (SELECT 1 FROM agent_sessions newer WHERE newer.session_id = s.session_id AND newer.vm_id = s.vm_id AND (
+  (COALESCE(newer.session_meta, '') <> '{"message_derived":true}' AND s.session_meta = '{"message_derived":true}') OR
+  ((COALESCE(newer.session_meta = '{"message_derived":true}', 0) = COALESCE(s.session_meta = '{"message_derived":true}', 0)) AND newer.started_at > s.started_at)
+))`
+
+const parentJson = "JSON_EXTRACT(IF(JSON_VALID(s.session_meta), s.session_meta, '{}'), '$.source.subagent.thread_spawn.parent_thread_id')"
+const parentColumn = `CASE WHEN JSON_TYPE(${parentJson}) = 'STRING' THEN LEFT(JSON_UNQUOTE(${parentJson}), 65) END AS parent_session_id`
+const parentId = value => typeof value === 'string' && /^[a-zA-Z0-9_.:-]{1,64}$/.test(value) ? value : null
+const relationText = (value, length) => typeof value === 'string' && value.trim() ? value.slice(0, length) : null
+
+async function filteredSessionGraph({ source, vm_id, project, from, to } = {}) {
+  const conditions = [canonicalSession]
+  const params = []
+  if (source) { conditions.push('s.source = ?'); params.push(source) }
+  if (vm_id) { conditions.push('s.vm_id = ?'); params.push(vm_id) }
+  if (project) { conditions.push('s.project LIKE ?'); params.push(`%${project}%`) }
+  if (from) { conditions.push('s.last_activity >= ?'); params.push(from) }
+  if (to) { conditions.push('s.last_activity <= ?'); params.push(`${to} 23:59:59`) }
+  const [rows] = await getPool().query(
+    `SELECT s.session_id, s.vm_id, s.started_at, ${parentColumn}
+     FROM agent_sessions s WHERE ${conditions.join(' AND ')}
+     ORDER BY s.last_activity DESC, s.session_id, s.vm_id`, params,
+  )
+  for (const row of rows) row.parent_session_id = parentId(row.parent_session_id)
+  return sessionGraph(rows)
+}
+
+async function enrichSessionPage(page) {
+  if (!page.length) return []
+  const [rows] = await getPool().query(
+    `SELECT s.*,
+       (SELECT COUNT(*) FROM agent_messages m WHERE m.session_id = s.session_id AND m.vm_id = s.vm_id) AS message_count,
+       (SELECT LEFT(m.content_text, 512) FROM agent_messages m WHERE m.session_id = s.session_id AND m.vm_id = s.vm_id AND m.msg_role = 'user' AND m.content_text <> '' AND ${substantivePrompt} ORDER BY m.seq_num, m.ts, m.message_id LIMIT 1) AS first_prompt,
+       EXISTS (SELECT 1 FROM session_summaries sm WHERE sm.session_id = s.session_id AND sm.vm_id = s.vm_id AND sm.summary IS NOT NULL) AS has_summary
+     FROM agent_sessions s WHERE (s.session_id, s.vm_id, s.started_at) IN (${page.map(() => '(?, ?, ?)').join(', ')})`,
+    page.flatMap(row => [row.session_id, row.vm_id, row.started_at]),
+  )
+  const byKey = new Map(rows.map(row => [JSON.stringify([row.session_id, row.vm_id]), row]))
+  return page.flatMap(entry => {
+    const row = byKey.get(JSON.stringify([entry.session_id, entry.vm_id]))
+    return row ? [{ ...presentSession(row), child_count: entry.child_count }] : []
+  })
+}
+
+export async function listSessionChildren(sessionId, { vm_id, limit = 50, offset = 0, ...filters } = {}) {
+  const host = await resolveSessionHost(sessionId, vm_id)
+  if (!host) return null
+  const [existing] = await getPool().query('SELECT 1 FROM agent_sessions WHERE session_id = ? AND vm_id = ? LIMIT 1', [sessionId, host])
+  if (!existing.length) return null
+  const graph = await filteredSessionGraph({ ...filters, vm_id: host })
+  return enrichSessionPage(graph.childrenOf(sessionId, host).slice(Number(offset), Number(offset) + Number(limit)))
+}
+
 function presentSession(row) {
   let meta = {}
   try { meta = typeof row.session_meta === 'string' ? JSON.parse(row.session_meta) : row.session_meta ?? {} } catch {}
+  const spawn = meta?.source?.subagent?.thread_spawn
   const title = [meta?.conversationTitle, meta?.conversation_title, meta?.title, row.display_text, row.first_prompt].find(value => typeof value === 'string' && value.trim() && !isInjected(value)) || row.session_id
   return {
     ...row,
+    parent_session_id: parentId(spawn?.parent_thread_id),
+    agent_path: relationText(spawn?.agent_path, 512) ?? relationText(meta?.agent_path, 512),
+    agent_nickname: relationText(spawn?.agent_nickname, 240) ?? relationText(meta?.agent_nickname, 240),
     title: String(title).split('\n')[0].slice(0, 240),
     display_text: title,
     last_activity: row.last_activity || row.started_at,
@@ -216,7 +274,11 @@ export async function searchMessages(q, { source, vm_id, project, from, to, limi
   return rows
 }
 
-export async function listSessions({ source, vm_id, project, from, to, limit = 50, offset = 0 } = {}) {
+export async function listSessions({ grouped = false, source, vm_id, project, from, to, limit = 50, offset = 0 } = {}) {
+  if (grouped) {
+    const graph = await filteredSessionGraph({ source, vm_id, project, from, to })
+    return enrichSessionPage(graph.roots.slice(Number(offset), Number(offset) + Number(limit)))
+  }
   const conditions = []
   const params = []
   if (source) { conditions.push('s.source = ?'); params.push(source) }
@@ -224,10 +286,7 @@ export async function listSessions({ source, vm_id, project, from, to, limit = 5
   if (project) { conditions.push('s.project LIKE ?'); params.push(`%${project}%`) }
   if (from) { conditions.push('s.last_activity >= ?'); params.push(from) }
   if (to) { conditions.push('s.last_activity <= ?'); params.push(`${to} 23:59:59`) }
-  conditions.push(`NOT EXISTS (SELECT 1 FROM agent_sessions newer WHERE newer.session_id = s.session_id AND newer.vm_id = s.vm_id AND (
-    (COALESCE(newer.session_meta, '') <> '{"message_derived":true}' AND s.session_meta = '{"message_derived":true}') OR
-    ((COALESCE(newer.session_meta = '{"message_derived":true}', 0) = COALESCE(s.session_meta = '{"message_derived":true}', 0)) AND newer.started_at > s.started_at)
-  ))`)
+  conditions.push(canonicalSession)
   params.push(Number(limit), Number(offset))
   const [rows] = await getPool().query(
     `SELECT page.*,

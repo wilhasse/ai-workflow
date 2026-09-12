@@ -13,7 +13,7 @@ const headers = {
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
 }
 const browserPrefix = '/api/agent-history'
-const readRoutes = /^\/(?:health|search|sessions|history|tasks|stats|sync\/status|sessions\/[^/?]+(?:\/messages|\/handoff)?)$/
+const readRoutes = /^\/(?:health|search|sessions|history|tasks|stats|sync\/status|sessions\/[^/?]+(?:\/messages|\/handoff|\/children)?)$/
 
 function readBody(req, limit) {
   return new Promise((resolve, reject) => {
