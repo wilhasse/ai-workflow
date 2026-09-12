@@ -1,7 +1,7 @@
 import os from 'node:os'
 import path from 'node:path'
 import mysql from 'mysql2/promise'
-import { TABLES, loadState, saveState, pageQuery, runSync } from './sync-core.js'
+import { TABLES, loadState, saveState, pageQuery, runSync, decodeDorisField } from './sync-core.js'
 
 // --delta refreshes metadata/history and replays recent messages.
 // --reconcile (default) sweeps all retained source messages, resuming across
@@ -100,7 +100,7 @@ async function main() {
   const conn = await mysql.createConnection({
     host: process.env.DORIS_HOST ?? '10.1.0.7', port: integer('DORIS_PORT', 9030, 1, 65535),
     user: process.env.DORIS_USER ?? 'root', password: process.env.DORIS_PASSWORD ?? '',
-    database: process.env.DORIS_DATABASE ?? 'agent_history', dateStrings: true, connectTimeout: 15000,
+    database: process.env.DORIS_DATABASE ?? 'agent_history', dateStrings: true, connectTimeout: 15000, charset: 'utf8mb4', typeCast: decodeDorisField,
   })
   try {
     const result = await runSync({

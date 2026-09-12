@@ -1,4 +1,5 @@
 import mysql from 'mysql2/promise'
+import { decodeDorisField } from './sync-core.js'
 import { messageManifest, manifestDigest, compareManifests } from './sync-verification.js'
 
 // Read-only exact primary-key/content_text comparison for one named host/session.
@@ -17,7 +18,7 @@ async function main() {
   const conn = await mysql.createConnection({
     host: process.env.DORIS_HOST ?? '10.1.0.7', port: Number(process.env.DORIS_PORT ?? 9030),
     user: process.env.DORIS_USER ?? 'root', password: process.env.DORIS_PASSWORD ?? '',
-    database: process.env.DORIS_DATABASE ?? 'agent_history', dateStrings: true, connectTimeout: 15000,
+    database: process.env.DORIS_DATABASE ?? 'agent_history', dateStrings: true, connectTimeout: 15000, charset: 'utf8mb4', typeCast: decodeDorisField,
   })
   const readSource = async () => {
     const [rows] = await conn.query(

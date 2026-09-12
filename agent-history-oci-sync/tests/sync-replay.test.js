@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { TABLES, loadState, saveState, runSync } from '../scripts/sync-core.js'
+import { TABLES, loadState, saveState, runSync, decodeDorisField } from '../scripts/sync-core.js'
 import { messageManifest, compareManifests } from '../scripts/sync-verification.js'
 
 const messageSpec = TABLES.find(spec => spec.entity === 'messages')
@@ -173,4 +173,15 @@ test('manifest accepts API ISO timestamps and source SQL timestamps as the same 
   const cloud = messageManifest([{ ...message('same'), ts: '2026-09-12T14:00:00.000Z' }])
   assert.equal(compareManifests(source, cloud).matched, true)
   assert.throws(() => messageManifest([message('same'), message('same')]), /Duplicate/)
+})
+
+
+test('Doris text with non-BMP Unicode decodes from UTF-8 bytes and leaves numeric fields to mysql2', () => {
+  const bytes = Buffer.from('conversation 🚀 𝄞', 'utf8')
+  const legacyDecoded = 'conversation ' + '\ufffd'.repeat(4) + ' ' + '\ufffd'.repeat(4)
+  const field = { type: 'VAR_STRING', string: (encoding = 'cesu8') => encoding === 'utf8' ? bytes.toString('utf8') : legacyDecoded }
+  assert.notEqual(field.string(), 'conversation 🚀 𝄞')
+  assert.equal(decodeDorisField(field, () => { throw new Error('legacy metadata decoder must not run') }), 'conversation 🚀 𝄞')
+  assert.equal(decodeDorisField({ type: 'LONG' }, () => 42), 42)
+  assert.equal(decodeDorisField({ type: 'BLOB', string: () => null }, () => 'wrong'), null)
 })

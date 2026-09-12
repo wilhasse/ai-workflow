@@ -6,6 +6,15 @@ export function formatTimestamp(value) {
   return value instanceof Date ? value.toISOString() : String(value)
 }
 
+// Doris reports some UTF-8 text fields with a legacy collation. mysql2 then
+// decodes non-BMP characters as CESU-8 and replaces each byte. Decode the
+// source's UTF-8 bytes explicitly; numeric/date handling remains mysql2's.
+export function decodeDorisField(field, next) {
+  return ['VAR_STRING', 'STRING', 'VARCHAR', 'BLOB', 'MEDIUM_BLOB', 'LONG_BLOB', 'TINY_BLOB'].includes(field.type)
+    ? field.string('utf8')
+    : next()
+}
+
 export const TABLES = [
   { entity: 'sessions', table: 'agent_sessions', keys: ['started_at', 'session_id', 'vm_id'], map: r => ({ ...r, started_at: formatTimestamp(r.started_at) }) },
   {
