@@ -62,6 +62,7 @@ test('login cookie reads only prefixed allowlisted GETs, while bearer retains ma
   const read = await f.request('/api/agent-history/sessions/test/messages?vm_id=host-a&limit=100', { headers })
   assert.equal(read.status, 200)
   assert.equal((await read.json()).data.url, '/sessions/test/messages?vm_id=host-a&limit=100')
+  assert.equal((await f.request('/api/agent-history/sessions/test/children?vm_id=host-a', { headers })).status, 200)
   assert.equal((await f.request('/sessions', { headers })).status, 401)
   assert.equal((await f.request('/ingest/messages', { method: 'POST', headers, body: '{}' })).status, 401)
   assert.equal((await f.request('/api/agent-history/ingest/messages', { method: 'POST', headers, body: '{}' })).status, 403)
