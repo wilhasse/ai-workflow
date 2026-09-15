@@ -1,0 +1,210 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+readonly DB_PATH="/home/cslog/.t3/userdata/state.sqlite"
+readonly ENVIRONMENT_ID_PATH="/home/cslog/.t3/userdata/environment-id"
+readonly DEFAULT_LIMIT=20
+
+usage() {
+  cat <<'EOF'
+Usage: t3-find-thread [--limit N] [--] TEXT...
+
+Find T3 Code threads whose finalized user prompts contain TEXT.
+
+Options:
+  --limit N  Return at most N threads (default: 20; range: 1..200)
+  --help     Show this help
+EOF
+}
+
+fail() {
+  printf 't3-find-thread: %s\n' "$1" >&2
+  exit 2
+}
+
+sanitize_one_line() {
+  local value=$1
+  value=${value//$'\r'/ }
+  value=${value//$'\n'/ }
+  value=${value//$'\t'/ }
+  printf '%s' "$value"
+}
+
+limit=$DEFAULT_LIMIT
+
+while (($# > 0)); do
+  case $1 in
+    --help)
+      usage
+      exit 0
+      ;;
+    --limit)
+      (($# >= 2)) || fail '--limit requires a value'
+      limit=$2
+      shift 2
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      fail "unknown option: $1"
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+(($# > 0)) || {
+  usage >&2
+  exit 2
+}
+
+[[ $limit =~ ^[0-9]+$ ]] || fail '--limit must be an integer from 1 to 200'
+leading_zeros=${limit%%[!0]*}
+normalized_limit=${limit#"$leading_zeros"}
+[[ -n $normalized_limit ]] || normalized_limit=0
+(( ${#normalized_limit} <= 3 )) || fail '--limit must be an integer from 1 to 200'
+limit=$((10#$normalized_limit))
+((limit >= 1 && limit <= 200)) || fail '--limit must be an integer from 1 to 200'
+
+search_text=$*
+[[ -n $search_text ]] || fail 'TEXT must not be empty'
+
+command -v sqlite3 >/dev/null 2>&1 || fail 'sqlite3 is required'
+command -v od >/dev/null 2>&1 || fail 'od is required'
+command -v tr >/dev/null 2>&1 || fail 'tr is required'
+[[ -r $DB_PATH ]] || fail "cannot read database: $DB_PATH"
+[[ -r $ENVIRONMENT_ID_PATH ]] || fail "cannot read environment ID: $ENVIRONMENT_ID_PATH"
+
+environment_id=$(tr -d '\r\n' < "$ENVIRONMENT_ID_PATH") || fail 'could not read environment ID'
+environment_id=$(sanitize_one_line "$environment_id")
+[[ -n $environment_id ]] || fail "environment ID is empty: $ENVIRONMENT_ID_PATH"
+
+search_hex=$(printf '%s' "$search_text" | LC_ALL=C od -An -v -tx1 | tr -d ' \n') ||
+  fail 'could not encode search text'
+[[ $search_hex =~ ^([0-9a-f]{2})+$ ]] || fail 'search text could not be encoded as lowercase UTF-8 hex'
+environment_hex=$(printf '%s' "$environment_id" | LC_ALL=C od -An -v -tx1 | tr -d ' \n') ||
+  fail 'could not encode environment ID'
+[[ $environment_hex =~ ^([0-9a-f]{2})+$ ]] || fail 'environment ID could not be encoded safely'
+
+if ! results=$(sqlite3 -readonly "$DB_PATH" <<SQL
+.bail on
+.timeout 5000
+PRAGMA query_only = ON;
+
+WITH
+params(needle) AS (
+  VALUES (CAST(X'$search_hex' AS TEXT))
+),
+matches AS (
+  SELECT
+    m.thread_id,
+    m.message_id,
+    m.text AS message_text,
+    m.created_at AS match_created_at,
+    instr(lower(m.text), lower(params.needle)) AS match_position,
+    length(params.needle) AS needle_length,
+    t.title,
+    t.archived_at,
+    p.workspace_root,
+    r.provider_name,
+    r.provider_instance_id,
+    CASE
+      WHEN lower(COALESCE(r.provider_name, '')) = 'codex'
+        AND json_valid(r.resume_cursor_json)
+      THEN json_extract(r.resume_cursor_json, '$.threadId')
+      ELSE NULL
+    END AS codex_id
+  FROM projection_thread_messages AS m
+  JOIN projection_threads AS t ON t.thread_id = m.thread_id
+  JOIN projection_projects AS p ON p.project_id = t.project_id
+  LEFT JOIN provider_session_runtime AS r ON r.thread_id = m.thread_id
+  CROSS JOIN params
+  WHERE m.role = 'user'
+    AND m.is_streaming = 0
+    AND t.deleted_at IS NULL
+    AND p.deleted_at IS NULL
+    AND instr(lower(m.text), lower(params.needle)) > 0
+),
+ranked AS (
+  SELECT
+    *,
+    count(*) OVER (PARTITION BY thread_id) AS hit_count,
+    row_number() OVER (
+      PARTITION BY thread_id
+      ORDER BY match_created_at DESC, message_id DESC
+    ) AS match_rank
+  FROM matches
+),
+chosen AS (
+  SELECT
+    *,
+    max(
+      1,
+      min(
+        max(1, length(message_text) - 179),
+        match_position - max(0, (180 - needle_length) / 2)
+      )
+    ) AS snippet_start
+  FROM ranked
+  WHERE match_rank = 1
+),
+display AS (
+  SELECT
+    thread_id,
+    match_created_at,
+    CASE WHEN archived_at IS NULL THEN 'active' ELSE 'archived' END AS state,
+    replace(replace(replace(title, char(13), ' '), char(10), ' '), char(9), ' ') AS safe_title,
+    replace(replace(replace(workspace_root, char(13), ' '), char(10), ' '), char(9), ' ') AS safe_workspace,
+    replace(replace(replace(
+      CASE
+        WHEN snippet_start > 1 THEN '…' ELSE ''
+      END || substr(message_text, snippet_start, 180) ||
+      CASE
+        WHEN snippet_start + 179 < length(message_text) THEN '…' ELSE ''
+      END,
+      char(13), ' '
+    ), char(10), ' '), char(9), ' ') AS safe_snippet,
+    replace(replace(replace(
+      COALESCE(NULLIF(provider_instance_id, ''), NULLIF(provider_name, ''), '-'),
+      char(13), ' '
+    ), char(10), ' '), char(9), ' ') AS safe_provider,
+    replace(replace(replace(match_created_at, char(13), ' '), char(10), ' '), char(9), ' ') AS safe_match_created_at,
+    replace(replace(replace(thread_id, char(13), ' '), char(10), ' '), char(9), ' ') AS safe_thread_id,
+    hit_count,
+    CASE
+      WHEN typeof(codex_id) = 'text' AND codex_id <> ''
+      THEN replace(replace(replace(codex_id, char(13), ' '), char(10), ' '), char(9), ' ')
+      ELSE '-'
+    END AS safe_codex_id
+  FROM chosen
+)
+SELECT
+  'State: ' || state || char(10) ||
+  'Title: ' || safe_title || char(10) ||
+  'Workspace: ' || safe_workspace || char(10) ||
+  'Matched: user / ' || safe_match_created_at || char(10) ||
+  'Provider: ' || safe_provider || char(10) ||
+  'Hits: ' || hit_count || char(10) ||
+  'Snippet: ' || safe_snippet || char(10) ||
+  'T3 ID: ' || safe_thread_id || char(10) ||
+  'Codex ID: ' || safe_codex_id || char(10) ||
+  'Route: /' || CAST(X'$environment_hex' AS TEXT) || '/' || safe_thread_id || char(10) ||
+  '---'
+FROM display
+ORDER BY match_created_at DESC, thread_id DESC
+LIMIT $limit;
+SQL
+); then
+  fail 'database query failed'
+fi
+
+if [[ -z $results ]]; then
+  printf 'No matching T3 threads found.\n' >&2
+  exit 1
+fi
+
+printf '%s\n' "$results"
