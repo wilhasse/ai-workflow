@@ -6,7 +6,8 @@
   "description": "Small HTTP + WebSocket API that provisions and tracks tmux sessions so the dashboard can reattach reliably.",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "node --watch src/server.js"
+    "dev": "node --watch src/server.js",
+    "test": "node --test"
   },
   "engines": {
     "node": ">=20"

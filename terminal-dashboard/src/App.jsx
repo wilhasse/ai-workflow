@@ -17,6 +17,7 @@ import TerminalOrganizer from './components/workspace/TerminalOrganizer'
 import VmCreatePanel from './components/vm/VmCreatePanel'
 import TranscriptsView from './components/transcripts/TranscriptsView'
 import AgentHistoryView from './components/history/AgentHistoryView'
+import T3ThreadSearchView from './components/history/T3ThreadSearchView'
 import RecoveryIndexView from './components/recovery/RecoveryIndexView'
 import AgentBoard from './components/agents/AgentBoard'
 import ViewSelector from './components/layout/ViewSelector'
@@ -203,7 +204,7 @@ function DashboardApp() {
   const [view, setView] = useState(() => {
     if (typeof window === 'undefined') return DEFAULT_DESKTOP_VIEW
     const param = new URLSearchParams(window.location.search).get('view')
-    return param === 'organizer' || param === 'transcripts' || param === 'vm-create' || param === 'agent-history' || param === 'recovery-index' || param === 'agent-board'
+    return param === 'organizer' || param === 'transcripts' || param === 'vm-create' || param === 'agent-history' || param === 't3-thread-search' || param === 'recovery-index' || param === 'agent-board'
       ? param
       : DEFAULT_DESKTOP_VIEW
   })
@@ -1411,6 +1412,7 @@ function DashboardApp() {
               { value: 'organizer', label: 'Organizer' },
               { value: 'transcripts', label: 'Transcripts' },
               { value: 'agent-history', label: 'Agent History' },
+              { value: 't3-thread-search', label: 'T3 Thread Search' },
               { value: 'recovery-index', label: 'Recovery Index' },
               { value: 'agent-board', label: 'Agent Board' },
               { value: 'vm-create', label: 'Create VM' },
@@ -1456,6 +1458,8 @@ function DashboardApp() {
           <TranscriptsView active />
         ) : view === 'agent-history' ? (
           <AgentHistoryView />
+        ) : view === 't3-thread-search' ? (
+          <T3ThreadSearchView apiBase={API_BASE} />
         ) : view === 'recovery-index' ? (
           <RecoveryIndexView />
         ) : view === 'agent-board' ? (

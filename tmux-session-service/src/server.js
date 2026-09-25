@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 import fs from 'node:fs/promises'
 import pty from 'node-pty'
 import { WebSocketServer, WebSocket } from 'ws'
+import { createT3ThreadSearch } from './t3-thread-search.js'
 
 const execFileAsync = promisify(execFile)
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -86,8 +87,8 @@ const defaultHeaders = {
   'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
 }
 
-const respond = (res, status, payload) => {
-  res.writeHead(status, defaultHeaders)
+const respond = (res, status, payload, headers = {}) => {
+  res.writeHead(status, { ...defaultHeaders, ...headers })
   if (status === 204) {
     res.end()
     return
@@ -127,11 +128,24 @@ const sanitizeId = (value) => {
   return safe.join('').slice(0, 64)
 }
 
-const readBody = async (req) =>
+const readBody = async (req, maxBytes = Number.POSITIVE_INFINITY) =>
   new Promise((resolve, reject) => {
     const chunks = []
-    req.on('data', (chunk) => chunks.push(chunk))
+    let totalBytes = 0
+    let settled = false
+    req.on('data', (chunk) => {
+      if (settled) return
+      totalBytes += chunk.length
+      if (totalBytes > maxBytes) {
+        settled = true
+        reject(new PayloadTooLargeError('JSON payload exceeds limit'))
+        return
+      }
+      chunks.push(chunk)
+    })
     req.on('end', () => {
+      if (settled) return
+      settled = true
       if (!chunks.length) {
         resolve({})
         return
@@ -139,11 +153,17 @@ const readBody = async (req) =>
       try {
         const raw = Buffer.concat(chunks).toString('utf8')
         resolve(JSON.parse(raw))
-      } catch (error) {
-        reject(new Error('Invalid JSON payload'))
+      } catch {
+        const error = new Error('Invalid JSON payload')
+        error.statusCode = 400
+        reject(error)
       }
     })
-    req.on('error', reject)
+    req.on('error', (error) => {
+      if (settled) return
+      settled = true
+      reject(error)
+    })
   })
 
 const readRawBody = async (req, maxBytes) =>
@@ -1915,6 +1935,32 @@ const loadMobileCatalog = async () => {
   return { hosts, workspaces }
 }
 
+const t3ThreadSearch = createT3ThreadSearch({
+  loadCatalog: loadMobileCatalog,
+  runSsh,
+})
+
+const t3ThreadSearchHeaders = { 'Cache-Control': 'no-store' }
+
+const handleT3ThreadSearchHosts = async (res) => {
+  try {
+    respond(res, 200, await t3ThreadSearch.listHosts(), t3ThreadSearchHeaders)
+  } catch {
+    respond(res, 500, { error: 'Unable to load T3 hosts' }, t3ThreadSearchHeaders)
+  }
+}
+
+const handleT3ThreadSearch = async (req, res) => {
+  try {
+    const body = await readBody(req, 8 * 1024)
+    respond(res, 200, await t3ThreadSearch.search(body), t3ThreadSearchHeaders)
+  } catch (error) {
+    const status = error?.statusCode === 413 ? 413 : error?.statusCode === 400 ? 400 : 500
+    const message = status === 500 ? 'Unable to search T3 threads' : error.message
+    respond(res, status, { error: message }, t3ThreadSearchHeaders)
+  }
+}
+
 const decorateMobileWorkspace = ({ workspace, host, windows, active, agentSummary = null }) => {
   const lastActivityAt = windows.reduce(
     (latest, window) => Math.max(latest, window.lastActivityAt || 0),
@@ -3317,6 +3363,14 @@ const server = http.createServer(async (req, res) => {
   }
   if (method === 'GET' && pathName === '/recovery-index') {
     await handleRecoveryIndex(res, parsed.searchParams)
+    return
+  }
+  if (method === 'GET' && pathName === '/t3-thread-search/hosts') {
+    await handleT3ThreadSearchHosts(res)
+    return
+  }
+  if (method === 'POST' && pathName === '/t3-thread-search') {
+    await handleT3ThreadSearch(req, res)
     return
   }
   if (method === 'GET' && pathName === '/vm-templates') {
