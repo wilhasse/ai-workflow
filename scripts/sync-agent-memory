@@ -1,0 +1,487 @@
+#!/usr/bin/env python3
+"""Merge Claude memory files and mirror selected Codex memories between hosts."""
+
+from __future__ import annotations
+
+import argparse
+from collections import Counter, defaultdict
+from dataclasses import dataclass
+from datetime import datetime, timezone
+import json
+import os
+from pathlib import Path, PurePosixPath
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+from typing import Mapping, TypeAlias
+
+
+MARKER = "[redacted by sync-agent-memory]"
+INDEX_LINE = re.compile(r"^\s*- \[[^\]]*\]\(([^)\s]+)\)")
+ORIGIN = re.compile(r" \(from [^)]+\)$")
+KEY_VALUE = re.compile(
+    r"(?i)((?:password|passwd|senha|secret|api[_-]?key|token|bearer)[\"']?\s*[:=]\s*[\"']?)"
+    r"([A-Za-z0-9][^\s\"'`,;&]{5,})"
+)
+TOKEN = re.compile(
+    r"(?<![A-Za-z0-9_-])(?:sk-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{20,}|"
+    r"github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|"
+    r"AKIA[0-9A-Z]{16}|plane_api_[0-9a-f]{32})"
+)
+HOST_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
+SSH_OPTIONS = ("-o", "BatchMode=yes", "-o", "ConnectTimeout=10")
+RSYNC_SSH = "ssh -o BatchMode=yes -o ConnectTimeout=10"
+
+
+@dataclass(frozen=True)
+class Host:
+    name: str
+    target: str
+
+    @property
+    def is_local(self) -> bool:
+        return self.target.startswith("/")
+
+
+@dataclass(frozen=True)
+class Snapshot:
+    claude: Mapping[str, Mapping[str, bytes]]
+    codex: Mapping[str, bytes]
+
+
+@dataclass(frozen=True)
+class CopyFile:
+    target: str
+    slug: str
+    name: str
+    source: str
+    content: bytes
+
+
+@dataclass(frozen=True)
+class AppendIndexLine:
+    target: str
+    slug: str
+    link: str
+    line: str
+    source: str
+
+
+@dataclass(frozen=True)
+class MirrorCodex:
+    target: str
+    source: str
+
+
+@dataclass(frozen=True)
+class Conflict:
+    target: str
+    slug: str
+    name: str
+    sources: tuple[str, ...]
+    reason: str
+
+
+Action: TypeAlias = CopyFile | AppendIndexLine | MirrorCodex | Conflict
+
+
+def safe_relative(value: str) -> bool:
+    path = PurePosixPath(value)
+    return bool(value) and not path.is_absolute() and all(
+        part not in ("", ".", "..") for part in value.split("/")
+    )
+
+
+def redact_text(value: str) -> tuple[str, list[int]]:
+    lines: list[int] = []
+
+    def replace_key(match: re.Match[str]) -> str:
+        lines.append(value.count("\n", 0, match.start()) + 1)
+        return match.group(1) + MARKER
+
+    redacted = KEY_VALUE.sub(replace_key, value)
+
+    def replace_token(match: re.Match[str]) -> str:
+        lines.append(redacted.count("\n", 0, match.start()) + 1)
+        return MARKER
+
+    redacted = TOKEN.sub(replace_token, redacted)
+    return redacted, sorted(lines)
+
+
+def index_lines(content: bytes | None) -> list[tuple[str, str]]:
+    if content is None:
+        return []
+    result = []
+    for line in content.decode("utf-8", "surrogateescape").splitlines():
+        match = INDEX_LINE.match(line)
+        if match and safe_relative(match.group(1)):
+            result.append((match.group(1), line))
+    return result
+
+
+def plan(hosts: list[Host], snapshots: Mapping[str, Snapshot]) -> list[Action]:
+    actions: list[Action] = []
+    available = [host for host in hosts if host.name in snapshots]
+    slugs = sorted({slug for snap in snapshots.values() for slug, files in snap.claude.items() if files})
+
+    for target in available:
+        own = snapshots[target.name]
+        for slug in slugs:
+            target_files = own.claude.get(slug, {})
+            others = [(host.name, snapshots[host.name].claude.get(slug, {}))
+                      for host in available if host.name != target.name]
+            copied: set[str] = set()
+            names = sorted({name for _, files in others for name in files if name != "MEMORY.md"})
+            for name in names:
+                if name in target_files:
+                    continue
+                offered = [(source, files[name]) for source, files in others if name in files]
+                if len({content for _, content in offered}) == 1:
+                    source, content = offered[0]
+                    actions.append(CopyFile(target.name, slug, name, source, content))
+                    copied.add(name)
+                else:
+                    actions.append(Conflict(target.name, slug, name,
+                                            tuple(source for source, _ in offered),
+                                            "different topic file contents"))
+
+            target_index = target_files.get("MEMORY.md")
+            known_links = {link for link, _ in index_lines(target_index)}
+            candidates: dict[str, list[tuple[int, int, str, str]]] = defaultdict(list)
+            for order, (source, files) in enumerate(others):
+                for link, line in index_lines(files.get("MEMORY.md")):
+                    if link in known_links or link not in files:
+                        continue
+                    if link in copied or (link in target_files and target_files[link] == files[link]):
+                        candidates[link].append((bool(ORIGIN.search(line)), order, source, line))
+            for link in sorted(candidates):
+                _, _, source, line = min(candidates[link])
+                if not ORIGIN.search(line):
+                    line += f" (from {source})"
+                actions.append(AppendIndexLine(target.name, slug, link, line, source))
+
+            freeform = [(source, files["MEMORY.md"])
+                        for source, files in others
+                        if "MEMORY.md" in files and not index_lines(files["MEMORY.md"])]
+            if target_index is None and freeform:
+                indexed_source = any(index_lines(files.get("MEMORY.md")) for _, files in others)
+                if not indexed_source and len({content for _, content in freeform}) == 1:
+                    source, content = freeform[0]
+                    actions.append(CopyFile(target.name, slug, "MEMORY.md", source, content))
+                else:
+                    actions.append(Conflict(target.name, slug, "MEMORY.md",
+                                            tuple(source for source, _ in freeform),
+                                            "free-form MEMORY.md cannot be selected uniquely"))
+            elif target_index is not None:
+                differing = [source for source, content in freeform if content != target_index]
+                if differing:
+                    actions.append(Conflict(target.name, slug, "MEMORY.md", tuple(differing),
+                                            "different free-form MEMORY.md"))
+
+    for source in available:
+        codex = snapshots[source.name].codex
+        if "MEMORY.md" not in codex and "memory_summary.md" not in codex:
+            continue
+        for target in available:
+            if target.name != source.name:
+                actions.append(MirrorCodex(target.name, source.name))
+    return actions
+
+
+def home_path(host: Host, suffix: str) -> str:
+    if host.is_local:
+        return str(Path(host.target) / suffix)
+    return f"{host.target}:{suffix}"
+
+
+def source_exists(host: Host, suffix: str) -> bool:
+    if host.is_local:
+        path = Path(host.target) / suffix
+        if path.exists() and not path.is_dir():
+            raise RuntimeError(f"source is not a directory: {suffix}")
+        return path.is_dir()
+    code = ("import os,sys; p=os.path.expanduser('~')+'/'+sys.argv[1]; "
+            "sys.exit(0 if os.path.isdir(p) else 2 if os.path.exists(p) else 1)")
+    remote_command = f"python3 -c {shlex.quote(code)} {shlex.quote(suffix)}"
+    result = subprocess.run(["ssh", *SSH_OPTIONS, host.target, remote_command],
+                            capture_output=True, text=True)
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1:
+        return False
+    raise RuntimeError(f"source check failed for {suffix}: {result.stderr.strip()}")
+
+
+def run_rsync(args: list[str]) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(["rsync", *args], capture_output=True, text=True)
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip() or f"rsync exited {result.returncode}")
+    return result
+
+
+def stage_host(host: Host, state: Path) -> tuple[Snapshot, list[str]]:
+    root = state / "stage" / host.name
+    if root.exists():
+        shutil.rmtree(root)
+    root.mkdir(parents=True)
+    settings = (
+        ("claude", ".claude/projects", ["--prune-empty-dirs", "--include=/*/",
+                                        "--include=/*/memory/***", "--exclude=*"]),
+        ("codex", ".codex/memories", ["--include=/MEMORY.md",
+                                       "--include=/memory_summary.md",
+                                       "--include=/rollout_summaries/***",
+                                       "--include=/skills/***", "--exclude=*"]),
+    )
+    for kind, suffix, filters in settings:
+        destination = root / kind
+        destination.mkdir()
+        if not source_exists(host, suffix):
+            continue
+        source = home_path(host, suffix) + "/"
+        remote = [] if host.is_local else ["-e", RSYNC_SSH]
+        run_rsync(["-a", "--delete", *remote, *filters, source, str(destination) + "/"])
+
+    reports: list[str] = []
+    for path in sorted(root.rglob("*")):
+        if path.is_symlink():
+            path.unlink()
+            reports.append(f"warning: skipped symlink {host.name} {path.relative_to(root)}")
+        elif path.is_file():
+            original = path.read_bytes()
+            changed, lines = redact_text(original.decode("utf-8", "surrogateescape"))
+            if lines:
+                metadata = path.stat()
+                path.write_bytes(changed.encode("utf-8", "surrogateescape"))
+                os.utime(path, ns=(metadata.st_atime_ns, metadata.st_mtime_ns))
+                for line in lines:
+                    reports.append(f"redaction: {host.name} {path.relative_to(root)} line {line}")
+
+    claude: dict[str, dict[str, bytes]] = {}
+    for memory in sorted((root / "claude").glob("*/memory")):
+        if not memory.is_dir():
+            continue
+        files = {path.relative_to(memory).as_posix(): path.read_bytes()
+                 for path in memory.rglob("*") if path.is_file() and not path.is_symlink()}
+        if files:
+            claude[memory.parent.name] = files
+    codex_root = root / "codex"
+    codex = {path.relative_to(codex_root).as_posix(): path.read_bytes()
+             for path in codex_root.rglob("*") if path.is_file() and not path.is_symlink()}
+    return Snapshot(claude, codex), reports
+
+
+def mirror_changes(target: Host, source: Host, state: Path) -> int:
+    stage = state / "stage" / source.name / "codex"
+    destination = home_path(target, f".agent-memory/peers/{source.name}/codex")
+    if target.is_local and not Path(destination).exists():
+        return sum(path.is_file() for path in stage.rglob("*"))
+    remote = [] if target.is_local else ["-e", RSYNC_SSH]
+    output = run_rsync(["-rlt", "--delete", "--mkpath", "--dry-run", "--itemize-changes",
+                        *remote, str(stage) + "/", destination + "/"]).stdout
+    return sum(line.startswith((">f", "<f")) or
+               (line.startswith("*deleting") and not line.rstrip().endswith("/"))
+               for line in output.splitlines())
+
+
+def planned_warnings(hosts: list[Host], snapshots: Mapping[str, Snapshot],
+                     actions: list[Action]) -> list[str]:
+    warnings = []
+    for host in hosts:
+        if host.name not in snapshots:
+            continue
+        if "MEMORY.md" not in snapshots[host.name].codex and "memory_summary.md" not in snapshots[host.name].codex:
+            warnings.append(f"warning: {host.name} has an empty Codex memory snapshot")
+        slugs = {slug for slug, files in snapshots[host.name].claude.items() if "MEMORY.md" in files}
+        slugs.update(action.slug for action in actions
+                     if isinstance(action, (CopyFile, AppendIndexLine)) and action.target == host.name)
+        for slug in sorted(slugs):
+            content = snapshots[host.name].claude.get(slug, {}).get("MEMORY.md", b"")
+            for action in actions:
+                if isinstance(action, CopyFile) and action.target == host.name and action.slug == slug and action.name == "MEMORY.md":
+                    content = action.content
+            count = len(content.splitlines()) + sum(
+                isinstance(action, AppendIndexLine) and action.target == host.name and action.slug == slug
+                for action in actions)
+            if count > 200:
+                warnings.append(f"warning: {host.name} {slug}/MEMORY.md would have {count} lines; Claude Code loads only 200")
+    return warnings
+
+
+def render(hosts: list[Host], snapshots: Mapping[str, Snapshot], actions: list[Action],
+           state: Path, verbose: bool, reports: list[str]) -> bool:
+    for report in reports:
+        print(report)
+    failed = False
+    for host in hosts:
+        if host.name not in snapshots:
+            continue
+        own = [action for action in actions if action.target == host.name]
+        counts = Counter(type(action).__name__ for action in own)
+        print(f"{host.name}: copies={counts['CopyFile']} appends={counts['AppendIndexLine']} "
+              f"mirrors={counts['MirrorCodex']} conflicts={counts['Conflict']}")
+        for action in own:
+            if isinstance(action, Conflict):
+                print(f"conflict: {action.target} {action.slug}/memory/{action.name}: "
+                      f"{action.reason} ({', '.join(action.sources)})")
+            elif verbose:
+                if isinstance(action, CopyFile):
+                    print(f"copy: {action.source} -> {action.target} {action.slug}/memory/{action.name}")
+                elif isinstance(action, AppendIndexLine):
+                    print(f"append: {action.source} -> {action.target} {action.slug}/memory/MEMORY.md [{action.link}]")
+                elif isinstance(action, MirrorCodex):
+                    print(f"mirror: {action.source} -> {action.target}")
+        for action in own:
+            if isinstance(action, MirrorCodex):
+                try:
+                    changed = mirror_changes(host, next(h for h in hosts if h.name == action.source), state)
+                    print(f"mirror changes: {action.source} -> {host.name}: {changed} files")
+                except (OSError, RuntimeError) as exc:
+                    print(f"warning: mirror check failed for {action.source} -> {host.name}: {exc}", file=sys.stderr)
+                    failed = True
+    for warning in planned_warnings(hosts, snapshots, actions):
+        print(warning)
+    return failed
+
+
+INDEX_PROGRAM = r'''
+import json
+import os
+from pathlib import Path
+import re
+
+payload = json.loads(PAYLOAD_JSON)
+pattern = re.compile(r"^\s*- \[[^\]]*\]\(([^)\s]+)\)")
+home = Path(payload["home"] if payload["home"] is not None else os.path.expanduser("~"))
+results = []
+for item in payload["appends"]:
+    path = home / ".claude" / "projects" / item["slug"] / "memory" / "MEMORY.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    current = path.read_text(encoding="utf-8", errors="surrogateescape") if path.exists() else ""
+    present = any((match := pattern.match(line)) and match.group(1) == item["link"]
+                  for line in current.splitlines())
+    if present:
+        results.append("skipped")
+        continue
+    with path.open("a", encoding="utf-8", errors="surrogateescape") as output:
+        if current and not current.endswith("\n"):
+            output.write("\n")
+        output.write(item["line"] + "\n")
+    results.append("appended")
+print(json.dumps(results))
+'''
+
+
+def log_action(state: Path, action: Action, result: str) -> None:
+    if isinstance(action, CopyFile):
+        source, path = action.source, f"{action.slug}/memory/{action.name}"
+    elif isinstance(action, AppendIndexLine):
+        source, path = action.source, f"{action.slug}/memory/MEMORY.md#{action.link}"
+    elif isinstance(action, MirrorCodex):
+        source, path = action.source, f".agent-memory/peers/{action.source}/codex/"
+    else:
+        return
+    with (state / "sync-log.tsv").open("a", encoding="utf-8") as output:
+        output.write("\t".join((datetime.now(timezone.utc).isoformat(), action.target,
+                                type(action).__name__, source, path, result)) + "\n")
+
+
+def apply_target(host: Host, actions: list[Action], state: Path) -> None:
+    copies = [action for action in actions if isinstance(action, CopyFile)]
+    appends = [action for action in actions if isinstance(action, AppendIndexLine)]
+    mirrors = [action for action in actions if isinstance(action, MirrorCodex)]
+    if copies:
+        outbox = state / "outbox" / host.name
+        if outbox.exists():
+            shutil.rmtree(outbox)
+        for action in copies:
+            path = outbox / action.slug / "memory" / action.name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(action.content)
+        for slug in {action.slug for action in copies}:
+            # Claude Code creates project directories 0700; rsync -rlt gives new ones this mode.
+            (outbox / slug).chmod(0o700)
+        remote = [] if host.is_local else ["-e", RSYNC_SSH]
+        run_rsync(["-rlt", "--ignore-existing", "--mkpath", *remote,
+                   str(outbox) + "/", home_path(host, ".claude/projects") + "/"])
+        for action in copies:
+            log_action(state, action, "pushed if absent")
+    if appends:
+        payload = {"home": host.target if host.is_local else None,
+                   "appends": [{"slug": action.slug, "link": action.link, "line": action.line}
+                               for action in appends]}
+        program = "PAYLOAD_JSON = " + repr(json.dumps(payload)) + "\n" + INDEX_PROGRAM
+        command = ["python3", "-"] if host.is_local else ["ssh", *SSH_OPTIONS, host.target, "python3", "-"]
+        result = subprocess.run(command, input=program, capture_output=True, text=True)
+        if result.returncode:
+            raise RuntimeError(result.stderr.strip() or f"index append exited {result.returncode}")
+        try:
+            outcomes = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"invalid index append response: {result.stdout!r}") from exc
+        if len(outcomes) != len(appends):
+            raise RuntimeError("index append returned the wrong number of results")
+        for action, outcome in zip(appends, outcomes):
+            log_action(state, action, outcome)
+    for action in mirrors:
+        source = state / "stage" / action.source / "codex"
+        destination = home_path(host, f".agent-memory/peers/{action.source}/codex")
+        remote = [] if host.is_local else ["-e", RSYNC_SSH]
+        run_rsync(["-rlt", "--delete", "--mkpath", *remote,
+                   str(source) + "/", destination + "/"])
+        log_action(state, action, "mirrored")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--apply", action="store_true", help="write the planned changes; without it the run is a dry run")
+    parser.add_argument("--verbose", action="store_true", help="list every planned action")
+    parser.add_argument("--host", action="append", metavar="NAME=TARGET",
+                        help="repeatable; TARGET is a local home path or an ssh destination (replaces the default hosts)")
+    parser.add_argument("--state-dir", type=Path, default=Path("~/.agent-memory/.sync-state"),
+                        help="staging area, outbox and action log (default: %(default)s)")
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    specs = args.host or ["godev4=/home/cslog", "godev3=cslog@10.1.0.9", "godev8=cslog@10.1.0.12"]
+    hosts = []
+    for spec in specs:
+        name, separator, target = spec.partition("=")
+        if not separator or not HOST_NAME.fullmatch(name) or not target or (not target.startswith("/") and (":" in target or target.startswith("-"))):
+            raise SystemExit(f"invalid --host: {spec}")
+        if any(host.name == name for host in hosts):
+            raise SystemExit(f"duplicate host name: {name}")
+        hosts.append(Host(name, target))
+    state = args.state_dir.expanduser().resolve()
+    state.mkdir(parents=True, exist_ok=True)
+    snapshots: dict[str, Snapshot] = {}
+    reports = []
+    failed = False
+    for host in hosts:
+        try:
+            snapshots[host.name], host_reports = stage_host(host, state)
+            reports.extend(host_reports)
+        except (OSError, RuntimeError) as exc:
+            failed = True
+            reports.append(f"warning: {host.name} unavailable: {exc}")
+    actions = plan(hosts, snapshots)
+    failed |= render(hosts, snapshots, actions, state, args.verbose, reports)
+    if args.apply:
+        for host in hosts:
+            if host.name not in snapshots:
+                continue
+            own = [action for action in actions if action.target == host.name and not isinstance(action, Conflict)]
+            try:
+                apply_target(host, own, state)
+            except (OSError, RuntimeError) as exc:
+                print(f"warning: apply failed for {host.name}: {exc}", file=sys.stderr)
+                failed = True
+    return 2 if failed else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
